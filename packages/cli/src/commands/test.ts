@@ -66,6 +66,7 @@ export async function testCommand(opts: TestOptions): Promise<void> {
       const vitestChild = spawn('npx', ['vitest', 'run', '--reporter=verbose'], {
         cwd: rootDir,
         stdio: 'inherit',
+        shell: process.platform === 'win32',
       });
 
       const vitestExit = await new Promise<number>((resolve) => {

@@ -74,6 +74,12 @@ pledgestack/
 │   ├── ws/                  # WebSocket support (private)
 │   ├── adapters/            # Cloudflare, Vercel, Deno, AWS, Netlify adapters (private)
 │   ├── privacy/             # GDPR/CCPA compliance, PII redaction, encryption, consent (private)
+│   ├── bundler-pledgepack/  # PledgePack bundler adapter (private)
+│   ├── bundler-vite/        # Vite bundler adapter (private)
+│   ├── bundler-rollup/      # Rollup bundler adapter (private)
+│   ├── bundler-turbopack/   # Turbopack bundler adapter (private)
+│   ├── bundler-rsbuild/     # Rsbuild bundler adapter (private)
+│   ├── bundler-webpack/     # Webpack bundler adapter (private)
 │   ├── cli/                 # CLI tool — published as `pledgestack` on npm
 │   ├── vscode-extension/    # VS Code extension — highlighting, IntelliSense
 │   └── create-pledge-app/   # Scaffolding CLI for new PledgeStack apps

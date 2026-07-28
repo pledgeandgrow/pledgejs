@@ -50,7 +50,7 @@ async function getCurrentVersion(rootDir: string): Promise<string> {
  */
 function getLatestVersion(): string {
   try {
-    const output = execSync('npm view pledgestack version 2>nul', {
+    const output = execSync('npm view pledgestack version', {
       encoding: 'utf-8',
       timeout: 10000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -59,7 +59,7 @@ function getLatestVersion(): string {
   } catch {
     // npm not available or package not found — check local monorepo
     try {
-      const output = execSync('pnpm view pledgestack version 2>nul', {
+      const output = execSync('pnpm view pledgestack version', {
         encoding: 'utf-8',
         timeout: 10000,
         stdio: ['pipe', 'pipe', 'pipe'],

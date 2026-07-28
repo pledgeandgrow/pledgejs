@@ -9,7 +9,7 @@ import { processTailwind, ensureTailwindConfig } from '../tailwind';
 /**
  * Builds the project for production.
  *
- * 1. Runs the configured bundler (PledgePack by default, or Vite/Rollup/Turbopack)
+ * 1. Runs the configured bundler (PledgePack by default, or Vite/Rollup/Turbopack/Rsbuild/Webpack)
  *    to produce optimized JS output with transforms, tree shaking, and code splitting.
  * 2. Scans routes and loads bundled modules (from .pledge/ output).
  * 3. Generates static pages (SSG) using the pre-bundled modules.

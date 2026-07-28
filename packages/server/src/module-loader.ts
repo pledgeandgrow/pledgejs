@@ -25,7 +25,7 @@ export interface ModuleLoader {
  * Creates a module loader that dynamically imports route modules.
  *
  * In dev mode, TSX/TS files are transformed by the configured bundler
- * (PledgePack by default, or Vite/Rollup/Turbopack via BundlerAdapter).
+ * (PledgePack by default, or Vite/Rollup/Turbopack/Rsbuild/Webpack via BundlerAdapter).
  * In production, modules are pre-bundled and loaded from the output directory.
  *
  * @param config PledgeStack configuration

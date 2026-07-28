@@ -11,21 +11,23 @@ export default function FeaturesPage() {
     { icon: '🛡️', title: 'Error Overlay', desc: 'Beautiful error overlay with stack traces and source context. Auto-dismisses on fix. Catches build and runtime errors.' },
     { icon: '🔧', title: 'Oxc Linter', desc: 'PledgePack includes a built-in Oxc linter. Run npx pledge lint — no ESLint config, no plugins, no setup.' },
     { icon: '🏗️', title: 'Production Build', desc: 'npx pledge build bundles and optimizes with PledgePack Rust pipeline. Tree-shaking, minification, and code splitting.' },
-    { icon: '📱', title: 'Responsive', desc: 'Mobile-first responsive design out of the box. Sticky nav, adaptive grids, and breakpoint-aware styling.' },
+    { icon: '�', title: 'API Routes', desc: 'File-based API handlers with GET, POST, PUT, DELETE, PATCH. Create app/api/health/route.ts and export async functions. Zero config.' },
+    { icon: '⚠️', title: 'Error Boundaries', desc: 'error.tsx catches runtime errors per-route. loading.tsx shows Suspense fallbacks. not-found.tsx for custom 404 pages.' },
+    { icon: '�📱', title: 'Responsive', desc: 'Mobile-first responsive design out of the box. Sticky nav, adaptive grids, and breakpoint-aware styling.' },
   ];
 
   return (
-    <div class="container">
+    <div className="container">
       <section style={{ paddingTop: '3rem' }}>
-        <span class="badge">PledgePack Capabilities</span>
+        <span className="badge">PledgePack Capabilities</span>
         <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>Features</h1>
         <p style={{ color: 'var(--muted)', marginBottom: '2rem' }}>
           Powered by PledgePack — a Rust+Zig bundler with native transforms, HMR, and zero-config setup.
         </p>
-        <div class="grid">
+        <div className="grid">
           {features.map((f) => (
-            <div class="card">
-              <h3><span class="card-icon">{f.icon}</span> {f.title}</h3>
+            <div className="card">
+              <h3><span className="card-icon">{f.icon}</span> {f.title}</h3>
               <p>{f.desc}</p>
             </div>
           ))}

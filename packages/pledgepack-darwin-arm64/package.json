@@ -1,6 +1,6 @@
 {
   "name": "@pledgepack/darwin-arm64",
-  "version": "0.2.3",
+  "version": "0.2.7",
   "description": "PledgePack native binary for macOS arm64 (Apple Silicon)",
   "os": ["darwin"],
   "cpu": ["arm64"],

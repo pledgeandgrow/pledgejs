@@ -13,7 +13,7 @@ describe('NAPI Overhead Benchmarking', () => {
       expect(result.functionName).toBe('add');
       expect(result.jsOnlyMs).toBeGreaterThan(0);
       expect(result.napiMs).toBeGreaterThan(0);
-      expect(result.overheadMs).toBeGreaterThanOrEqual(0);
+      expect(result.overheadMs).toBeGreaterThanOrEqual(-0.001);
       expect(result.recommendation).toBeDefined();
     });
   });

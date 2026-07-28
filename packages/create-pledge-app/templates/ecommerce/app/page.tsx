@@ -13,60 +13,60 @@ export default function HomePage() {
   const filters = ['All', 'Electronics', 'Home', 'Sports', 'Accessories'];
 
   return (
-    <div class="container">
-      <div class="hero-banner">
+    <div className="container">
+      <div className="hero-banner">
         <h1>Summer Sale — Up to 40% Off</h1>
         <p>Discover amazing deals on premium products. Free shipping on orders over $50.</p>
-        <a href="#" class="btn">Shop Now →</a>
+        <a href="#" className="btn">Shop Now →</a>
       </div>
 
-      <h2 class="section-title">Featured Products</h2>
+      <h2 className="section-title">Featured Products</h2>
 
-      <div class="filters">
+      <div className="filters">
         {filters.map((f, i) => (
-          <button class={`filter ${i === 0 ? 'active' : ''}`}>{f}</button>
+          <button className={`filter ${i === 0 ? 'active' : ''}`}>{f}</button>
         ))}
       </div>
 
-      <div class="products">
+      <div className="products">
         {products.map((p) => (
-          <div class="product">
-            <div class="img">{p.emoji}</div>
-            <div class="body">
+          <div className="product">
+            <div className="img">{p.emoji}</div>
+            <div className="body">
               <h3>{p.name}</h3>
-              <div class="category">{p.category}</div>
-              <div class="rating">
-                <span class="stars">{'★'.repeat(Math.floor(p.rating))}</span>
+              <div className="category">{p.category}</div>
+              <div className="rating">
+                <span className="stars">{'★'.repeat(Math.floor(p.rating))}</span>
                 <span>{p.rating} ({p.reviews})</span>
               </div>
               <div>
-                <span class="price">{p.price}</span>
-                {p.oldPrice && <span class="old-price">{p.oldPrice}</span>}
+                <span className="price">{p.price}</span>
+                {p.oldPrice && <span className="old-price">{p.oldPrice}</span>}
               </div>
-              <button class="add-btn">Add to Cart</button>
+              <button className="add-btn">Add to Cart</button>
             </div>
           </div>
         ))}
       </div>
 
-      <div class="features">
-        <div class="feature">
-          <div class="icon">🚚</div>
+      <div className="features">
+        <div className="feature">
+          <div className="icon">🚚</div>
           <h4>Free Shipping</h4>
           <p>On orders over $50</p>
         </div>
-        <div class="feature">
-          <div class="icon">↩️</div>
+        <div className="feature">
+          <div className="icon">↩️</div>
           <h4>Easy Returns</h4>
           <p>30-day return policy</p>
         </div>
-        <div class="feature">
-          <div class="icon">🔒</div>
+        <div className="feature">
+          <div className="icon">🔒</div>
           <h4>Secure Payment</h4>
           <p>Encrypted checkout</p>
         </div>
-        <div class="feature">
-          <div class="icon">💬</div>
+        <div className="feature">
+          <div className="icon">💬</div>
           <h4>24/7 Support</h4>
           <p>Always here to help</p>
         </div>

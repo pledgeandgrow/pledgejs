@@ -42,4 +42,4 @@ export const DEFAULT_DEV_PORT = 3000;
 export const DEFAULT_PROD_PORT = 3000;
 
 /** Framework version */
-export const PLEDGE_VERSION = '0.1.8';
+export const PLEDGE_VERSION = '0.1.10';

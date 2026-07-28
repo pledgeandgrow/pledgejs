@@ -29,6 +29,14 @@ export async function resolveBundlerAdapter(
       const mod = await import('pledgestack-bundler-turbopack');
       return mod.default as BundlerAdapter;
     }
+    case 'rsbuild': {
+      const mod = await import('pledgestack-bundler-rsbuild');
+      return mod.default as BundlerAdapter;
+    }
+    case 'webpack': {
+      const mod = await import('pledgestack-bundler-webpack');
+      return mod.default as BundlerAdapter;
+    }
     default: {
       const mod = await import('pledgestack-bundler-pledgepack');
       return mod.default as BundlerAdapter;

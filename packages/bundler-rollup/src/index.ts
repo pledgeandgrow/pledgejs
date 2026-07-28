@@ -10,6 +10,7 @@ import {
   ensureRootCargoToml,
   serializeSourceMap,
 } from 'pledgestack-core';
+import { generateRustFallback } from 'pledgestack-shared';
 import type {
   BundlerAdapter,
   BuildResult,
@@ -514,25 +515,6 @@ async function compileRustAddon(
   } catch {
     return false;
   }
-}
-
-function generateRustFallback(moduleName: string): string {
-  return `/**
- * Fallback stub for ${moduleName}.psx — Rust addon not compiled.
- * Install Rust toolchain (cargo) to enable native Rust execution.
- */
-const notCompiled = (name) => () => {
-  throw new Error(
-    '[PledgeStack] rust.${name}() is not available — Rust addon not compiled.\\n' +
-    'Install Rust toolchain: https://rustup.rs\\n' +
-    'Then restart the dev server.'
-  );
-};
-
-export const rust = new Proxy({}, {
-  get: (_, prop) => notCompiled(String(prop)),
-});
-`;
 }
 
 export default rollupAdapter;

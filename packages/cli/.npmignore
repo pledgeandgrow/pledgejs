@@ -1,0 +1,6 @@
+*.map
+dist/packages/
+src/
+scripts/
+tsconfig*.json
+!tsconfig-base.json

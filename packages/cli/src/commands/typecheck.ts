@@ -29,6 +29,7 @@ export async function typecheckCommand(opts: TypecheckOptions): Promise<void> {
   const child = spawn('npx', ['tsc', '--noEmit', '-p', tsconfigPath], {
     cwd: rootDir,
     stdio: 'inherit',
+    shell: process.platform === 'win32',
   });
 
   const exitCode = await new Promise<number>((resolve) => {

@@ -4,15 +4,15 @@ import type { PledgeConfig } from './config';
  * Bundler adapter types.
  *
  * PledgeStack supports pluggable bundlers. The default is PledgePack (Rust-based),
- * but users can opt for Vite, Rollup, or Turbopack by installing the corresponding
- * adapter package and setting `bundler` in their pledge.config.ts.
+ * but users can opt for Vite, Rollup, Turbopack, Rsbuild, or Webpack by installing
+ * the corresponding adapter package and setting `bundler` in their pledge.config.ts.
  *
  * ## Usage in pledge.config.ts
  * ```typescript
  * import { defineConfig } from 'pledgestack-shared';
  *
  * export default defineConfig({
- *   bundler: 'vite', // or 'rollup', 'turbopack', 'pledgepack' (default)
+ *   bundler: 'vite', // or 'rollup', 'turbopack', 'rsbuild', 'webpack', 'pledgepack' (default)
  * });
  * ```
  *
@@ -30,7 +30,7 @@ import type { PledgeConfig } from './config';
  */
 
 /** Which bundler to use for transforms and builds */
-export type BundlerType = 'pledgepack' | 'vite' | 'rollup' | 'turbopack';
+export type BundlerType = 'pledgepack' | 'vite' | 'rollup' | 'turbopack' | 'rsbuild' | 'webpack';
 
 /** Result of a build operation */
 export interface BuildResult {
@@ -83,7 +83,7 @@ export interface TransformResult {
 /**
  * Bundler adapter interface.
  *
- * Each bundler (PledgePack, Vite, Rollup, Turbopack) implements this interface
+ * Each bundler (PledgePack, Vite, Rollup, Turbopack, Rsbuild, Webpack) implements this interface
  * to provide build, dev server, and transform capabilities.
  */
 export interface BundlerAdapter {

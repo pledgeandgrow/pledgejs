@@ -8,7 +8,7 @@ import { resolveBundlerAdapter } from '../bundler-resolver';
  * server (`pledge serve`) first — it's an Axum/Hyper-based HTTP server with
  * high throughput, gzip/brotli compression, and static file serving.
  *
- * For other bundlers (vite, rollup, turbopack) or when the PledgePack binary
+ * For other bundlers (vite, rollup, turbopack, rsbuild, webpack) or when the PledgePack binary
  * is not available, falls back to PledgeStack's Node.js server with the
  * configured bundler adapter for module resolution.
  */
@@ -25,7 +25,7 @@ export async function startCommand(options: { port?: number; hostname?: string }
 
   // For pledgepack, try the native Rust production server first
   if (bundlerName === 'pledgepack') {
-    const { resolveBinary, runPledgepack } = await import('pledgepack');
+    const { resolveBinary, runPledgepack } = await import('pledgestack-bundler-pledgepack');
     const binary = resolveBinary();
     if (binary) {
       console.log('  → Using PledgePack Rust production server (axum/hyper)\n');

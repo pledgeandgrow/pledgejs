@@ -1,6 +1,6 @@
 import { join, dirname, basename, extname } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
@@ -10,6 +10,7 @@ import {
   ensureRootCargoToml,
   serializeSourceMap,
 } from 'pledgestack-core';
+import { generateRustFallback } from 'pledgestack-shared';
 import type {
   BundlerAdapter,
   BuildResult,
@@ -25,10 +26,14 @@ const TRANSFORM_CACHE = new Map<string, string>();
 /**
  * Turbopack bundler adapter for PledgeStack.
  *
- * Turbopack is Vercel's Rust-based bundler. This adapter currently uses
- * esbuild for file transforms (since Turbopack's standalone API is still
- * evolving). Build and dev server delegate to esbuild-based transforms
- * with a path toward native Turbopack integration when the API stabilizes.
+ * Turbopack is Vercel's Rust-based bundler. This adapter supports two modes:
+ *
+ * 1. **Native mode** — uses `@utoo/pack` (a Turbopack-powered bundler with a
+ *    programmatic Node.js API) when installed. Provides `build()` and `dev()`
+ *    functions with Turbopack's Rust-based compilation and HMR.
+ * 2. **Fallback mode** — uses esbuild for file transforms when `@utoo/pack`
+ *    is not installed. This ensures the adapter works out-of-the-box without
+ *    requiring the native Turbopack binary.
  *
  * ## Usage in pledge.config.ts
  * ```typescript
@@ -39,10 +44,13 @@ const TRANSFORM_CACHE = new Map<string, string>();
  * });
  * ```
  *
- * Note: Turbopack's standalone Node.js API is still in development.
- * This adapter provides the interface and esbuild-based fallback transforms.
- * Full Turbopack integration will be available when `@vercel/turbopack`
- * publishes a stable Node.js API.
+ * To enable native Turbopack mode, install `@utoo/pack`:
+ * ```bash
+ * pnpm add @utoo/pack
+ * ```
+ *
+ * Note: Vercel's official standalone Turbopack API was on the Q1 2026 roadmap.
+ * `@utoo/pack` provides a stable programmatic API today.
  */
 export const turbopackAdapter: BundlerAdapter = {
   name: 'turbopack',
@@ -50,9 +58,37 @@ export const turbopackAdapter: BundlerAdapter = {
   async build(config: PledgeConfig): Promise<BuildResult> {
     const start = Date.now();
     try {
-      // Turbopack's standalone API is not yet stable.
-      // Fall back to esbuild-based bundling for now.
       const outDir = join(config.rootDir, config.outDir);
+
+      // Try native Turbopack build via @utoo/pack
+      const utoo = await tryLoadUtooPack();
+      if (utoo) {
+        const appDir = join(config.rootDir, config.appDir);
+        const routeFiles = await collectRouteFiles(appDir);
+        const entries = routeFiles.map((f) => ({
+          import: f,
+        }));
+
+        await utoo.build({
+          config: {
+            entry: entries,
+            output: {
+              path: outDir,
+              filename: '[name].js',
+              clean: true,
+            },
+            sourceMaps: true,
+          },
+        });
+
+        return {
+          outDir,
+          success: true,
+          durationMs: Date.now() - start,
+        };
+      }
+
+      // Fallback: esbuild-based bundling
       const serverOutDir = join(outDir, 'server');
       await mkdir(serverOutDir, { recursive: true });
 
@@ -91,12 +127,47 @@ export const turbopackAdapter: BundlerAdapter = {
   },
 
   async startDevServer(
-    _config: PledgeConfig,
+    config: PledgeConfig,
     options: DevServerOptions,
   ): Promise<DevServerHandle> {
-    const { createServer } = await import('node:http');
     const port = options.bundlerPort ?? 3001;
     const hostname = options.hostname ?? 'localhost';
+
+    // Try native Turbopack dev server via @utoo/pack
+    const utoo = await tryLoadUtooPack();
+    if (utoo) {
+      const appDir = join(config.rootDir, config.appDir);
+      const routeFiles = await collectRouteFiles(appDir);
+      const entries = routeFiles.map((f) => ({
+        import: f,
+      }));
+
+      const utooServer = await utoo.dev({
+        config: {
+          entry: entries,
+          output: {
+            path: join(config.rootDir, config.outDir),
+            filename: '[name].js',
+            clean: true,
+          },
+          sourceMaps: true,
+        },
+      });
+
+      return {
+        port,
+        hostname,
+        async stop() {
+          await utooServer.stop?.();
+        },
+        reloadAll() {
+          utooServer.reload?.();
+        },
+      };
+    }
+
+    // Fallback: lightweight HTTP server with esbuild transforms
+    const { createServer } = await import('node:http');
 
     const server = createServer(async (req, res) => {
       const url = req.url ?? '/';
@@ -195,16 +266,47 @@ export const turbopackAdapter: BundlerAdapter = {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Minimal type for @utoo/pack's programmatic API.
+ * Only the methods we use are typed — the actual package has more.
+ */
+interface UtooPackAPI {
+  build(opts: { config: unknown }): Promise<void>;
+  dev(opts: { config: unknown }): Promise<{
+    stop?(): Promise<void>;
+    reload?(): void;
+  }>;
+}
+
+/**
+ * Tries to dynamically import @utoo/pack.
+ * Returns null if not installed (falls back to esbuild).
+ */
+async function tryLoadUtooPack(): Promise<UtooPackAPI | null> {
+  try {
+    const moduleName = '@utoo/pack';
+    const mod = await import(/* @vite-ignore */ moduleName);
+    if (mod && typeof mod.build === 'function' && typeof mod.dev === 'function') {
+      return mod as unknown as UtooPackAPI;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function collectRouteFiles(dir: string): Promise<string[]> {
   const files: string[] = [];
   if (!existsSync(dir)) return files;
 
   async function walk(d: string) {
-    const entries = await readFile(d, 'utf-8').catch(() => null);
-    if (entries === null) return;
-    const { readdir } = await import('node:fs/promises');
-    const dirs = await readdir(d, { withFileTypes: true });
-    for (const entry of dirs) {
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = await readdir(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
       const fullPath = join(d, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
@@ -404,25 +506,6 @@ async function compileRustAddon(
   } catch {
     return false;
   }
-}
-
-function generateRustFallback(moduleName: string): string {
-  return `/**
- * Fallback stub for ${moduleName}.psx — Rust addon not compiled.
- * Install Rust toolchain (cargo) to enable native Rust execution.
- */
-const notCompiled = (name) => () => {
-  throw new Error(
-    '[PledgeStack] rust.${name}() is not available — Rust addon not compiled.\\n' +
-    'Install Rust toolchain: https://rustup.rs\\n' +
-    'Then restart the dev server.'
-  );
-};
-
-export const rust = new Proxy({}, {
-  get: (_, prop) => notCompiled(String(prop)),
-});
-`;
 }
 
 export default turbopackAdapter;

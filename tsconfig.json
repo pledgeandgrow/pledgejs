@@ -39,6 +39,12 @@
       "pledgestack-ws": ["./packages/ws/src/index.ts"],
       "pledgestack-adapters": ["./packages/adapters/src/index.ts"],
       "pledgestack-adapters/*": ["./packages/adapters/src/*"],
+      "pledgestack-bundler-pledgepack": ["./packages/bundler-pledgepack/src/index.ts"],
+      "pledgestack-bundler-vite": ["./packages/bundler-vite/src/index.ts"],
+      "pledgestack-bundler-rollup": ["./packages/bundler-rollup/src/index.ts"],
+      "pledgestack-bundler-turbopack": ["./packages/bundler-turbopack/src/index.ts"],
+      "pledgestack-bundler-rsbuild": ["./packages/bundler-rsbuild/src/index.ts"],
+      "pledgestack-bundler-webpack": ["./packages/bundler-webpack/src/index.ts"],
       "pledgestack-state": ["./packages/state/src/index.ts"],
       "pledgestack-state/*": ["./packages/state/src/*"],
       "pledgestack-api": ["./packages/api/src/index.ts"],
@@ -52,6 +58,6 @@
       "pledgepack": ["./packages/pledgepack/index.d.ts"]
     }
   },
-  "exclude": ["node_modules", "dist", ".next"],
+  "exclude": ["node_modules", "dist", ".next", "packages/create-pledge-app/templates"],
   "include": ["types/**/*.d.ts"]
 }

@@ -1,6 +1,6 @@
 {
   "name": "create-pledge-app",
-  "version": "0.0.7",
+  "version": "0.0.9",
   "description": "Scaffold a new PledgeStack application",
   "type": "module",
   "bin": {
@@ -19,6 +19,8 @@
   "devDependencies": {
     "@types/prompts": "^2.4.9",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "typescript": "^5.7.0"
   },
   "engines": {

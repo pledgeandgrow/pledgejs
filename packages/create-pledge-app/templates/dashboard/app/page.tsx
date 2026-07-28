@@ -26,32 +26,32 @@ export default function HomePage() {
 
   return (
     <div>
-      <div class="stats">
+      <div className="stats">
         {stats.map((s) => (
-          <div class="stat-card">
-            <div class="label">{s.label}</div>
-            <div class="value">{s.value}</div>
-            <div class={`change ${s.up ? 'up' : 'down'}`}>
+          <div className="stat-card">
+            <div className="label">{s.label}</div>
+            <div className="value">{s.value}</div>
+            <div className={`change ${s.up ? 'up' : 'down'}`}>
               {s.up ? '↑' : '↓'} {s.change} vs last week
             </div>
           </div>
         ))}
       </div>
 
-      <div class="chart-container">
+      <div className="chart-container">
         <h3>Revenue — Last 7 Days</h3>
-        <div class="chart">
+        <div className="chart">
           {chartData.map((d) => (
-            <div class="bar" style={{ height: `${d.height}%` }}>
-              <div class="label">{d.day}</div>
+            <div className="bar" style={{ height: `${d.height}%` }}>
+              <div className="label">{d.day}</div>
             </div>
           ))}
         </div>
       </div>
 
-      <div class="table-container">
+      <div className="table-container">
         <h3>Recent Orders</h3>
-        <table class="table">
+        <table className="table">
           <thead>
             <tr>
               <th>Order ID</th>
@@ -68,7 +68,7 @@ export default function HomePage() {
                 <td>{o.customer}</td>
                 <td>{o.date}</td>
                 <td>
-                  <span class={`badge ${o.status === 'Completed' ? 'green' : o.status === 'Pending' ? 'yellow' : o.status === 'Refunded' ? 'red' : 'blue'}`}>
+                  <span className={`badge ${o.status === 'Completed' ? 'green' : o.status === 'Pending' ? 'yellow' : o.status === 'Refunded' ? 'red' : 'blue'}`}>
                     {o.status}
                   </span>
                 </td>

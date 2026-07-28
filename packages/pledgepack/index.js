@@ -58,6 +58,12 @@ function resolveBinary() {
     if (existsSync(localExe)) return localExe;
   }
 
+  // Check platform-specific subdirectory (where postinstall downloads)
+  const platformKey = `${platform}-${arch}`;
+  const platformBinaryName = platform === 'win32' ? 'pledge.exe' : 'pledge';
+  const platformBinary = join(__dirname, 'bin', platformKey, platformBinaryName);
+  if (existsSync(platformBinary)) return platformBinary;
+
   return null;
 }
 

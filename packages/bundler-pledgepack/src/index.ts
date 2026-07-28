@@ -21,7 +21,8 @@ import type {
   TransformResult,
 } from 'pledgestack-shared';
 import type { PledgeConfig } from 'pledgestack-shared';
-import { resolveBinary, runPledgepack } from 'pledgepack';
+import { resolveBinary, runPledgepack } from './binary-resolver';
+export { resolveBinary, runPledgepack };
 import {
   PLEDGEPACK_DEFAULT_PORT,
   fetchFromPledgepack,

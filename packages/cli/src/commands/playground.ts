@@ -8,7 +8,7 @@
  * - Share playground snippets via URL
  *
  * Architecture:
- * - CLI command starts a local Express server on port 6006
+ * - CLI command starts a local Express server on port 7007
  * - Serves a single-page HTML app with a code editor (CodeMirror)
  * - POST /api/compile — compiles Rust source to WASM
  * - POST /api/parse — parses PSX and returns split Rust/TSX
@@ -31,7 +31,7 @@ interface PlaygroundOptions {
 export async function playgroundCommand(opts: PlaygroundOptions = {}): Promise<void> {
   const { loadConfig } = await import('../config-loader');
   await loadConfig();
-  const port = opts.port ?? 6006;
+  const port = opts.port ?? 7007;
 
   console.log('\n  PledgeStack — Starting PSX Playground...\n');
 

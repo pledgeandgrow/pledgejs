@@ -1,4 +1,5 @@
-export default function BlogPostPage({ slug }: { slug: string }) {
+export default function BlogPostPage({ params }: { params: { slug: string } }) {
+  const { slug } = params;
   const posts: Record<string, { title: string; date: string; body: string }> = {
     'hello-pledgestack': {
       title: 'Hello PledgeStack',
@@ -21,18 +22,18 @@ export default function BlogPostPage({ slug }: { slug: string }) {
 
   if (!post) {
     return (
-      <div class="container">
-        <div class="not-found">
+      <div className="container">
+        <div className="not-found">
           <h1>404</h1>
           <p>Blog post not found.</p>
-          <a href="/blog" class="btn btn-primary">Back to Blog</a>
+          <a href="/blog" className="btn btn-primary">Back to Blog</a>
         </div>
       </div>
     );
   }
 
   return (
-    <div class="container" style={{ paddingTop: '3rem' }}>
+    <div className="container" style={{ paddingTop: '3rem' }}>
       <a href="/blog" style={{ display: 'inline-block', marginBottom: '1rem' }}>← Back to Blog</a>
       <h1 style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>{post.title}</h1>
       <p style={{ color: 'var(--muted)', marginBottom: '2rem' }}>{post.date}</p>

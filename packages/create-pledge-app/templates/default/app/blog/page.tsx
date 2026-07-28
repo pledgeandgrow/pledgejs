@@ -6,13 +6,13 @@ export default function BlogPage() {
   ];
 
   return (
-    <div class="container">
+    <div className="container">
       <section style={{ paddingTop: '3rem' }}>
-        <span class="badge">Blog</span>
+        <span className="badge">Blog</span>
         <h1 style={{ fontSize: '2.5rem', marginBottom: '2rem' }}>Latest Posts</h1>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {posts.map((post) => (
-            <a href={`/blog/${post.slug}`} class="card" style={{ textDecoration: 'none', color: 'inherit' }}>
+            <a href={`/blog/${post.slug}`} className="card" style={{ textDecoration: 'none', color: 'inherit' }}>
               <h3 style={{ marginBottom: '0.25rem' }}>{post.title}</h3>
               <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>{post.date}</p>
               <p>{post.excerpt}</p>

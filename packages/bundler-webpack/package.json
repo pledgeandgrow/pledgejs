@@ -1,0 +1,37 @@
+{
+  "name": "pledgestack-bundler-webpack",
+  "version": "0.1.4",
+  "description": "Webpack bundler adapter for PledgeStack — use Webpack instead of PledgePack",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "loaders"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pledgestack-shared": "workspace:*",
+    "pledgestack-core": "workspace:*",
+    "esbuild": "^0.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "rimraf": "^6.0.0",
+    "@types/node": "^22.0.0"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "private": true
+}

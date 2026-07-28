@@ -21,8 +21,8 @@ importers:
         specifier: ^9.18.0
         version: 9.39.5(jiti@2.7.0)
       pledgepack:
-        specifier: ^0.2.3
-        version: 0.2.3
+        specifier: ^0.2.7
+        version: 0.2.7
       prettier:
         specifier: ^3.4.0
         version: 3.9.5
@@ -118,8 +118,8 @@ importers:
         specifier: ^0.24.0
         version: 0.24.2
       pledgepack:
-        specifier: ^0.2.3
-        version: 0.2.3
+        specifier: ^0.2.7
+        version: 0.2.7
       pledgestack-core:
         specifier: workspace:*
         version: link:../core
@@ -164,6 +164,28 @@ importers:
       rollup:
         specifier: ^4.0.0
         version: 4.62.2
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  packages/bundler-rsbuild:
+    dependencies:
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      pledgestack-core:
+        specifier: workspace:*
+        version: link:../core
+      pledgestack-shared:
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      rimraf:
+        specifier: ^6.0.0
+        version: 6.1.3
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -215,6 +237,28 @@ importers:
         specifier: ^5.0.0
         version: 5.4.21(@types/node@22.20.1)(lightningcss@1.32.0)(terser@5.49.0)
 
+  packages/bundler-webpack:
+    dependencies:
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      pledgestack-core:
+        specifier: workspace:*
+        version: link:../core
+      pledgestack-shared:
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      rimraf:
+        specifier: ^6.0.0
+        version: 6.1.3
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   packages/cli:
     dependencies:
       '@tailwindcss/postcss':
@@ -230,8 +274,8 @@ importers:
         specifier: ^2.4.0
         version: 2.7.0
       pledgepack:
-        specifier: ^0.2.3
-        version: 0.2.3
+        specifier: ^0.2.7
+        version: 0.2.7
       postcss:
         specifier: ^8.4.0
         version: 8.5.19
@@ -266,12 +310,18 @@ importers:
       pledgestack-bundler-rollup:
         specifier: workspace:*
         version: link:../bundler-rollup
+      pledgestack-bundler-rsbuild:
+        specifier: workspace:*
+        version: link:../bundler-rsbuild
       pledgestack-bundler-turbopack:
         specifier: workspace:*
         version: link:../bundler-turbopack
       pledgestack-bundler-vite:
         specifier: workspace:*
         version: link:../bundler-vite
+      pledgestack-bundler-webpack:
+        specifier: workspace:*
+        version: link:../bundler-webpack
       pledgestack-client:
         specifier: workspace:*
         version: link:../client
@@ -395,6 +445,12 @@ importers:
       '@types/prompts':
         specifier: ^2.4.9
         version: 2.4.9
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.3(@types/react@19.2.17)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -577,8 +633,8 @@ importers:
         specifier: ^0.24.0
         version: 0.24.2
       pledgepack:
-        specifier: ^0.2.3
-        version: 0.2.3
+        specifier: ^0.2.7
+        version: 0.2.7
       pledgestack-core:
         specifier: workspace:*
         version: link:../core
@@ -2617,8 +2673,8 @@ packages:
     resolution: {integrity: sha512-uB80kBFb/tfd68bVleG9T5GGsGPjJrLAUpR5PZIrhBnIaRTQRjqdJSsIKkOP6OAIFbj7GOrcudc5pNjZ+geV2g==}
     engines: {node: '>=6'}
 
-  pledgepack@0.2.3:
-    resolution: {integrity: sha512-81t9mb2yKRXiFQyh2D2osIiRhp5+19q/eAertgBYNhouvaIMbe29NWLeq1G7pHF95ilbv4ZgNPV1ziqlSDASGQ==}
+  pledgepack@0.2.7:
+    resolution: {integrity: sha512-lff660STLJf3xNcbI3yci2LPjQSxqzKhJX5kUkCzJ7nNS27Z5noa4rwqXKo3E33L/HFxJ1FiwU7z4B2jNUJbiA==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -4755,7 +4811,7 @@ snapshots:
 
   pify@4.0.1: {}
 
-  pledgepack@0.2.3: {}
+  pledgepack@0.2.7: {}
 
   postcss-value-parser@4.2.0: {}
 

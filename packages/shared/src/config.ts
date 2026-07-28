@@ -36,7 +36,7 @@ export interface PledgeConfig {
   /** TypeScript path aliases (#231) — maps alias prefix to directory */
   alias?: Record<string, string>;
   /** Which bundler to use (default: 'pledgepack'). Install the corresponding adapter package to use alternatives. */
-  bundler?: 'pledgepack' | 'vite' | 'rollup' | 'turbopack';
+  bundler?: 'pledgepack' | 'vite' | 'rollup' | 'turbopack' | 'rsbuild' | 'webpack';
 }
 
 /**
