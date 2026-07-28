@@ -28,7 +28,7 @@ export {
 
 import { createHash } from 'node:crypto';
 import { clearCache as clearCoreCache, revalidateTag as coreRevalidateTag, revalidatePath as coreRevalidatePath } from 'pledgestack-core';
-import { kvOpen, kvSet, kvGet, kvDelete, isNativeKvStoreAvailable } from 'pledgestack-core';
+import { kvOpen, kvSet, isNativeKvStoreAvailable } from 'pledgestack-core';
 
 // --- Server-specific extensions ---
 

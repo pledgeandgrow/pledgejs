@@ -12,7 +12,7 @@
  *   if (!result.allowed) return Response.json({ error: 'Too many requests' }, { status: 429 });
  */
 
-import { checkRateLimit, isNativeRateLimiterAvailable } from 'pledgestack-core';
+import { checkRateLimit } from 'pledgestack-core';
 import type { PledgePlugin } from 'pledgestack-shared';
 
 export interface RateLimitOptions {
