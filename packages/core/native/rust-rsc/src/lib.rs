@@ -61,7 +61,10 @@ const ROW_SUSPENSE: &str = "S";
 ///   J:<id>:<json>\n
 ///   T:<id>:<text>\n
 #[napi]
-pub fn serialize_rsc(data: String, client_refs: Option<Vec<ClientReference>>) -> RSCSerializeResult {
+pub fn serialize_rsc(
+    data: String,
+    client_refs: Option<Vec<ClientReference>>,
+) -> RSCSerializeResult {
     let start = std::time::Instant::now();
     let mut payload = String::with_capacity(data.len() * 2);
     let mut row_count = 0i32;
@@ -86,7 +89,12 @@ pub fn serialize_rsc(data: String, client_refs: Option<Vec<ClientReference>>) ->
     } else {
         // If not valid JSON, write as text
         let text_id = refs.len();
-        payload.push_str(&format!("{}:{}:{}\n", ROW_TEXT, text_id, escape_flight_string(&data)));
+        payload.push_str(&format!(
+            "{}:{}:{}\n",
+            ROW_TEXT,
+            text_id,
+            escape_flight_string(&data)
+        ));
         row_count += 1;
     }
 
@@ -99,22 +107,33 @@ pub fn serialize_rsc(data: String, client_refs: Option<Vec<ClientReference>>) ->
 }
 
 /// Serializes a JSON value into the flight model format.
-fn serialize_flight_model(val: &serde_json::Value, id: usize, payload: &mut String, row_count: &mut i32) -> String {
+fn serialize_flight_model(
+    val: &serde_json::Value,
+    id: usize,
+    payload: &mut String,
+    row_count: &mut i32,
+) -> String {
     match val {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::String(s) => format!("\"{}\"", escape_flight_string(s)),
         serde_json::Value::Array(arr) => {
-            let parts: Vec<String> = arr.iter()
+            let parts: Vec<String> = arr
+                .iter()
                 .map(|v| serialize_flight_model(v, id, payload, row_count))
                 .collect();
             format!("[{}]", parts.join(","))
         }
         serde_json::Value::Object(obj) => {
-            let parts: Vec<String> = obj.iter()
+            let parts: Vec<String> = obj
+                .iter()
                 .map(|(k, v)| {
-                    format!("\"{}\":{}", escape_flight_string(k), serialize_flight_model(v, id, payload, row_count))
+                    format!(
+                        "\"{}\":{}",
+                        escape_flight_string(k),
+                        serialize_flight_model(v, id, payload, row_count)
+                    )
                 })
                 .collect();
             format!("{{{}}}", parts.join(","))
@@ -224,9 +243,15 @@ pub fn deserialize_rsc(payload: String) -> String {
             "M" => {
                 // Module reference
                 let mut ref_obj = serde_json::Map::new();
-                ref_obj.insert("type".to_string(), serde_json::Value::String("module".to_string()));
+                ref_obj.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("module".to_string()),
+                );
                 ref_obj.insert("id".to_string(), serde_json::Value::String(id.to_string()));
-                ref_obj.insert("data".to_string(), serde_json::Value::String(data.to_string()));
+                ref_obj.insert(
+                    "data".to_string(),
+                    serde_json::Value::String(data.to_string()),
+                );
                 result.insert(format!("ref_{}", id), serde_json::Value::Object(ref_obj));
             }
             _ => {}

@@ -47,7 +47,8 @@ pub fn get_file_meta(path: String) -> Result<FileMeta, String> {
     let path = Path::new(&path);
     let meta = fs::metadata(path).map_err(|e| format!("Failed to get metadata: {}", e))?;
 
-    let modified = meta.modified()
+    let modified = meta
+        .modified()
         .map(|t| {
             t.duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as f64)

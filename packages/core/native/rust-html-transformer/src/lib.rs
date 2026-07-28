@@ -111,7 +111,11 @@ impl HtmlTransformer {
 
 /// One-shot HTML transformation (non-streaming).
 #[napi]
-pub fn transform_html(html: String, head_injection: Option<String>, body_injection: Option<String>) -> String {
+pub fn transform_html(
+    html: String,
+    head_injection: Option<String>,
+    body_injection: Option<String>,
+) -> String {
     let transformer = HtmlTransformer::new(head_injection, body_injection);
     let result = transformer.transform_chunk(html);
     let mut output = result.output;

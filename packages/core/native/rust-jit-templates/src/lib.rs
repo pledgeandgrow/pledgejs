@@ -42,7 +42,11 @@ pub struct ProfileResult {
 }
 
 #[napi]
-pub fn record_render(route_pattern: String, template_hash: f64, threshold: Option<f64>) -> ProfileResult {
+pub fn record_render(
+    route_pattern: String,
+    template_hash: f64,
+    threshold: Option<f64>,
+) -> ProfileResult {
     ensure_profiles();
     let threshold = threshold.unwrap_or(100.0) as u64;
     let hash = template_hash as u64;
@@ -61,7 +65,8 @@ pub fn record_render(route_pattern: String, template_hash: f64, threshold: Optio
     profile.last_template_hash = hash;
 
     // Compile if we've rendered the same template enough times
-    let should_compile = profile.render_count >= threshold && same_template && profile.compiled_template.is_none();
+    let should_compile =
+        profile.render_count >= threshold && same_template && profile.compiled_template.is_none();
 
     ProfileResult {
         should_compile,
@@ -95,7 +100,8 @@ pub fn get_compiled_template(route_pattern: String) -> Option<String> {
     ensure_profiles();
     let profiles = PROFILES.lock().unwrap();
     if let Some(ref map) = *profiles {
-        map.get(&route_pattern).and_then(|p| p.compiled_template.clone())
+        map.get(&route_pattern)
+            .and_then(|p| p.compiled_template.clone())
     } else {
         None
     }

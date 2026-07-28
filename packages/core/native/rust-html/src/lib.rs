@@ -19,9 +19,9 @@ pub fn escape_html(input: String) -> String {
 
     // Fast path: scan for characters that need escaping.
     // If none found, return the original string without allocation.
-    let needs_escaping = bytes.iter().any(|&b| {
-        b == b'&' || b == b'<' || b == b'>' || b == b'"' || b == b'\'' || b == b'/'
-    });
+    let needs_escaping = bytes
+        .iter()
+        .any(|&b| b == b'&' || b == b'<' || b == b'>' || b == b'"' || b == b'\'' || b == b'/');
     if !needs_escaping {
         return input;
     }
@@ -58,17 +58,9 @@ pub fn escape_html(input: String) -> String {
                 let slash_eq = unsafe { _mm_cmpeq_epi8(chunk, slash_mask) };
 
                 let combined = unsafe {
-                    _mm_or_si128(
-                        _mm_or_si128(amp_eq, lt_eq),
-                        _mm_or_si128(gt_eq, quot_eq),
-                    )
+                    _mm_or_si128(_mm_or_si128(amp_eq, lt_eq), _mm_or_si128(gt_eq, quot_eq))
                 };
-                let combined = unsafe {
-                    _mm_or_si128(
-                        combined,
-                        _mm_or_si128(apos_eq, slash_eq),
-                    )
-                };
+                let combined = unsafe { _mm_or_si128(combined, _mm_or_si128(apos_eq, slash_eq)) };
 
                 let mask = unsafe { _mm_movemask_epi8(combined) };
 
@@ -180,7 +172,11 @@ pub struct LinkEntry {
 
 /// Renders the <head> section from metadata.
 #[napi]
-pub fn render_head(metadata: HeadMetadataInput, scripts: Option<Vec<ScriptEntry>>, links: Option<Vec<LinkEntry>>) -> String {
+pub fn render_head(
+    metadata: HeadMetadataInput,
+    scripts: Option<Vec<ScriptEntry>>,
+    links: Option<Vec<LinkEntry>>,
+) -> String {
     let mut html = String::with_capacity(2048);
     html.push_str("<head>\n");
 
@@ -190,102 +186,166 @@ pub fn render_head(metadata: HeadMetadataInput, scripts: Option<Vec<ScriptEntry>
     // Viewport
     let viewport_width = metadata.viewport_width.as_deref().unwrap_or("device-width");
     let viewport_initial = metadata.viewport_initial_scale.as_deref().unwrap_or("1.0");
-    let mut viewport = format!("width={}, initial-scale={}", viewport_width, viewport_initial);
+    let mut viewport = format!(
+        "width={}, initial-scale={}",
+        viewport_width, viewport_initial
+    );
     if let Some(ref max_scale) = metadata.viewport_maximum_scale {
         viewport.push_str(&format!(", maximum-scale={}", max_scale));
     }
     if let Some(ref scalable) = metadata.viewport_user_scalable {
         viewport.push_str(&format!(", user-scalable={}", scalable));
     }
-    html.push_str(&format!("  <meta name=\"viewport\" content=\"{}\" />\n", viewport));
+    html.push_str(&format!(
+        "  <meta name=\"viewport\" content=\"{}\" />\n",
+        viewport
+    ));
 
     // Theme color
     if let Some(ref color) = metadata.theme_color {
-        html.push_str(&format!("  <meta name=\"theme-color\" content=\"{}\" />\n", escape_attr(color.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"theme-color\" content=\"{}\" />\n",
+            escape_attr(color.clone())
+        ));
     }
 
     // Color scheme
     if let Some(ref scheme) = metadata.color_scheme {
-        html.push_str(&format!("  <meta name=\"color-scheme\" content=\"{}\" />\n", escape_attr(scheme.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"color-scheme\" content=\"{}\" />\n",
+            escape_attr(scheme.clone())
+        ));
     }
 
     // Title
     if let Some(ref title) = metadata.title {
-        html.push_str(&format!("  <title>{}</title>\n", escape_html(title.clone())));
+        html.push_str(&format!(
+            "  <title>{}</title>\n",
+            escape_html(title.clone())
+        ));
     }
 
     // Description
     if let Some(ref desc) = metadata.description {
-        html.push_str(&format!("  <meta name=\"description\" content=\"{}\" />\n", escape_attr(desc.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"description\" content=\"{}\" />\n",
+            escape_attr(desc.clone())
+        ));
     }
 
     // Keywords
     if let Some(ref keywords) = metadata.keywords {
         if !keywords.is_empty() {
             let joined = keywords.join(", ");
-            html.push_str(&format!("  <meta name=\"keywords\" content=\"{}\" />\n", escape_attr(joined)));
+            html.push_str(&format!(
+                "  <meta name=\"keywords\" content=\"{}\" />\n",
+                escape_attr(joined)
+            ));
         }
     }
 
     // Author
     if let Some(ref author) = metadata.author {
-        html.push_str(&format!("  <meta name=\"author\" content=\"{}\" />\n", escape_attr(author.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"author\" content=\"{}\" />\n",
+            escape_attr(author.clone())
+        ));
     }
 
     // Robots
     if let Some(ref robots) = metadata.robots {
-        html.push_str(&format!("  <meta name=\"robots\" content=\"{}\" />\n", escape_attr(robots.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"robots\" content=\"{}\" />\n",
+            escape_attr(robots.clone())
+        ));
     }
 
     // Canonical
     if let Some(ref canonical) = metadata.canonical {
-        html.push_str(&format!("  <link rel=\"canonical\" href=\"{}\" />\n", escape_attr(canonical.clone())));
+        html.push_str(&format!(
+            "  <link rel=\"canonical\" href=\"{}\" />\n",
+            escape_attr(canonical.clone())
+        ));
     }
 
     // Open Graph
     if let Some(ref og_title) = metadata.open_graph_title {
-        html.push_str(&format!("  <meta property=\"og:title\" content=\"{}\" />\n", escape_attr(og_title.clone())));
+        html.push_str(&format!(
+            "  <meta property=\"og:title\" content=\"{}\" />\n",
+            escape_attr(og_title.clone())
+        ));
     }
     if let Some(ref og_desc) = metadata.open_graph_description {
-        html.push_str(&format!("  <meta property=\"og:description\" content=\"{}\" />\n", escape_attr(og_desc.clone())));
+        html.push_str(&format!(
+            "  <meta property=\"og:description\" content=\"{}\" />\n",
+            escape_attr(og_desc.clone())
+        ));
     }
     if let Some(ref og_type) = metadata.open_graph_type {
-        html.push_str(&format!("  <meta property=\"og:type\" content=\"{}\" />\n", escape_attr(og_type.clone())));
+        html.push_str(&format!(
+            "  <meta property=\"og:type\" content=\"{}\" />\n",
+            escape_attr(og_type.clone())
+        ));
     }
     if let Some(ref og_url) = metadata.open_graph_url {
-        html.push_str(&format!("  <meta property=\"og:url\" content=\"{}\" />\n", escape_attr(og_url.clone())));
+        html.push_str(&format!(
+            "  <meta property=\"og:url\" content=\"{}\" />\n",
+            escape_attr(og_url.clone())
+        ));
     }
     if let Some(ref images) = metadata.open_graph_images {
         for img in images {
-            html.push_str(&format!("  <meta property=\"og:image\" content=\"{}\" />\n", escape_attr(img.clone())));
+            html.push_str(&format!(
+                "  <meta property=\"og:image\" content=\"{}\" />\n",
+                escape_attr(img.clone())
+            ));
         }
     }
 
     // Twitter Card
     if let Some(ref card) = metadata.twitter_card {
-        html.push_str(&format!("  <meta name=\"twitter:card\" content=\"{}\" />\n", escape_attr(card.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"twitter:card\" content=\"{}\" />\n",
+            escape_attr(card.clone())
+        ));
     }
     if let Some(ref tw_title) = metadata.twitter_title {
-        html.push_str(&format!("  <meta name=\"twitter:title\" content=\"{}\" />\n", escape_attr(tw_title.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"twitter:title\" content=\"{}\" />\n",
+            escape_attr(tw_title.clone())
+        ));
     }
     if let Some(ref tw_desc) = metadata.twitter_description {
-        html.push_str(&format!("  <meta name=\"twitter:description\" content=\"{}\" />\n", escape_attr(tw_desc.clone())));
+        html.push_str(&format!(
+            "  <meta name=\"twitter:description\" content=\"{}\" />\n",
+            escape_attr(tw_desc.clone())
+        ));
     }
     if let Some(ref images) = metadata.twitter_images {
         for img in images {
-            html.push_str(&format!("  <meta name=\"twitter:image\" content=\"{}\" />\n", escape_attr(img.clone())));
+            html.push_str(&format!(
+                "  <meta name=\"twitter:image\" content=\"{}\" />\n",
+                escape_attr(img.clone())
+            ));
         }
     }
 
     // Structured data (JSON-LD)
     if let Some(ref structured) = metadata.structured_data {
-        html.push_str(&format!("  <script type=\"application/ld+json\">{}</script>\n", structured));
+        html.push_str(&format!(
+            "  <script type=\"application/ld+json\">{}</script>\n",
+            structured
+        ));
     }
 
     // Link tags
     if let Some(ref links) = links {
         for link in links {
-            let mut tag = format!("  <link rel=\"{}\" href=\"{}\"", escape_attr(link.rel.clone()), escape_attr(link.href.clone()));
+            let mut tag = format!(
+                "  <link rel=\"{}\" href=\"{}\"",
+                escape_attr(link.rel.clone()),
+                escape_attr(link.href.clone())
+            );
             if let Some(ref t) = link.r#type {
                 tag.push_str(&format!(" type=\"{}\"", escape_attr(t.clone())));
             }

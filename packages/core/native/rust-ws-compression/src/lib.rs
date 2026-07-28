@@ -6,10 +6,10 @@
 //
 // The JS fallback uses Node's zlib for compression.
 
-use napi_derive::napi;
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
 use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
+use napi_derive::napi;
 use std::io::{Read, Write};
 
 /// Compresses a WebSocket message using permessage-deflate (zlib).
@@ -21,8 +21,12 @@ use std::io::{Read, Write};
 pub fn ws_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, String> {
     let level = level.unwrap_or(6).min(9).max(1);
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(level));
-    encoder.write_all(&data).map_err(|e| format!("WS compress write error: {}", e))?;
-    encoder.finish().map_err(|e| format!("WS compress finish error: {}", e))
+    encoder
+        .write_all(&data)
+        .map_err(|e| format!("WS compress write error: {}", e))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("WS compress finish error: {}", e))
 }
 
 /// Decompresses a WebSocket message.
@@ -33,7 +37,9 @@ pub fn ws_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, String>
 pub fn ws_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
     let mut decoder = ZlibDecoder::new(&data[..]);
     let mut output = Vec::new();
-    decoder.read_to_end(&mut output).map_err(|e| format!("WS decompress error: {}", e))?;
+    decoder
+        .read_to_end(&mut output)
+        .map_err(|e| format!("WS decompress error: {}", e))?;
     Ok(output)
 }
 

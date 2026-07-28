@@ -64,8 +64,8 @@ pub struct StaticShellResult {
 
 /// Void elements that don't need closing tags.
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 fn is_void_element(tag: &str) -> bool {
@@ -120,7 +120,10 @@ fn render_node(node: &VNode, boundaries: &mut Vec<SuspenseBoundary>, depth: &mut
     if node.is_suspense.unwrap_or(false) {
         let boundary_id = format!("suspense-{}", boundaries.len() + 1);
         let fallback_html = match node.suspense_fallback {
-            Some(ref children) => children.iter().map(|c| render_node(c, boundaries, depth)).collect::<String>(),
+            Some(ref children) => children
+                .iter()
+                .map(|c| render_node(c, boundaries, depth))
+                .collect::<String>(),
             None => String::new(),
         };
         html.push_str(&format!(

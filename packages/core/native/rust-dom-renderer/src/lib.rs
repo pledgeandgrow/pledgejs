@@ -35,8 +35,8 @@ pub struct RenderResult {
 }
 
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 fn is_void(tag: &str) -> bool {
@@ -161,8 +161,6 @@ pub fn render_to_chunk(root: DomNode) -> String {
 /// Returns false for tags that require client-side interactivity.
 #[napi]
 pub fn can_render_in_rust(tag: String) -> bool {
-    const UNSAFE: &[&str] = &[
-        "script", "iframe", "object", "embed", "canvas",
-    ];
+    const UNSAFE: &[&str] = &["script", "iframe", "object", "embed", "canvas"];
     !UNSAFE.contains(&tag.as_str())
 }

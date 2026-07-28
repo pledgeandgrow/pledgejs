@@ -8,9 +8,9 @@
 // 2. No V8 buffer allocation overhead
 // 3. Zero-copy where possible
 
-use napi_derive::napi;
+use flate2::write::{DeflateEncoder, GzEncoder};
 use flate2::Compression;
-use flate2::write::{GzEncoder, DeflateEncoder};
+use napi_derive::napi;
 use std::io::Write;
 
 /// Compresses data using gzip.
@@ -22,8 +22,12 @@ use std::io::Write;
 pub fn gzip_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, String> {
     let level = level.unwrap_or(6).min(9).max(1);
     let mut encoder = GzEncoder::new(Vec::new(), Compression::new(level));
-    encoder.write_all(&data).map_err(|e| format!("Gzip write error: {}", e))?;
-    encoder.finish().map_err(|e| format!("Gzip finish error: {}", e))
+    encoder
+        .write_all(&data)
+        .map_err(|e| format!("Gzip write error: {}", e))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("Gzip finish error: {}", e))
 }
 
 /// Compresses data using deflate.
@@ -35,8 +39,12 @@ pub fn gzip_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, Strin
 pub fn deflate_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, String> {
     let level = level.unwrap_or(6).min(9).max(1);
     let mut encoder = DeflateEncoder::new(Vec::new(), Compression::new(level));
-    encoder.write_all(&data).map_err(|e| format!("Deflate write error: {}", e))?;
-    encoder.finish().map_err(|e| format!("Deflate finish error: {}", e))
+    encoder
+        .write_all(&data)
+        .map_err(|e| format!("Deflate write error: {}", e))?;
+    encoder
+        .finish()
+        .map_err(|e| format!("Deflate finish error: {}", e))
 }
 
 /// Decompresses gzip data.
@@ -49,7 +57,9 @@ pub fn gzip_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut decoder = GzDecoder::new(&data[..]);
     let mut output = Vec::new();
-    decoder.read_to_end(&mut output).map_err(|e| format!("Gzip decompress error: {}", e))?;
+    decoder
+        .read_to_end(&mut output)
+        .map_err(|e| format!("Gzip decompress error: {}", e))?;
     Ok(output)
 }
 

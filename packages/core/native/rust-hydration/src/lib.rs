@@ -31,7 +31,7 @@ pub struct HydrationScriptResult {
 #[napi(object)]
 pub struct HydrationOptions {
     pub html: String,
-    pub mode: Option<String>,        // "full" | "minimal" | "progressive"
+    pub mode: Option<String>, // "full" | "minimal" | "progressive"
     pub minify: Option<bool>,
     pub hydration_data: Option<String>,
 }
@@ -50,7 +50,9 @@ pub fn generate_hydration_script(options: HydrationOptions) -> HydrationScriptRe
 
     let script = match mode {
         "minimal" => generate_minimal(&points, &chunks, minify),
-        "progressive" => generate_progressive(&points, &chunks, options.hydration_data.as_deref(), minify),
+        "progressive" => {
+            generate_progressive(&points, &chunks, options.hydration_data.as_deref(), minify)
+        }
         _ => generate_full(&points, &chunks, options.hydration_data.as_deref(), minify),
     };
 
@@ -135,20 +137,29 @@ fn find_required_chunks(html: &str) -> Vec<String> {
     chunks
 }
 
-fn generate_full(points: &[HydrationPoint], chunks: &[String], hydration_data: Option<&str>, minify: bool) -> String {
-    let chunk_imports: String = chunks.iter()
+fn generate_full(
+    points: &[HydrationPoint],
+    chunks: &[String],
+    hydration_data: Option<&str>,
+    minify: bool,
+) -> String {
+    let chunk_imports: String = chunks
+        .iter()
         .enumerate()
         .map(|(i, c)| format!("import * as m{} from \"{}\";", i, c))
         .collect::<Vec<_>>()
         .join("\n");
 
-    let chunk_map: String = chunks.iter()
+    let chunk_map: String = chunks
+        .iter()
         .enumerate()
         .map(|(i, c)| format!("\"{}\":m{}", c, i))
         .collect::<Vec<_>>()
         .join(",");
 
-    let data_line = hydration_data.map(|d| format!("const __pledge_hydration_data__={};", d)).unwrap_or_default();
+    let data_line = hydration_data
+        .map(|d| format!("const __pledge_hydration_data__={};", d))
+        .unwrap_or_default();
 
     let script = format!(
         "{chunk_imports}\nconst __pledge_chunks__={{{chunk_map}}};\n{data_line}\nasync function hydrate(){{const{{hydrateRoot}}=await import(\"react-dom/client\");const{{createElement}}=await import(\"react\");const root=document.getElementById(\"__pledge_root__\");if(!root)return;hydrateRoot(root,createElement('div',null,root.innerHTML));}}\nif(document.readyState==='loading'){{document.addEventListener('DOMContentLoaded',hydrate);}}else{{hydrate();}}",
@@ -157,7 +168,11 @@ fn generate_full(points: &[HydrationPoint], chunks: &[String], hydration_data: O
         data_line = data_line
     );
 
-    if minify { minify_js(&script) } else { script }
+    if minify {
+        minify_js(&script)
+    } else {
+        script
+    }
 }
 
 fn generate_minimal(points: &[HydrationPoint], chunks: &[String], minify: bool) -> String {
@@ -177,12 +192,25 @@ fn generate_minimal(points: &[HydrationPoint], chunks: &[String], minify: bool) 
         String::new()
     };
 
-    let script = format!("(function(){{{chunk_loader}{bindings}}})()", chunk_loader = chunk_loader, bindings = bindings);
+    let script = format!(
+        "(function(){{{chunk_loader}{bindings}}})()",
+        chunk_loader = chunk_loader,
+        bindings = bindings
+    );
 
-    if minify { minify_js(&script) } else { script }
+    if minify {
+        minify_js(&script)
+    } else {
+        script
+    }
 }
 
-fn generate_progressive(points: &[HydrationPoint], chunks: &[String], hydration_data: Option<&str>, minify: bool) -> String {
+fn generate_progressive(
+    points: &[HydrationPoint],
+    chunks: &[String],
+    hydration_data: Option<&str>,
+    minify: bool,
+) -> String {
     let points_json = serde_json::to_string(points).unwrap_or_else(|_| "[]".to_string());
     let chunks_json = serde_json::to_string(chunks).unwrap_or_else(|_| "[]".to_string());
 
@@ -199,7 +227,11 @@ fn generate_progressive(points: &[HydrationPoint], chunks: &[String], hydration_
         hydrate_block = hydrate_block
     );
 
-    if minify { minify_js(&script) } else { script }
+    if minify {
+        minify_js(&script)
+    } else {
+        script
+    }
 }
 
 fn minify_js(script: &str) -> String {

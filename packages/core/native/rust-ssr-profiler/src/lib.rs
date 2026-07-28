@@ -143,17 +143,20 @@ pub fn record_render_end() {
 }
 
 fn aggregate_timings(frames: &[ProfileFrame]) -> Vec<ComponentTiming> {
-    let mut map: std::collections::HashMap<String, ComponentTiming> = std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<String, ComponentTiming> =
+        std::collections::HashMap::new();
 
     fn walk(frame: &ProfileFrame, map: &mut std::collections::HashMap<String, ComponentTiming>) {
-        let entry = map.entry(frame.name.clone()).or_insert_with(|| ComponentTiming {
-            name: frame.name.clone(),
-            render_count: 0,
-            total_time_us: 0.0,
-            avg_time_us: 0.0,
-            max_time_us: 0.0,
-            min_time_us: f64::MAX,
-        });
+        let entry = map
+            .entry(frame.name.clone())
+            .or_insert_with(|| ComponentTiming {
+                name: frame.name.clone(),
+                render_count: 0,
+                total_time_us: 0.0,
+                avg_time_us: 0.0,
+                max_time_us: 0.0,
+                min_time_us: f64::MAX,
+            });
         entry.render_count += 1;
         entry.total_time_us += frame.duration_us;
         entry.max_time_us = entry.max_time_us.max(frame.duration_us);
@@ -171,7 +174,11 @@ fn aggregate_timings(frames: &[ProfileFrame]) -> Vec<ComponentTiming> {
     for t in &mut result {
         t.avg_time_us = t.total_time_us / t.render_count as f64;
     }
-    result.sort_by(|a, b| b.total_time_us.partial_cmp(&a.total_time_us).unwrap_or(std::cmp::Ordering::Equal));
+    result.sort_by(|a, b| {
+        b.total_time_us
+            .partial_cmp(&a.total_time_us)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     result
 }
 
@@ -188,7 +195,11 @@ fn generate_flamegraph(frames: &[ProfileFrame], indent: i32) -> String {
             frame.renderer,
             frame.duration_us,
             bar,
-            frame.props_summary.as_ref().map(|s| format!(" props={}", s)).unwrap_or_default()
+            frame
+                .props_summary
+                .as_ref()
+                .map(|s| format!(" props={}", s))
+                .unwrap_or_default()
         ));
         if !frame.children.is_empty() {
             out.push_str(&generate_flamegraph(&frame.children, indent + 1));

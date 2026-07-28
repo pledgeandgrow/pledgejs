@@ -89,9 +89,18 @@ pub fn deserialize(payload: String) -> DeserializeResult {
                     export_name: export_name.to_string(),
                 });
                 let mut ref_obj = serde_json::Map::new();
-                ref_obj.insert("type".to_string(), serde_json::Value::String("module".to_string()));
-                ref_obj.insert("moduleId".to_string(), serde_json::Value::String(module_id.to_string()));
-                ref_obj.insert("exportName".to_string(), serde_json::Value::String(export_name.to_string()));
+                ref_obj.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("module".to_string()),
+                );
+                ref_obj.insert(
+                    "moduleId".to_string(),
+                    serde_json::Value::String(module_id.to_string()),
+                );
+                ref_obj.insert(
+                    "exportName".to_string(),
+                    serde_json::Value::String(export_name.to_string()),
+                );
                 result.insert(format!("M:{}", id), serde_json::Value::Object(ref_obj));
             }
             "E" => {
@@ -100,9 +109,18 @@ pub fn deserialize(payload: String) -> DeserializeResult {
                 let module_id = sub_parts.get(0).unwrap_or(&"");
                 let export_name = sub_parts.get(1).unwrap_or(&"");
                 let mut ref_obj = serde_json::Map::new();
-                ref_obj.insert("type".to_string(), serde_json::Value::String("element".to_string()));
-                ref_obj.insert("moduleId".to_string(), serde_json::Value::String(module_id.to_string()));
-                ref_obj.insert("exportName".to_string(), serde_json::Value::String(export_name.to_string()));
+                ref_obj.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("element".to_string()),
+                );
+                ref_obj.insert(
+                    "moduleId".to_string(),
+                    serde_json::Value::String(module_id.to_string()),
+                );
+                ref_obj.insert(
+                    "exportName".to_string(),
+                    serde_json::Value::String(export_name.to_string()),
+                );
                 result.insert(format!("E:{}", id), serde_json::Value::Object(ref_obj));
             }
             "J" => {
@@ -152,7 +170,8 @@ pub fn extract_module_references(payload: String) -> Vec<String> {
             if parts.len() >= 3 {
                 let sub_parts: Vec<&str> = parts[2].splitn(2, ':').collect();
                 if let Some(module_id) = sub_parts.get(0) {
-                    let ref_str = format!("{}:{}", module_id, sub_parts.get(1).unwrap_or(&"default"));
+                    let ref_str =
+                        format!("{}:{}", module_id, sub_parts.get(1).unwrap_or(&"default"));
                     if !refs.contains(&ref_str) {
                         refs.push(ref_str);
                     }
@@ -174,7 +193,10 @@ fn unescape(s: &str) -> String {
                 Some('n') => out.push('\n'),
                 Some('r') => out.push('\r'),
                 Some('t') => out.push('\t'),
-                Some(c) => { out.push('\\'); out.push(c); }
+                Some(c) => {
+                    out.push('\\');
+                    out.push(c);
+                }
                 None => out.push('\\'),
             }
         } else {

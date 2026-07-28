@@ -17,7 +17,11 @@ use napi_derive::napi;
 /// @param height Target height in pixels (default: 630)
 /// @return PNG buffer as Vec<u8>
 #[napi]
-pub fn render_svg_to_png(svg: String, width: Option<u32>, height: Option<u32>) -> Result<Vec<u8>, String> {
+pub fn render_svg_to_png(
+    svg: String,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<Vec<u8>, String> {
     let w = width.unwrap_or(1200);
     let h = height.unwrap_or(630);
 
@@ -30,14 +34,19 @@ pub fn render_svg_to_png(svg: String, width: Option<u32>, height: Option<u32>) -
         .ok_or_else(|| format!("Failed to create pixmap {}x{}", w, h))?;
 
     // Render the SVG tree into the pixmap
-    resvg::render(&tree, usvg::Transform::from_scale(
-        w as f32 / tree.size().width() as f32,
-        h as f32 / tree.size().height() as f32,
-    ), &mut pixmap)
-        .map_err(|e| format!("SVG render error: {}", e))?;
+    resvg::render(
+        &tree,
+        usvg::Transform::from_scale(
+            w as f32 / tree.size().width() as f32,
+            h as f32 / tree.size().height() as f32,
+        ),
+        &mut pixmap,
+    )
+    .map_err(|e| format!("SVG render error: {}", e))?;
 
     // Encode pixmap to PNG
-    pixmap.encode_png()
+    pixmap
+        .encode_png()
         .map_err(|e| format!("PNG encode error: {}", e))
 }
 
@@ -49,7 +58,12 @@ pub fn render_svg_to_png(svg: String, width: Option<u32>, height: Option<u32>) -
 /// @param quality WebP quality (1-100, default: 85)
 /// @return WebP buffer as Vec<u8>
 #[napi]
-pub fn render_svg_to_webp(svg: String, width: Option<u32>, height: Option<u32>, quality: Option<u32>) -> Result<Vec<u8>, String> {
+pub fn render_svg_to_webp(
+    svg: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    quality: Option<u32>,
+) -> Result<Vec<u8>, String> {
     let w = width.unwrap_or(1200);
     let h = height.unwrap_or(630);
     let q = quality.unwrap_or(85).clamp(1, 100);
@@ -60,14 +74,19 @@ pub fn render_svg_to_webp(svg: String, width: Option<u32>, height: Option<u32>, 
     let mut pixmap = tiny_skia::Pixmap::new(w, h)
         .ok_or_else(|| format!("Failed to create pixmap {}x{}", w, h))?;
 
-    resvg::render(&tree, usvg::Transform::from_scale(
-        w as f32 / tree.size().width() as f32,
-        h as f32 / tree.size().height() as f32,
-    ), &mut pixmap)
-        .map_err(|e| format!("SVG render error: {}", e))?;
+    resvg::render(
+        &tree,
+        usvg::Transform::from_scale(
+            w as f32 / tree.size().width() as f32,
+            h as f32 / tree.size().height() as f32,
+        ),
+        &mut pixmap,
+    )
+    .map_err(|e| format!("SVG render error: {}", e))?;
 
     // Encode pixmap to WebP
-    pixmap.encode_webp()
+    pixmap
+        .encode_webp()
         .map_err(|e| format!("WebP encode error: {}", e))
 }
 

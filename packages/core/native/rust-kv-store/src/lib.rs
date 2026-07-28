@@ -9,9 +9,9 @@
 
 use napi_derive::napi;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 static STORE: Mutex<Option<HashMap<String, Vec<u8>>>> = Mutex::new(None);
 static STORE_PATH: Mutex<Option<String>> = Mutex::new(None);
@@ -35,8 +35,7 @@ pub fn kv_open(path: String) -> Result<(), String> {
     // Load from disk if exists
     let pathbuf = PathBuf::from(&path);
     if pathbuf.exists() {
-        let data = fs::read(&pathbuf)
-            .map_err(|e| format!("Failed to read KV store: {}", e))?;
+        let data = fs::read(&pathbuf).map_err(|e| format!("Failed to read KV store: {}", e))?;
         let map: HashMap<String, Vec<u8>> = serde_json::from_slice(&data)
             .map_err(|e| format!("Failed to parse KV store: {}", e))?;
         *store = Some(map);
@@ -126,8 +125,7 @@ fn flush_to_disk() -> Result<(), String> {
         if let Some(ref map) = *store {
             let data = serde_json::to_vec(map)
                 .map_err(|e| format!("Failed to serialize KV store: {}", e))?;
-            fs::write(path, data)
-                .map_err(|e| format!("Failed to write KV store: {}", e))?;
+            fs::write(path, data).map_err(|e| format!("Failed to write KV store: {}", e))?;
         }
     }
     Ok(())

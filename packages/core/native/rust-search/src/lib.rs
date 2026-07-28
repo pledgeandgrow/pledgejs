@@ -113,7 +113,11 @@ pub fn search_query(query: String, limit: Option<f64>) -> Vec<SearchResult> {
         .map(|(id, score)| SearchResult { id, score })
         .collect();
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
     results
 }
