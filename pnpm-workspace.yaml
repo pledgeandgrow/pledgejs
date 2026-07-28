@@ -10,5 +10,6 @@ overrides:
   brace-expansion: ">=5.0.8"
   fast-uri: ">=3.1.4"
   esbuild: ">=0.25.0"
+  glob: ">=11.0.0"
 minimumReleaseAgeExclude:
   - pledgepack@0.2.0 || 0.2.1 || 0.2.2 || 0.2.3 || 0.2.6 || 0.2.7 || 0.2.8
