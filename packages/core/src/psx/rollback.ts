@@ -108,11 +108,17 @@ export class RollbackManager extends EventEmitter {
       }
 
       const stat = statSync(targetPath);
+      // Ensure deployedAt is strictly monotonic so getHistory sort is correct
+      // even when multiple deploys happen within the same millisecond
+      const existingVersions = this.versions.get(moduleName) ?? [];
+      const lastDeployedAt = existingVersions.length > 0
+        ? Math.max(...existingVersions.map(v => v.deployedAt))
+        : 0;
       const addonVersion: AddonVersion = {
         version,
         moduleName,
         path: targetPath,
-        deployedAt: Date.now(),
+        deployedAt: Math.max(Date.now(), lastDeployedAt + 1),
         size: stat.size,
         active: true,
       };

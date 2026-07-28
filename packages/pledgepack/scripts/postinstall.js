@@ -9,13 +9,17 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
 import { Readable } from 'node:stream';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const pkg = require('../package.json');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const platform = process.platform;
 const arch = process.arch;
 
 const GITHUB_REPO = 'pledgeandgrow/pledgerepo';
-const VERSION = '0.2.6';
+const VERSION = pkg.version;
 
 const platformAssets = {
   'darwin': {

@@ -1,13 +1,11 @@
-export function generateMetadata() {
-  return {
+export const metadata = {
+  title: 'PledgeStack — Rust-Powered React Framework',
+  description: 'Build faster with PledgeStack — a Rust-powered React framework with file-based routing, HMR, and zero-config setup.',
+  openGraph: {
     title: 'PledgeStack — Rust-Powered React Framework',
-    description: 'Build faster with PledgeStack — a Rust-powered React framework with file-based routing, HMR, and zero-config setup.',
-    openGraph: {
-      title: 'PledgeStack — Rust-Powered React Framework',
-      description: 'Build faster with PledgeStack — powered by PledgePack (Rust+Zig bundler).',
-    },
-  };
-}
+    description: 'Build faster with PledgeStack — powered by PledgePack (Rust+Zig bundler).',
+  },
+};
 
 export default function HomePage() {
   return (

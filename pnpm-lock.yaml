@@ -124,7 +124,7 @@ importers:
         specifier: '>=0.25.0'
         version: 0.28.1
       pledgepack:
-        specifier: ^0.2.8
+        specifier: '>=0.2.0'
         version: 0.2.8
       pledgestack-core:
         specifier: workspace:*
@@ -280,7 +280,7 @@ importers:
         specifier: ^2.4.0
         version: 2.7.0
       pledgepack:
-        specifier: ^0.2.8
+        specifier: '>=0.2.0'
         version: 0.2.8
       postcss:
         specifier: ^8.4.0
@@ -639,7 +639,7 @@ importers:
         specifier: '>=0.25.0'
         version: 0.28.1
       pledgepack:
-        specifier: ^0.2.8
+        specifier: '>=0.2.0'
         version: 0.2.8
       pledgestack-core:
         specifier: workspace:*

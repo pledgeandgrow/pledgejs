@@ -1,6 +1,6 @@
 {
   "name": "create-pledge-app",
-  "version": "0.0.9",
+  "version": "0.1.3",
   "description": "Scaffold a new PledgeStack application",
   "type": "module",
   "bin": {

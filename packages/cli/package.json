@@ -1,6 +1,6 @@
 {
   "name": "pledgestack",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "A full-stack React framework with file-based routing, SSR, SSG, RSC, API routes, and edge runtime support.",
   "type": "module",
   "bin": {
@@ -101,7 +101,7 @@
     "prepublishOnly": "pnpm clean && pnpm build && node scripts/prepublish.mjs"
   },
   "dependencies": {
-    "pledgepack": "^0.2.8",
+    "pledgepack": ">=0.2.0",
     "jiti": "^2.4.0",
     "esbuild": "^0.24.0",
     "tailwindcss": "^4.0.0",

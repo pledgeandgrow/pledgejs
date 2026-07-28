@@ -155,7 +155,7 @@ async function scaffold(options: CreateOptions): Promise<void> {
 
   writeFileSync(
     join(targetDir, 'pnpm-workspace.yaml'),
-    "allowBuilds:\n  pledgepack: true\nminimumReleaseAgeExclude:\n  - pledgepack\n  - pledgestack-core\n  - pledgestack-shared\n  - pledgestack-server\n  - pledgestack-cli\n",
+    "allowBuilds:\n  pledgepack: true\n  esbuild: true\nminimumReleaseAgeExclude:\n  - pledgepack\n  - pledgestack-core\n  - pledgestack-shared\n  - pledgestack-server\n  - pledgestack-cli\n",
   );
 
   if (installDeps) {
@@ -222,7 +222,13 @@ function detectPackageManager(): 'pnpm' | 'npm' | 'yarn' {
   const userAgent = process.env.npm_config_user_agent ?? '';
   if (userAgent.startsWith('pnpm')) return 'pnpm';
   if (userAgent.startsWith('yarn')) return 'yarn';
-  return 'npm';
+  // Prefer pnpm if installed, even when scaffolded via npx (faster installs)
+  try {
+    execSync('pnpm --version', { stdio: ['ignore', 'ignore', 'ignore'] });
+    return 'pnpm';
+  } catch {
+    return 'npm';
+  }
 }
 
 function generateTsConfig() {

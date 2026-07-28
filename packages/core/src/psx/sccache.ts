@@ -12,7 +12,7 @@
  * - Cache size management and cleanup
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync, exec } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -246,14 +246,14 @@ export class SccacheManager extends EventEmitter {
       ? this.hashFile(cargoTomlPath)
       : 'no-toml';
 
-    // Hash source files
+    // Hash source files (cross-platform: use Node.js instead of shell `find`)
     let sourceHash = 'no-source';
     try {
-      const output = execSync(`find "${sourceDir}" -name "*.rs" -exec cat {} + 2>/dev/null || echo ""`, {
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-      sourceHash = this.hashString(output);
+      if (existsSync(sourceDir)) {
+        const rsFiles = this.collectRsFiles(sourceDir);
+        const output = rsFiles.map(f => readFileSync(f, 'utf-8')).join('');
+        sourceHash = this.hashString(output);
+      }
     } catch {
       // Ignore
     }
@@ -326,6 +326,25 @@ export class SccacheManager extends EventEmitter {
    */
   isAvailable(): boolean {
     return this.isInstalled && this.isRunning;
+  }
+
+  /**
+   * Recursively collects all .rs files in a directory (cross-platform).
+   */
+  private collectRsFiles(dir: string): string[] {
+    const results: string[] = [];
+    if (!existsSync(dir)) return results;
+    const entries = readdirSync(dir);
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        results.push(...this.collectRsFiles(fullPath));
+      } else if (entry.endsWith('.rs')) {
+        results.push(fullPath);
+      }
+    }
+    return results.sort();
   }
 }
 

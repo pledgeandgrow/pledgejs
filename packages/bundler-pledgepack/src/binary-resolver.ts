@@ -37,27 +37,37 @@ export function resolveBinary(): string | null {
     }
   }
 
-  // Try resolving via the pledgepack package's own index.js
-  try {
-    const pledgepackPath = require.resolve('pledgepack');
-    const pledgepackDir = dirname(pledgepackPath);
+  // Try resolving via the pledgepack package
+  // Use package.json as the entry point since it's always published
+  // (index.js may not be included in all published versions)
+  const resolvePaths = ['pledgepack/package.json', 'pledgepack'];
+  for (const resolvePath of resolvePaths) {
+    try {
+      const pkgPath = require.resolve(resolvePath);
+      const pledgepackDir = dirname(pkgPath);
 
-    // Check bin/pledgepack or bin/pledgepack.exe
-    const localBinary = join(pledgepackDir, 'bin', 'pledgepack');
-    if (existsSync(localBinary)) return localBinary;
+      // Check bin/pledgepack or bin/pledgepack.exe
+      const localBinary = join(pledgepackDir, 'bin', 'pledgepack');
+      if (existsSync(localBinary)) return localBinary;
 
-    if (platform === 'win32') {
-      const localExe = join(pledgepackDir, 'bin', 'pledgepack.exe');
-      if (existsSync(localExe)) return localExe;
+      if (platform === 'win32') {
+        const localExe = join(pledgepackDir, 'bin', 'pledgepack.exe');
+        if (existsSync(localExe)) return localExe;
+      }
+
+      // Check platform-specific subdirectory (where postinstall downloads)
+      const platformKey = `${platform}-${arch}`;
+      const platformBinaryName = platform === 'win32' ? 'pledge.exe' : 'pledge';
+      const platformBinary = join(pledgepackDir, 'bin', platformKey, platformBinaryName);
+      if (existsSync(platformBinary)) return platformBinary;
+
+      // Check root-level binary (some published packages include it at root)
+      const rootBinaryName = platform === 'win32' ? 'pledge.exe' : 'pledge';
+      const rootBinary = join(pledgepackDir, rootBinaryName);
+      if (existsSync(rootBinary)) return rootBinary;
+    } catch {
+      // Try next resolve path
     }
-
-    // Check platform-specific subdirectory (where postinstall downloads)
-    const platformKey = `${platform}-${arch}`;
-    const platformBinaryName = platform === 'win32' ? 'pledge.exe' : 'pledge';
-    const platformBinary = join(pledgepackDir, 'bin', platformKey, platformBinaryName);
-    if (existsSync(platformBinary)) return platformBinary;
-  } catch {
-    // pledgepack package not installed
   }
 
   return null;
