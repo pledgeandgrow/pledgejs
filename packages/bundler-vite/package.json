@@ -34,7 +34,7 @@
     "typescript": "^5.7.0",
     "rimraf": "^6.0.0",
     "@types/node": "^22.0.0",
-    "vite": "^5.0.0"
+    "vite": "^6.4.3"
   },
   "license": "MIT",
   "author": "PledgeStack Contributors",
