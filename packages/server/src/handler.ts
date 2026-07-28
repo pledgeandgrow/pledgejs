@@ -12,6 +12,8 @@ import { createMatcher } from './middleware-matcher';
 import { getServerAction } from './actions';
 import { ACTION_ENDPOINT } from 'pledgestack-shared';
 import { PluginRunner } from 'pledgestack-shared';
+import { tryServeSeoRoute } from './seo-routes';
+import { tryServeOgImage } from './og-image';
 
 type AnyModule = PageModule | LayoutModule | RouteHandlerModule | MiddlewareModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule;
 
@@ -49,6 +51,8 @@ function collectAllFilePaths(routes: ResolvedRoute[]): string[] {
     if (route.headFilePath) paths.add(route.headFilePath);
     if (route.templateFilePath) paths.add(route.templateFilePath);
     if (route.globalErrorFilePath) paths.add(route.globalErrorFilePath);
+    if (route.opengraphImageFilePath) paths.add(route.opengraphImageFilePath);
+    if (route.twitterImageFilePath) paths.add(route.twitterImageFilePath);
   }
   return [...paths];
 }
@@ -192,6 +196,18 @@ export function createRequestHandler(options: RequestHandlerOptions) {
             setRequestContext(pledgeReq);
           }
         }
+      }
+
+      // Serve robots.txt and sitemap.xml automatically
+      const seoResponse = await tryServeSeoRoute(req.url.pathname, context.config, context.tree);
+      if (seoResponse) {
+        return seoResponse;
+      }
+
+      // Serve OG/Twitter images from opengraph-image.tsx / twitter-image.tsx
+      const ogResponse = await tryServeOgImage(req.url.pathname, context.config, context.routes, context.moduleLoader);
+      if (ogResponse) {
+        return ogResponse;
       }
 
       const match = router.match(req.url.pathname);

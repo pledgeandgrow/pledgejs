@@ -3,7 +3,13 @@
 [![npm version](https://img.shields.io/npm/v/pledgestack.svg)](https://www.npmjs.com/package/pledgestack)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A full-stack React framework — like Next.js, but powered by PledgePack (Rust+Zig bundler) for maximum build performance.
+A full-stack React framework with file-based routing, SSR/SSG/ISR, React Server Components, API routes, middleware, edge runtime support, and Rust native addons for rendering, compression, search, rate limiting, and more. Uses PledgePack (Rust+Zig bundler) to build user apps.
+
+## Requirements
+
+- **Node.js** >= 20.0.0
+- **pnpm** >= 11.x (monorepo workspace)
+- **Rust toolchain** (optional — for PSX native addons; JS fallbacks exist)
 
 ## Install
 
@@ -13,7 +19,7 @@ npm install pledgestack
 pnpm add pledgestack
 ```
 
-The CLI command is `pledge` (not `pledgestack`). After installing, use:
+The CLI command is `pledge` (not `pledgestack`). After installing:
 
 ```bash
 npx pledge dev      # Start dev server
@@ -21,51 +27,203 @@ npx pledge build    # Build for production
 npx pledge start    # Start production server
 ```
 
-## Vision
+## CLI Commands
 
-PledgeStack aims to be a production-grade full-stack React framework that uses PledgePack (a Rust+Zig bundler published on npm) for dramatically faster builds, HMR, and dev server. It follows familiar Next.js conventions (app directory, file-based routing, RSC, SSR/SSG/ISR) while being faster, leaner, and more opinionated.
+| Command | Description |
+|---|---|
+| `pledge dev` | Start dev server with HMR |
+| `pledge build` | Build for production (PledgePack bundler) |
+| `pledge start` | Start production server |
+| `pledge create <name>` | Scaffold a new project from template |
+| `pledge init` | Initialize PledgeStack in existing project |
+| `pledge info` | Show project diagnostics |
+| `pledge doctor` | Health checks (Rust toolchain, Cargo, env, production readiness) |
+| `pledge lint` | Run ESLint with PledgeStack rules |
+| `pledge typecheck` | TypeScript type checking |
+| `pledge test` | Run Vitest + Rust test runner |
+| `pledge clean` | Remove build artifacts and caches |
+| `pledge add <crate>` | Add a Rust crate (PSX integration) |
+| `pledge remove <crate>` | Remove a Rust crate |
+| `pledge list` | List installed Rust crates |
+| `pledge update <crate>` | Update a Rust crate |
+| `pledge analyze` | Bundle analysis — per-module `.node` size breakdown |
+| `pledge bench` | Benchmark Rust addons vs JS fallbacks |
+| `pledge fmt` | Format Rust code (cargo fmt) |
+| `pledge docs` | Generate API reference (TypeDoc) |
+| `pledge upgrade` | Upgrade PledgeStack with codemods |
+| `pledge why <module>` | Trace why a module is in the bundle |
+| `pledge docker` | Generate Dockerfile |
+| `pledge storybook` | Set up Storybook |
+| `pledge codemod` | Run codemods |
+| `pledge sync-aliases` | Sync tsconfig path aliases |
+| `pledge generate-route-types` | Generate typed route declarations |
+| `pledge check-routes` | Detect route conflicts |
+| `pledge search [query]` | Index pages and search content (embedded full-text search) |
 
-## Features (Implemented)
+## What's Actually Implemented
 
-- **File-based routing** — App directory with `page.tsx`, `layout.tsx`, `route.ts`, `loading.tsx`, `error.tsx`, `not-found.tsx`
-- **Server-Side Rendering (SSR)** — Server-rendered pages with layout chains, error boundaries, and Suspense loading states
-- **Static Site Generation (SSG)** — Pre-render pages at build time with `generateStaticParams`
-- **React Server Components (RSC)** — `react-server-dom-webpack` integration with streaming and client manifests
-- **API Routes** — File-based API handlers with `GET`, `POST`, `PUT`, `DELETE`, `PATCH`
-- **Middleware** — `middleware.ts` convention with redirect, rewrite, headers, and short-circuit
-- **Edge Runtime** — Edge handler for Cloudflare Workers, Vercel Edge, Deno Deploy
-- **HMR** — Dev server file watching with cache invalidation and module reloading
-- **Tailwind CSS** — Built-in Tailwind v4 + PostCSS pipeline
+### Core Runtime
+
+- **File-based routing** — `page.tsx`, `layout.tsx`, `route.ts`, `loading.tsx`, `error.tsx`, `not-found.tsx`, `template.tsx`, `head.tsx`, `opengraph-image.tsx`, `twitter-image.tsx`
+- **Route patterns** — Dynamic segments `[param]`, catch-all `[...param]`, optional catch-all `[[...param]]`, route groups `(group)`, parallel routes `@slot`, intercepting routes `(..)folder`
+- **Server-Side Rendering** — `renderSSR()` with layout chains, error boundaries, Suspense loading states, streaming SSR
+- **Static Site Generation** — `generateStaticParams` pre-rendering, `static-export` mode
+- **React Server Components** — `react-server-dom-webpack` integration, flight payload generation, RSC streaming, client manifests
+- **Partial Prerendering (PPR)** — Rust-based PPR via `rust-ppr.ts` with JS fallback
+- **API Routes** — `route.ts` with `GET`, `POST`, `PUT`, `DELETE`, `PATCH` handlers
+- **Middleware** — `middleware.ts` with redirect, rewrite, headers, short-circuit, matcher config
+- **Server Actions** — `getServerAction()`, `useActionState` hook
 - **Server Utilities** — `cookies()`, `headers()`, `searchParams()`, `params()`, `redirect()`, `notFound()`, `after()`, `connection()`, `draftMode()`
-- **Data Fetching** — `cachedFetch()` with `force-cache`, `no-store`, `isr` modes, tag-based revalidation
-- **Metadata API** — `generateMetadata()` export with OpenGraph, Twitter cards, canonical, icons
-- **Client Routing** — `useRouter()`, `Link` with hover prefetch, scroll restoration, `replace`/`scroll` options
-- **TypeScript** — First-class TypeScript with project references and end-to-end type safety
-- **PledgePack** — Rust+Zig bundler with dev server, HMR, Oxc transforms, JS plugins (Boa engine), and built-in test runner ([npm: pledgepack](https://www.npmjs.com/package/pledgepack)) — used to build user apps, not the framework itself
-- **Rust Native Addons** — 8 NAPI addon crates (`rust-html`, `rust-ssr`, `rust-rsc`, `rust-html-transformer`, `rust-dom-renderer`, `rust-rsc-deserializer`, `rust-ssr-profiler`, `rust-hydration`) compiled via Cargo workspace, with automatic JS fallback when not compiled
-- **PSX Integrations with JS Fallbacks** — 15 Rust crate wrappers (SQLx, Redis, Auth, Image, PDF, Jobs, Cron, Email, HTTP, WebSocket, File Processing, Tracing, Crypto, ML) that gracefully degrade to Node.js packages when native addons are unavailable
-- **PSX Audit Logging** — `PsxAuditLogger` wraps Rust calls with sanitized args, execution time, route tagging via AsyncLocalStorage, file rotation, and sample rate support
-- **PSX CI/CD Pipeline** — GitHub Actions workflow with `cargo audit`, `cargo clippy`, `cargo fmt`, cross-compile for 6 targets, bundle analysis, and Vitest
-- **PSX Production Checklist** — `pledge doctor --production` checks Rust toolchain, Cargo.lock, LTO, debug symbols, stripped addons, env vars
-- **PSX Bundle Analysis** — `pledge analyze` CLI with per-module `.node` size breakdown, crate alternative suggestions, and build-to-build size tracking
-- **Test Suite** — 100+ tests covering all render modules, PSX integrations, audit logging, and bundle analysis using Vitest
+
+### Data & Caching
+
+- **Fetch Cache** — `cachedFetch()` with `force-cache`, `no-store`, `isr` modes, tag-based revalidation
+- **Cache Invalidation** — `revalidateTag()`, `revalidatePath()`, persistent cache, remote cache, cache-invalidation worker
+- **Query Memoization** — Deduplication of identical data fetches per request
+- **Edge Cache** — Multi-region edge caching with invalidation
+
+### SEO & Metadata
+
+- **Metadata API** — `export const metadata` and `export function generateMetadata()` on pages and layouts
+- **Metadata Merging** — Layout-to-page inheritance: page wins on scalar conflicts, arrays concatenated, objects merged
+- **Viewport API** — `export const viewport` and `export function generateViewport()` with layout inheritance
+- **Head Tags** — Shared `renderHeadTags()` module: title, description, keywords, robots, theme-color, OpenGraph (title/description/images/url/type/siteName), Twitter cards (card/title/description/images/site/creator), canonical, icons, JSON-LD structured data
+- **robots.txt** — Automatic serving from `public/robots.txt` or dynamic generation via `pledgestack-sitemap`
+- **sitemap.xml** — Automatic serving from `public/sitemap.xml` or dynamic generation from route tree
+- **OG Image Generation** — `opengraph-image.tsx` and `twitter-image.tsx` file conventions; React component rendered to SVG then rasterized to **PNG** via native resvg addon (falls back to SVG); auto-injects `og:image` and `twitter:image` meta tags
+- **JSON-LD** — `structuredData` field in `HeadMetadata` renders `<script type="application/ld+json">`
+- **SEO Package** — `pledgestack-seo` with `jsonld.ts`, `meta-tags.ts`, `social-cards.ts`
+
+### Client-Side
+
+- **Client Router** — `useRouter()`, `Link` with hover prefetch, scroll restoration, `replace`/`scroll` options
+- **Hydration** — `hydrate.ts`, selective hydration, island hydration, Rust hydration script generator
+- **Fast Refresh** — HMR with React Fast Refresh integration
+- **State Management** — `pledgestack-state` with store, derived, optimistic, persistence, cross-tab sync, URL state, form state, devtools
+- **Data Hooks** — `useInfiniteQuery`, `usePaginatedQuery`, `useSubscription`, `useRustQuery`, offline-first data layer
+- **Web Vitals** — Client-side CWV reporting
+- **Error Overlay** — Dev error overlay with telemetry
+- **Dev Toolbar** — In-browser dev toolbar
+
+### Security & Privacy
+
+- **Security Headers** — CSP, CORS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, Trusted Types, COOP/COEP/CORP
+- **Auth Package** — OAuth 2.1, JWT, TOTP/2FA, WebAuthn, RBAC, ABAC, API keys, SAML SSO, session management, audit log
+- **Vulnerability Protection** — XSS, CSRF, path traversal, SSRF, ReDoS, open redirect, prototype pollution, clickjacking, DNS rebinding
+- **Privacy Package** — GDPR, CCPA, PII redaction, encryption, consent management, data retention, compliance docs
+- **Safety Net** — Input validation, output serialization, rate limiting, bot detection, brute force protection, body limits
+
+### Edge & Adapters
+
+- **Edge Runtime** — Edge handler for Cloudflare Workers, Vercel Edge, Deno Deploy
+- **Adapters** — `pledgestack-adapters` with Cloudflare, Vercel, Deno, AWS Lambda, Netlify, edge-security
+- **Standalone Output** — Docker-ready standalone build, health checks, graceful shutdown
+
+### Rust Native Addons (PSX)
+
+16 NAPI addon crates in `packages/core/native/` with automatic JS fallback when not compiled:
+
+**Rendering:**
+- **rust-html** — HTML string renderer with SIMD-accelerated escaping (SSE2 16-byte chunk scanning)
+- **rust-ssr** — Server-side rendering
+- **rust-rsc** — RSC payload generation
+- **rust-html-transformer** — Streaming HTML transformer
+- **rust-dom-renderer** — React DOM string renderer
+- **rust-rsc-deserializer** — RSC client deserializer
+- **rust-ssr-profiler** — SSR profiling with flamegraphs
+- **rust-hydration** — Native hydration script generator
+
+**Performance & Infrastructure:**
+- **rust-og-renderer** — Native SVG-to-PNG rasterization via resvg + tiny-skia (produces real PNG OG images that all social platforms render)
+- **rust-kv-store** — Embedded persistent key-value store for ISR/fetch cache (eliminates Redis dependency)
+- **rust-rate-limiter** — Cross-worker rate limiting via shared-memory token bucket (works across Node.js worker threads)
+- **rust-static-server** — Zero-copy static file serving via memory-mapped I/O (mmap)
+- **rust-compression** — Native gzip/deflate compression with SIMD-accelerated flate2 (response middleware)
+- **rust-search** — Embedded full-text search engine with inverted index (no Elasticsearch needed; `pledge search` CLI)
+- **rust-jit-templates** — JIT hot route template compiler — profiles SSR routes and compiles hot templates to native functions
+- **rust-ws-compression** — Native WebSocket permessage-deflate compression with SIMD acceleration
+
+### PSX Integrations (15 wrappers with JS fallback)
+
+SQLx, Redis, Auth (Argon2/JWT), Image processing, PDF generation, Background jobs (apalis), Cron scheduler, Email (lettre), HTTP client (reqwest), WebSocket, File processing (Excel/CSV), Tracing/OpenTelemetry, Crypto (AES-GCM/SHA-256), ML inference (candle-core/ort)
+
+### PSX Tooling
+
+- **Audit Logging** — `PsxAuditLogger` with sanitized args, execution time, route tagging, file rotation, sample rate
+- **Bundle Analysis** — `pledge analyze` with per-module `.node` size breakdown, crate alternatives, build-to-build tracking
+- **CI/CD** — GitHub Actions: `cargo audit`, `cargo clippy`, `cargo fmt`, cross-compile for 6 targets, Vitest
+- **Production Checklist** — `pledge doctor --production`
+- **Cross-Compilation** — 6 targets (x86_64-linux-gnu, aarch64-linux-gnu, x86_64-darwin, aarch64-darwin, x86_64-windows-msvc, aarch64-windows-msvc)
+- **sccache** — Cross-project compilation caching
+- **Lazy Compilation** — Deferred Rust compilation
+- **Dead Code Elimination** — Tree shaking for Rust crates
+- **Version Compatibility** — Crate pinning and version compatibility checks
+- **Syn Parser** — Rust syntax parser for PSX files
+- **Debugger** — PSX debug session support
+
+### Developer Experience
+
+- **Plugin System** — `PledgePlugin` with `configResolved`, `buildStart`, `buildEnd`, `configureServer`, `renderStart`, `renderEnd`, `routeMatch`, `fetchIntercept`, `transformHtml`, `transformClientBundle` hooks
+- **ESLint Plugin** — `eslint-plugin-pledge` with PledgeStack-specific lint rules
+- **VS Code Extension** — Syntax highlighting, IntelliSense, snippets, file icon theme
+- **VS Code PSX Extension** — PSX language support, syntaxes, language configuration
+- **Type-Safe Routes** — `pledge generate-route-types` auto-generates typed route declarations
+- **Route Conflict Detection** — `pledge check-routes`
+- **Path Aliases** — `@/app/*`, `@/lib/*`, `@/components/*`, `@/styles/*`, `@/utils/*` (configurable)
+- **Tailwind CSS** — Built-in Tailwind v4 + PostCSS pipeline
+- **MDX Support** — `pledgestack-mdx`
+- **Image Optimization** — `pledgestack-image`
+- **Font Optimization** — `pledgestack-font`
+- **RSS Feed** — `pledgestack-rss`
+- **WebSocket** — `pledgestack-ws`
+- **A11y Audit** — `pledgestack-a11y`
+- **Storybook** — `pledge storybook` setup
+- **Observability** — Structured JSON logging, OpenTelemetry tracing, metrics export, Sentry/Bugsnag error tracking, request ID, slow request detection, monitoring dashboard
+- **Supply Chain** — Dependency audit CI, SBOM, license compliance, pinned deps, provenance attestation, Sigstore signing, secret scanning
+
+### Testing
+
+45 test files across the monorepo using Vitest:
+
+- **PSX Integration tests** — Fallback behavior for all 15 Rust wrappers
+- **Render tests** — `rust-html`, `rust-ssr`, `rust-rsc`, `rust-dom-renderer`, `rust-html-transformer`, `rust-hydration`, `rust-ssr-profiler`
+- **Security tests** — Path traversal, security headers validation, security headers
+- **Server tests** — Instrumentation
+- **API tests** — Sanitize (prototype pollution)
+- **Core tests** — Fetch cache, PSX audit, bench, bundle analysis, callback optimization, canary, debug session, docker, edge cache invalidation, edge durable objects, edge geo, edge KV, edge middleware, edge PSX, edge streaming SSR, lambda PSX, lazy compile, memory profile, monitoring dashboard, multi-region, NAPI bench, pool, prod profile, rollback, sccache, security, serverless cold start, streaming, syn parser, tree shake, version compat, worker pool
+
+### Templates (7)
+
+`pledge create <name> --template <name>`
+
+| Template | Description |
+|---|---|
+| `default` | Starter app with hero, nav, features |
+| `blog` | Blog with SSG, dynamic routes, metadata API |
+| `api` | REST API server with CRUD routes |
+| `dashboard` | Admin dashboard with sidebar, stats, charts |
+| `ecommerce` | E-commerce store with product grid, cart |
+| `portfolio` | Personal portfolio with projects, about, contact |
+| `saas` | SaaS landing page with pricing, features, testimonials |
+
+All templates use the metadata export API (`export const metadata`, `export const viewport`) with OpenGraph, themeColor, and description fields.
 
 ## Monorepo Structure
 
 ```
 pledgestack/
 ├── packages/
-│   ├── shared/              # Shared types, config, constants (private — bundled into CLI)
-│   ├── core/                # Framework core — routing, rendering, FS scanner (private)
+│   ├── shared/              # Shared types, config, constants (private)
+│   ├── core/                # Framework core — routing, rendering, FS scanner, PSX (private)
 │   ├── server/              # Node.js + Edge server runtime (private)
-│   ├── client/              # Client-side hydration + routing (private)
-│   ├── auth/                # Authentication & security helpers (private)
+│   ├── client/              # Client hydration, routing, hooks, state (private)
+│   ├── auth/                # Authentication & security (private)
 │   ├── state/               # State management (private)
 │   ├── api/                 # API route utilities (private)
 │   ├── a11y/                # Accessibility audit tools (private)
 │   ├── overlay/             # Error overlay & DevTools (private)
 │   ├── seo/                 # SEO & structured data (private)
-│   ├── sitemap/             # Sitemap generation (private)
+│   ├── sitemap/             # Sitemap & robots.txt generation (private)
 │   ├── image/               # Image optimization (private)
 │   ├── font/                # Font optimization (private)
 │   ├── mdx/                 # MDX support (private)
@@ -73,29 +231,26 @@ pledgestack/
 │   ├── rss/                 # RSS feed generation (private)
 │   ├── ws/                  # WebSocket support (private)
 │   ├── adapters/            # Cloudflare, Vercel, Deno, AWS, Netlify adapters (private)
-│   ├── privacy/             # GDPR/CCPA compliance, PII redaction, encryption, consent (private)
+│   ├── privacy/             # GDPR/CCPA compliance, PII, encryption, consent (private)
+│   ├── eslint-plugin-pledge/ # ESLint rules (private)
+│   ├── vscode-extension/    # VS Code extension — highlighting, IntelliSense
+│   ├── vscode-psx/          # VS Code extension — PSX language support
 │   ├── bundler-pledgepack/  # PledgePack bundler adapter (private)
 │   ├── bundler-vite/        # Vite bundler adapter (private)
 │   ├── bundler-rollup/      # Rollup bundler adapter (private)
 │   ├── bundler-turbopack/   # Turbopack bundler adapter (private)
 │   ├── bundler-rsbuild/     # Rsbuild bundler adapter (private)
 │   ├── bundler-webpack/     # Webpack bundler adapter (private)
+│   ├── pledgepack/          # PledgePack npm package wrapper (Rust+Zig bundler)
 │   ├── cli/                 # CLI tool — published as `pledgestack` on npm
-│   ├── vscode-extension/    # VS Code extension — highlighting, IntelliSense
-│   └── create-pledge-app/   # Scaffolding CLI for new PledgeStack apps
-├── apps/
-│   └── playground/          # Example app for development
-├── examples/                # Starter templates (blog, tailwindcss, auth, api-routes)
-├── test/                    # Test suites (unit, integration, e2e)
-├── scripts/                 # Release, benchmark, workspace check scripts
-├── docs/                    # Numbered documentation directories
+│   └── create-pledge-app/   # Scaffolding CLI with 7 templates
 ├── pledge.config.ts         # Framework config (defineConfig from 'pledgestack')
+├── vitest.config.ts         # Test configuration
+├── tsconfig.json            # TypeScript project references
 └── pnpm-workspace.yaml
 ```
 
-> **PledgePack** is installed from npm (`pledgepack@^0.1.8`), not as a workspace package. CLI command: `pledge`.
->
-> Only the `pledgestack` package (CLI) is published to npm. All sub-packages are bundled into it via esbuild and marked as private. The framework itself uses esbuild to bundle the CLI package for npm publish — PledgePack is used to bundle **user apps** (the projects created with `pledge create`).
+> Only the `pledgestack` package (CLI) is published to npm. All sub-packages are bundled into it via esbuild and marked as private. PledgePack is installed from npm (`pledgepack@^0.2.8`) and used to build user apps — the framework itself uses esbuild.
 
 ## Getting Started
 
@@ -119,109 +274,61 @@ npx pledge start
 
 ```
 app/
-├── layout.tsx          # Root layout (wraps all pages)
-├── page.tsx            # Home page (/)
+├── layout.tsx              # Root layout (wraps all pages)
+├── page.tsx                # Home page (/)
+├── viewport.ts             # Viewport export (optional)
+├── opengraph-image.tsx     # OG image for root route
+├── twitter-image.tsx       # Twitter card image for root route
 ├── about/
-│   └── page.tsx        # About page (/about)
+│   └── page.tsx            # /about
 ├── blog/
-│   ├── layout.tsx      # Blog section layout
-│   ├── page.tsx        # Blog listing (/blog)
+│   ├── layout.tsx          # Blog section layout
+│   ├── page.tsx            # /blog
 │   └── [slug]/
-│       └── page.tsx    # Blog post (/blog/:slug)
+│       ├── page.tsx        # /blog/:slug
+│       └── opengraph-image.tsx  # OG image for blog posts
 ├── api/
 │   └── hello/
-│       └── route.ts    # API endpoint (/api/hello)
-├── loading.tsx         # Loading UI (Suspense fallback)
-├── error.tsx           # Error boundary (per-segment)
-└── not-found.tsx       # 404 page
+│       └── route.ts        # API endpoint (/api/hello)
+├── loading.tsx             # Loading UI (Suspense fallback)
+├── error.tsx               # Error boundary (per-segment)
+├── not-found.tsx           # 404 page
+├── middleware.ts           # Middleware (redirect, rewrite, headers)
+└── head.tsx                # Custom head tags
 ```
 
----
+## Configuration
 
-## Roadmap — 305 Goals Across 30 Phases (253 Complete)
+```typescript
+// pledge.config.ts
+import { defineConfig } from 'pledgestack';
 
-> Full roadmap with progress tracking: [docs/05-community/roadmap.md](docs/05-community/roadmap.md)
-
-### Phase 1: Core Runtime (1–10) ✅
-Install, dev server, SSR, API routes, middleware, 404, HMR, server utilities — **complete**.
-
-### Phase 2: Routing & Conventions (11–20) ✅
-`head.tsx`, `template.tsx`, Pledge System, Server Actions, RSC streaming, parallel/intercepting routes, route groups, selective hydration, page transitions — **complete**.
-
-### Phase 3: Data & Caching (21–28) ✅
-Request context, revalidation, `generateStaticParams`, route config, ISR, RSC data fetching, cookie variants, fetch cache — **complete**.
-
-### Phase 4: Developer Experience (29–38) ✅
-Fast Refresh, error overlay, `create`/`info`/`doctor` commands, env vars, ESLint plugin, CI, VS Code extension, dev toolbar — **complete**.
-
-### Phase 5: Framework Maturity (39–46) ✅
-`loading.tsx`, `error.tsx`, middleware API, streaming responses, static export, custom error pages, i18n, route prefetching — **complete**.
-
-### Phase 6: Framework API Completeness (47–58) ✅
-Docker, standalone output, health checks, graceful shutdown, `redirect()`, `notFound()`, `global-error.tsx`, `instrumentation.ts`, `after()`, `connection()`, `viewport` export, middleware `matcher` — **complete**.
-
-### Phase 7: Framework APIs (59–66) ✅
-`useActionState`, `server-only`/`client-only` markers, per-route runtime config, Link prefetch strategies, `revalidateTag`/`revalidatePath` top-level, `unstable_cache` expose, route handler methods, `headers()`/`cookies()` mutation — **complete**.
-
-### Phase 8: Testing & Quality (67–74) ✅
-Unit tests, integration tests, E2E (Playwright), snapshot tests, benchmarks, bundle size budget, type safety audit, lint rule coverage — **complete**.
-
-### Phase 9: Ecosystem & Integrations (75–84) ✅
-Plugin system, auth, database adapters, image/font optimization, MDX, OG images, sitemaps, RSS, WebSocket — **complete**.
-
-### Phase 10: Edge & Serverless (85–90) ✅
-Cloudflare, Vercel Edge, Deno Deploy, AWS Lambda, Netlify, edge bundles — **complete**.
-
-### Phase 11: Observability & Debugging (91–95) ✅
-Structured logging, OpenTelemetry, dev profiler, cache inspector, route inspector — **complete**.
-
-### Phase 12: Documentation & Community (96–99) ✅
-Interactive tutorial, API reference auto-generation (TypeDoc), migration guide, example gallery (20+ examples) — **complete**.
-
-### Phase 13: Security Hardening (100–116) ✅
-CSP, security headers, XSS, CSRF, path traversal, clickjacking, MIME, DNS rebinding, ReDoS, Trusted Types, cross-origin isolation, CORP/COEP, referrer policy, permissions policy — **complete**.
-
-### Phase 14: Authentication & Authorization (117–126) ✅
-OAuth 2.1, session management, JWT, TOTP/2FA, WebAuthn, RBAC, ABAC, API keys, SAML SSO, audit log — **complete**.
-
-### Phase 15: Performance & Optimization (127–138) ✅
-Concurrent rendering, streaming SSR, edge cache, lazy loading, resource hints, ETag, connection pooling, query memo, image/font optimization, bundle budgets, Web Vitals — **complete**.
-
-### Phase 16: Supply Chain & Dependency Security (139–146) ✅
-Dependency audit CI, SBOM, license compliance, pinned deps, provenance attestation, Sigstore signing, dependency allowlist, secret scanning — **complete**.
-
-### Phase 17: Privacy & Compliance (147–156) ✅
-GDPR, CCPA, PII redaction, encryption, consent, data retention, compliance docs — **complete**.
-
-### Phase 18: Observability & Monitoring (157–166) ✅
-Structured JSON logging, distributed tracing, metrics export, error tracking (Sentry/Bugsnag), health check, graceful shutdown, request ID, slow request detection, cache logging, real-time dev profiler — **complete**.
-
-### Phase 19: Developer Safety Net (167–176) ✅
-Input validation, output serialization, rate limiting, bot detection, brute force protection, secure defaults, security lint rules, env types, error boundary telemetry, dev security warnings — **complete**.
-
-### Phase 20: Edge & Runtime Security (177–184) ✅
-Edge secrets, rate limiting, auth validation, CSP generation, geo-restriction, bot mitigation, cold start optimization, timeout enforcement — **complete**.
-
-### Phase 21: API & Data Security (185–194) ✅
-Schema validation, response typing, SQL/NoSQL injection prevention, SSRF, body limits, file uploads, GraphQL security, WS auth, API key rotation — **complete**.
-
-### Phase 22: PSX Format Foundation (195–205) ✅
-Rust workspace management, crate auto-detection, batch API, binary protocol (PSXB), Rust SSR, fallback support — **complete**.
-
-### Phase 23: PSX Format Maturity (206–220) — In Progress
-Source maps ✅, HMR ✅, error mapping ✅, `println!` bridge ✅, cargo profiles ✅, test runner ✅, crate pinning ✅, lint rules ✅, cross-compilation ✅, dead code elimination ✅, fmt integration ✅. Remaining: syn-based parser (#206), VS Code extension (#209), PSX debugger (#212), incremental compilation cache (#214).
-
-### Phase 24: Developer Experience & Tooling (221–235) ✅
-Route types, type-safe navigation, path aliases, env-aware config, route conflict detection, storybook, playground, codemods, plugin docs, dev overlay, upgrade command, streaming metadata, `pledge clean`, `pledge init`, `pledge why` — **complete**.
-
-### Phase 25: Native Rendering Pipeline (236–245) ✅
-Rust SSR for dynamic pages, RSC payload generation in Rust, HTML template engine, streaming HTML transformer, React DOM string renderer in Rust, hybrid SSR orchestration, RSC client deserializer in Rust, PPR via Rust SSR, SSR profiling with flamegraphs, native hydration script generator — **complete**.
-
-### Phase 26: Data & State Advanced (246–255) ✅
-`useInfiniteQuery`, `usePaginatedQuery`, optimistic updates, server-side prefetching, mutation queue, offline-first data layer, real-time `useSubscription()`, selective cache invalidation, cross-tab sync, Rust-backed `useRustQuery()` — **complete**.
-
-### Phase 27: PSX Ecosystem & Integrations (256–270) ✅
-SQLx compile-time queries, Sea-ORM integration, Redis integration, Rust auth helpers (Argon2/JWT), Rust image processing, Rust PDF generation, Rust background jobs (apalis), Rust cron scheduler, Rust email sending (lettre), Rust HTTP client (reqwest), Rust WebSocket server, Rust file processing (Excel/CSV), Rust observability (tracing/OpenTelemetry), Rust crypto helpers (AES-GCM/SHA-256), Rust ML inference (candle-core/ort) — **complete**.
+export default defineConfig({
+  appDir: 'app',
+  publicDir: 'public',
+  outDir: '.pledge',
+  defaultRuntime: 'node',
+  rsc: true,
+  tailwind: true,
+  output: 'standalone',        // 'standalone' | 'export'
+  bundler: 'pledgepack',       // 'pledgepack' | 'vite' | 'rollup' | 'turbopack' | 'rsbuild' | 'webpack'
+  siteUrl: 'https://example.com',  // for sitemap, robots.txt, canonical URLs
+  alias: {
+    '@/app/*': 'app/*',
+    '@/lib/*': 'lib/*',
+    '@/components/*': 'components/*',
+  },
+  cargo: {
+    dev: { optLevel: 1, incremental: true },
+    release: { optLevel: 3, lto: true, strip: true },
+  },
+  plugins: [
+    // PledgePlugin hooks: configResolved, buildStart, buildEnd,
+    // configureServer, renderStart, renderEnd, routeMatch,
+    // fetchIntercept, transformHtml, transformClientBundle
+  ],
+});
+```
 
 ## License
 

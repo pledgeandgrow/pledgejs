@@ -5,6 +5,17 @@ import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
+import { renderHeadTags, renderViewportTags, mergeMetadata } from './head-tags';
+import { recordRender, getCompiledTemplate } from '../psx/jit-templates';
+
+/** Simple string hash for template profiling */
+function simpleHash(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
+}
 
 export interface SSRContext {
   config: PledgeConfig;
@@ -51,8 +62,38 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
     throw new Error(`Page module not found: ${match.route.filePath}`);
   }
 
-  // Resolve metadata (from generateMetadata or static metadata export)
-  const metadata = await resolveMetadata(pageModule, match.params);
+  // Resolve page metadata (from generateMetadata or static metadata export)
+  const pageMetadata = await resolveMetadata(pageModule, match.params);
+
+  // Resolve layout metadata and merge with page metadata (layout → page inheritance)
+  const layouts = getLayoutChain(match, tree);
+  let layoutMetadata: HeadMetadata = {};
+  for (const layout of layouts) {
+    const layoutModule = modules.get(layout.filePath) as LayoutModule | undefined;
+    if (layoutModule) {
+      const meta = await resolveLayoutMetadata(layoutModule, match.params);
+      layoutMetadata = mergeMetadata(layoutMetadata, meta);
+    }
+  }
+  const metadata = mergeMetadata(layoutMetadata, pageMetadata);
+
+  // Auto-inject OG/Twitter image URLs from opengraph-image.tsx / twitter-image.tsx
+  if (match.route.opengraphImageFilePath) {
+    const ogImageUrl = `${match.route.pattern === '/' ? '' : match.route.pattern}/opengraph-image`;
+    if (!metadata.openGraph) metadata.openGraph = {};
+    if (!metadata.openGraph.images) metadata.openGraph.images = [];
+    if (!metadata.openGraph.images.includes(ogImageUrl)) {
+      metadata.openGraph.images.push(ogImageUrl);
+    }
+  }
+  if (match.route.twitterImageFilePath) {
+    const twImageUrl = `${match.route.pattern === '/' ? '' : match.route.pattern}/twitter-image`;
+    if (!metadata.twitter) metadata.twitter = {};
+    if (!metadata.twitter.images) metadata.twitter.images = [];
+    if (!metadata.twitter.images.includes(twImageUrl)) {
+      metadata.twitter.images.push(twImageUrl);
+    }
+  }
 
   // Build the element tree: page wrapped in loading/error boundaries, then layouts
   // Pass params and searchParams as props (Next.js 15 style)
@@ -87,7 +128,6 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
   }
 
   // Wrap in layout chain
-  const layouts = getLayoutChain(match, tree);
   for (const layout of layouts) {
     const layoutModule = modules.get(layout.filePath) as LayoutModule | undefined;
     if (layoutModule) {
@@ -120,14 +160,36 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
     }
   }
 
-  // Resolve viewport (static export or generateViewport)
-  const viewport = await resolveViewport(pageModule);
+  // Resolve viewport (static export or generateViewport) — page overrides layout
+  const pageViewport = await resolveViewport(pageModule);
+  let layoutViewport: Viewport | undefined;
+  for (const layout of layouts) {
+    const layoutModule = modules.get(layout.filePath) as LayoutModule | undefined;
+    if (layoutModule?.viewport) {
+      layoutViewport = layoutModule.viewport;
+    }
+  }
+  const viewport = pageViewport ?? layoutViewport;
 
   // Resolve head: head.tsx component or generateMetadata
   const headHtml = await resolveHead(match.route, modules, metadata);
 
+  // JIT template profiling — check if a compiled template exists for this route
+  const compiledTemplate = getCompiledTemplate(match.route.pattern);
+  if (compiledTemplate) {
+    // Use compiled template (bypasses React reconciliation for hot routes)
+    // The compiled template is a function that produces HTML directly from params
+    // For now, we still render via React but record the render for profiling
+  }
+
   const html = renderToString(createElement(() => element as ReactNode));
-  return wrapHtml(html, match.route, metadata, headHtml, viewport);
+  const fullHtml = wrapHtml(html, match.route, metadata, headHtml, viewport);
+
+  // Record this render for JIT profiling
+  const templateHash = simpleHash(fullHtml);
+  recordRender(match.route.pattern, templateHash);
+
+  return fullHtml;
 }
 
 /**
@@ -197,6 +259,23 @@ async function resolveMetadata(pageModule: PageModule, params: Record<string, st
 }
 
 /**
+ * Resolves metadata from a layout module (generateMetadata or static metadata).
+ */
+async function resolveLayoutMetadata(layoutModule: LayoutModule, params: Record<string, string>): Promise<HeadMetadata> {
+  if (layoutModule.generateMetadata) {
+    try {
+      return await layoutModule.generateMetadata(params);
+    } catch {
+      // Fall through to static metadata
+    }
+  }
+  if (layoutModule.metadata) {
+    return layoutModule.metadata;
+  }
+  return {};
+}
+
+/**
  * Resolves head content from head.tsx component or falls back to metadata tags.
  */
 async function resolveHead(
@@ -247,84 +326,6 @@ function wrapHtml(content: string, route: ResolvedRoute, metadata: HeadMetadata,
 }
 
 /**
- * Renders head metadata to HTML tags.
- */
-function renderHeadTags(metadata: HeadMetadata, route: ResolvedRoute): string {
-  const tags: string[] = [];
-
-  const title = metadata.title ?? route.metadata?.title ?? 'PledgeStack App';
-  tags.push(`<title>${escapeHtml(title)}</title>`);
-
-  if (metadata.description) {
-    tags.push(`<meta name="description" content="${escapeHtml(metadata.description)}" />`);
-  }
-
-  if (metadata.keywords && metadata.keywords.length > 0) {
-    tags.push(`<meta name="keywords" content="${escapeHtml(metadata.keywords.join(', '))}" />`);
-  }
-
-  if (metadata.robots) {
-    tags.push(`<meta name="robots" content="${escapeHtml(metadata.robots)}" />`);
-  }
-
-  if (metadata.openGraph) {
-    const og = metadata.openGraph;
-    if (og.title) tags.push(`<meta property="og:title" content="${escapeHtml(og.title)}" />`);
-    if (og.description) tags.push(`<meta property="og:description" content="${escapeHtml(og.description)}" />`);
-    if (og.url) tags.push(`<meta property="og:url" content="${escapeHtml(og.url)}" />`);
-    if (og.type) tags.push(`<meta property="og:type" content="${escapeHtml(og.type)}" />`);
-    if (og.images) {
-      for (const img of og.images) {
-        tags.push(`<meta property="og:image" content="${escapeHtml(img)}" />`);
-      }
-    }
-  }
-
-  if (metadata.twitter) {
-    const tw = metadata.twitter;
-    if (tw.card) tags.push(`<meta name="twitter:card" content="${escapeHtml(tw.card)}" />`);
-    if (tw.title) tags.push(`<meta name="twitter:title" content="${escapeHtml(tw.title)}" />`);
-    if (tw.description) tags.push(`<meta name="twitter:description" content="${escapeHtml(tw.description)}" />`);
-    if (tw.images) {
-      for (const img of tw.images) {
-        tags.push(`<meta name="twitter:image" content="${escapeHtml(img)}" />`);
-      }
-    }
-  }
-
-  if (metadata.alternates?.canonical) {
-    tags.push(`<link rel="canonical" href="${escapeHtml(metadata.alternates.canonical)}" />`);
-  }
-
-  if (metadata.icons?.icon) {
-    tags.push(`<link rel="icon" href="${escapeHtml(metadata.icons.icon)}" />`);
-  }
-  if (metadata.icons?.apple) {
-    tags.push(`<link rel="apple-touch-icon" href="${escapeHtml(metadata.icons.apple)}" />`);
-  }
-  if (metadata.icons?.favicon) {
-    tags.push(`<link rel="shortcut icon" href="${escapeHtml(metadata.icons.favicon)}" />`);
-  }
-
-  if (metadata.other) {
-    for (const [name, content] of Object.entries(metadata.other)) {
-      tags.push(`<meta name="${escapeHtml(name)}" content="${escapeHtml(content)}" />`);
-    }
-  }
-
-  return tags.join('\n  ');
-}
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
  * Resolves viewport from generateViewport() or static viewport export.
  */
 async function resolveViewport(pageModule: PageModule): Promise<Viewport | undefined> {
@@ -339,22 +340,4 @@ async function resolveViewport(pageModule: PageModule): Promise<Viewport | undef
     return pageModule.viewport;
   }
   return undefined;
-}
-
-/**
- * Renders viewport meta tags from a Viewport object.
- */
-function renderViewportTags(viewport: Viewport | undefined): string {
-  if (!viewport) return '';
-  const tags: string[] = [];
-  const parts: string[] = [];
-  if (viewport.width !== undefined) parts.push(`width=${viewport.width}`);
-  if (viewport.initialScale !== undefined) parts.push(`initial-scale=${viewport.initialScale}`);
-  if (viewport.maximumScale !== undefined) parts.push(`maximum-scale=${viewport.maximumScale}`);
-  if (viewport.userScalable !== undefined) parts.push(`user-scalable=${viewport.userScalable ? 'yes' : 'no'}`);
-  if (viewport.viewportFit) parts.push(`viewport-fit=${viewport.viewportFit}`);
-  if (parts.length > 0) tags.push(`<meta name="viewport" content="${parts.join(', ')}" />`);
-  if (viewport.themeColor) tags.push(`<meta name="theme-color" content="${escapeHtml(viewport.themeColor)}" />`);
-  if (viewport.colorScheme) tags.push(`<meta name="color-scheme" content="${escapeHtml(viewport.colorScheme)}" />`);
-  return tags.join('\n  ');
 }

@@ -38,6 +38,8 @@ export function resolveRoutes(files: ScannedFile[], config: PledgeConfig): Resol
     const notFoundFile = dirFiles.find((f) => f.convention === FILE_CONVENTIONS['not-found']);
     const headFile = dirFiles.find((f) => f.convention === FILE_CONVENTIONS.head);
     const templateFile = dirFiles.find((f) => f.convention === FILE_CONVENTIONS.template);
+    const ogImageFile = dirFiles.find((f) => f.convention === FILE_CONVENTIONS['opengraph-image']);
+    const twImageFile = dirFiles.find((f) => f.convention === FILE_CONVENTIONS['twitter-image']);
 
     // Check if this directory is inside a parallel route slot (@slot)
     const dirSegments = dir.split('/').filter(Boolean);
@@ -78,6 +80,8 @@ export function resolveRoutes(files: ScannedFile[], config: PledgeConfig): Resol
         notFoundFilePath: notFoundFile?.absolutePath,
         headFilePath: headFile?.absolutePath,
         templateFilePath: templateFile?.absolutePath,
+        opengraphImageFilePath: ogImageFile?.absolutePath,
+        twitterImageFilePath: twImageFile?.absolutePath,
         interceptLevel,
       });
     }
@@ -112,6 +116,8 @@ export function resolveRoutes(files: ScannedFile[], config: PledgeConfig): Resol
         notFoundFilePath: notFoundFile?.absolutePath,
         headFilePath: headFile?.absolutePath,
         slots: Object.keys(slots).length > 0 ? slots : undefined,
+        opengraphImageFilePath: ogImageFile?.absolutePath,
+        twitterImageFilePath: twImageFile?.absolutePath,
       });
     }
 

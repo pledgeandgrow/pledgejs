@@ -19,7 +19,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pledgestack-shared": "workspace:*"
+    "pledgestack-shared": "workspace:*",
+    "pledgestack-core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

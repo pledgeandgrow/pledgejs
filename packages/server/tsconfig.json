@@ -10,7 +10,8 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../shared" },
-    { "path": "../core" }
+    { "path": "../core" },
+    { "path": "../sitemap" }
   ]
 ,
   "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]

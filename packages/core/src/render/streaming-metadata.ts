@@ -15,6 +15,7 @@
 
 import type { HeadMetadata } from '../router/types';
 import type { ResolvedRoute } from 'pledgestack-shared';
+import { renderHeadTags } from './head-tags';
 
 const PLACEHOLDER_ID = '__pledge_meta__';
 
@@ -196,75 +197,6 @@ export function createMetadataInjectorScript(metadata: HeadMetadata): string {
   if (scriptLines.length === 0) return '';
 
   return `<script>(function(){${scriptLines.join('\n')}})();</script>`;
-}
-
-/**
- * Renders head tags from metadata (full version, used when metadata is sync).
- */
-function renderHeadTags(metadata: HeadMetadata, route: ResolvedRoute): string {
-  const tags: string[] = [];
-
-  const title = metadata.title ?? route.metadata?.title ?? 'PledgeStack App';
-  tags.push(`<title>${escapeHtml(title)}</title>`);
-
-  if (metadata.description) {
-    tags.push(`<meta name="description" content="${escapeHtml(metadata.description)}" />`);
-  }
-
-  if (metadata.keywords && metadata.keywords.length > 0) {
-    tags.push(`<meta name="keywords" content="${escapeHtml(metadata.keywords.join(', '))}" />`);
-  }
-
-  if (metadata.robots) {
-    tags.push(`<meta name="robots" content="${escapeHtml(metadata.robots)}" />`);
-  }
-
-  if (metadata.openGraph) {
-    const og = metadata.openGraph;
-    if (og.title) tags.push(`<meta property="og:title" content="${escapeHtml(og.title)}" />`);
-    if (og.description) tags.push(`<meta property="og:description" content="${escapeHtml(og.description)}" />`);
-    if (og.url) tags.push(`<meta property="og:url" content="${escapeHtml(og.url)}" />`);
-    if (og.type) tags.push(`<meta property="og:type" content="${escapeHtml(og.type)}" />`);
-    if (og.images) {
-      for (const img of og.images) {
-        tags.push(`<meta property="og:image" content="${escapeHtml(img)}" />`);
-      }
-    }
-  }
-
-  if (metadata.twitter) {
-    const tw = metadata.twitter;
-    if (tw.card) tags.push(`<meta name="twitter:card" content="${escapeHtml(tw.card)}" />`);
-    if (tw.title) tags.push(`<meta name="twitter:title" content="${escapeHtml(tw.title)}" />`);
-    if (tw.description) tags.push(`<meta name="twitter:description" content="${escapeHtml(tw.description)}" />`);
-    if (tw.images) {
-      for (const img of tw.images) {
-        tags.push(`<meta name="twitter:image" content="${escapeHtml(img)}" />`);
-      }
-    }
-  }
-
-  if (metadata.alternates?.canonical) {
-    tags.push(`<link rel="canonical" href="${escapeHtml(metadata.alternates.canonical)}" />`);
-  }
-
-  if (metadata.icons?.icon) {
-    tags.push(`<link rel="icon" href="${escapeHtml(metadata.icons.icon)}" />`);
-  }
-  if (metadata.icons?.apple) {
-    tags.push(`<link rel="apple-touch-icon" href="${escapeHtml(metadata.icons.apple)}" />`);
-  }
-  if (metadata.icons?.favicon) {
-    tags.push(`<link rel="shortcut icon" href="${escapeHtml(metadata.icons.favicon)}" />`);
-  }
-
-  if (metadata.other) {
-    for (const [name, content] of Object.entries(metadata.other)) {
-      tags.push(`<meta name="${escapeHtml(name)}" content="${escapeHtml(content)}" />`);
-    }
-  }
-
-  return tags.join('\n  ');
 }
 
 function escapeHtml(str: string): string {

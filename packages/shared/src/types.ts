@@ -38,6 +38,10 @@ export interface ResolvedRoute {
   templateFilePath?: string;
   /** Absolute path to the global-error.tsx for this segment, if any */
   globalErrorFilePath?: string;
+  /** Absolute path to the opengraph-image.tsx for this segment, if any */
+  opengraphImageFilePath?: string;
+  /** Absolute path to the twitter-image.tsx for this segment, if any */
+  twitterImageFilePath?: string;
   /** Parallel route slots: @slot -> resolved file path */
   slots?: Record<string, string>;
   /** Intercepting route metadata: number of levels to intercept (1=.., 2=..., 3=....) */
@@ -86,6 +90,8 @@ export interface PledgeResponse {
   status: number;
   headers: Record<string, string>;
   body: string | ReadableStream<Uint8Array> | null;
+  /** When true, body is a base64-encoded string (for binary content like images) */
+  isBase64?: boolean;
 }
 
 export interface I18nConfig {

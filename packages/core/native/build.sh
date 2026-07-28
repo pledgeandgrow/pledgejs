@@ -42,6 +42,14 @@ CRATES=(
   "rust-rsc-deserializer"
   "rust-ssr-profiler"
   "rust-hydration"
+  "rust-og-renderer"
+  "rust-kv-store"
+  "rust-rate-limiter"
+  "rust-static-server"
+  "rust-compression"
+  "rust-search"
+  "rust-jit-templates"
+  "rust-ws-compression"
 )
 
 for crate in "${CRATES[@]}"; do

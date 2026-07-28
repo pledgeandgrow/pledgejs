@@ -37,6 +37,8 @@ export interface PledgeConfig {
   alias?: Record<string, string>;
   /** Which bundler to use (default: 'pledgepack'). Install the corresponding adapter package to use alternatives. */
   bundler?: 'pledgepack' | 'vite' | 'rollup' | 'turbopack' | 'rsbuild' | 'webpack';
+  /** Site URL for SEO (sitemap, robots.txt, canonical URLs) */
+  siteUrl?: string;
 }
 
 /**

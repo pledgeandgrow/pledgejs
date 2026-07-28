@@ -19,6 +19,7 @@
 import type { ResolvedRoute, PledgeConfig, Viewport } from 'pledgestack-shared';
 import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { HeadMetadata } from '../router/types';
+import { renderHeadTags, renderViewportTags, escapeHtmlShared } from './head-tags';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -211,6 +212,7 @@ ${scriptTags}${rscClientTag}
 
 /**
  * JS fallback: Renders the <head> section from metadata.
+ * Uses shared renderHeadTags for metadata tags, adds charset, viewport, preload hints, CSS, and custom tags.
  */
 function renderHeadJS(
   metadata: HeadMetadata,
@@ -226,68 +228,14 @@ function renderHeadJS(
 
   // Viewport
   if (viewport) {
-    tags.push(`  ${renderViewportTagsJS(viewport)}`);
+    tags.push(`  ${renderViewportTags(viewport)}`);
   } else {
     tags.push('  <meta name="viewport" content="width=device-width, initial-scale=1.0" />');
   }
 
-  // Title
-  if (metadata.title) {
-    tags.push(`  <title>${escapeHtmlJS(metadata.title)}</title>`);
-  }
-
-  // Description
-  if (metadata.description) {
-    tags.push(`  <meta name="description" content="${escapeHtmlJS(metadata.description)}" />`);
-  }
-
-  // Keywords
-  if (metadata.keywords) {
-    const keywords = Array.isArray(metadata.keywords) ? metadata.keywords.join(', ') : metadata.keywords;
-    tags.push(`  <meta name="keywords" content="${escapeHtmlJS(keywords)}" />`);
-  }
-
-  // Author
-  if (metadata.other?.author) {
-    tags.push(`  <meta name="author" content="${escapeHtmlJS(metadata.other.author)}" />`);
-  }
-
-  // Robots
-  if (metadata.robots) {
-    tags.push(`  <meta name="robots" content="${escapeHtmlJS(metadata.robots)}" />`);
-  }
-
-  // Canonical URL
-  if (metadata.alternates?.canonical) {
-    tags.push(`  <link rel="canonical" href="${escapeHtmlJS(metadata.alternates.canonical)}" />`);
-  }
-
-  // OpenGraph tags
-  if (metadata.openGraph) {
-    const og = metadata.openGraph;
-    if (og.title) tags.push(`  <meta property="og:title" content="${escapeHtmlJS(og.title)}" />`);
-    if (og.description) tags.push(`  <meta property="og:description" content="${escapeHtmlJS(og.description)}" />`);
-    if (og.url) tags.push(`  <meta property="og:url" content="${escapeHtmlJS(og.url)}" />`);
-    if (og.type) tags.push(`  <meta property="og:type" content="${escapeHtmlJS(og.type)}" />`);
-    if (og.images) {
-      for (const img of og.images) {
-        tags.push(`  <meta property="og:image" content="${escapeHtmlJS(img)}" />`);
-      }
-    }
-  }
-
-  // Twitter card tags
-  if (metadata.twitter) {
-    const tw = metadata.twitter;
-    if (tw.card) tags.push(`  <meta name="twitter:card" content="${escapeHtmlJS(tw.card)}" />`);
-    if (tw.title) tags.push(`  <meta name="twitter:title" content="${escapeHtmlJS(tw.title)}" />`);
-    if (tw.description) tags.push(`  <meta name="twitter:description" content="${escapeHtmlJS(tw.description)}" />`);
-    if (tw.images) {
-      for (const img of tw.images) {
-        tags.push(`  <meta name="twitter:image" content="${escapeHtmlJS(img)}" />`);
-      }
-    }
-  }
+  // Metadata tags (title, description, OG, Twitter, canonical, icons, JSON-LD, etc.)
+  const metaTags = renderHeadTags(metadata);
+  tags.push(metaTags);
 
   // Preload hints
   if (preloadHints) {
@@ -306,12 +254,6 @@ function renderHeadJS(
     }
   }
 
-  // Structured data (JSON-LD) from other metadata
-  if (metadata.other?.structuredData) {
-    const jsonLd = JSON.stringify(metadata.other.structuredData);
-    tags.push(`  <script type="application/ld+json">${jsonLd}</script>`);
-  }
-
   // Custom head tags from head.tsx
   if (customTags) {
     tags.push(customTags);
@@ -321,32 +263,10 @@ function renderHeadJS(
 }
 
 /**
- * JS fallback: Renders viewport meta tags.
- */
-function renderViewportTagsJS(viewport: Viewport): string {
-  const parts: string[] = [];
-
-  if (viewport.width) parts.push(`width=${viewport.width}`);
-  if (viewport.initialScale) parts.push(`initial-scale=${viewport.initialScale}`);
-  if (viewport.maximumScale) parts.push(`maximum-scale=${viewport.maximumScale}`);
-  if (viewport.userScalable === false) parts.push('user-scalable=no');
-  if (viewport.viewportFit) parts.push(`viewport-fit=${viewport.viewportFit}`);
-  if (viewport.themeColor) parts.push(`theme-color=${viewport.themeColor}`);
-
-  const content = parts.length > 0 ? parts.join(', ') : 'width=device-width, initial-scale=1.0';
-  return `<meta name="viewport" content="${content}" />`;
-}
-
-/**
  * JS fallback: Escapes HTML entities.
  */
 function escapeHtmlJS(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
+  return escapeHtmlShared(input);
 }
 
 /**

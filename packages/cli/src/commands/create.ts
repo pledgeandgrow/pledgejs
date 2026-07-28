@@ -47,7 +47,7 @@ export default defineConfig({
   },
   "devDependencies": {
     "pledgestack": "latest",
-    "pledgepack": "^0.2.7",
+    "pledgepack": "^0.2.8",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/node": "^22.0.0",

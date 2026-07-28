@@ -29,6 +29,9 @@ export interface PageModule {
 
 export interface LayoutModule {
   default: ComponentType<{ children: ReactNode }>;
+  metadata?: HeadMetadata;
+  generateMetadata?: (params: Record<string, string>) => Promise<HeadMetadata> | HeadMetadata;
+  viewport?: Viewport;
 }
 
 export interface TemplateModule {
@@ -81,15 +84,20 @@ export interface HeadMetadata {
     images?: string[];
     url?: string;
     type?: string;
+    siteName?: string;
   };
   twitter?: {
     card?: string;
     title?: string;
     description?: string;
     images?: string[];
+    site?: string;
+    creator?: string;
   };
   robots?: string;
+  themeColor?: string;
   alternates?: { canonical?: string };
   icons?: { icon?: string; apple?: string; favicon?: string };
+  structuredData?: Record<string, unknown> | Record<string, unknown>[];
   other?: Record<string, string>;
 }

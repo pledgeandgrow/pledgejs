@@ -1,10 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse, request as httpRequest } from 'node:http';
-import { readFile } from 'node:fs/promises';
 import { join, extname, sep } from 'node:path';
 import type { PledgeConfig, BundlerAdapter } from 'pledgestack-shared';
 import { createRequestHandler } from './handler';
-import { tryServePledgeVirtual } from './virtual-modules';
+import { tryServePledgeVirtual, tryServeRouterModule } from './virtual-modules';
 import { loadInstrumentation } from './instrumentation';
+import { compressResponse, readFileFast } from 'pledgestack-core';
 
 export interface NodeServerOptions {
   config: PledgeConfig;
@@ -40,6 +40,8 @@ export function startNodeServer(options: NodeServerOptions) {
 
       if (await tryServePledgeVirtual(req, res, config, isDev, pledgepackPort)) return;
 
+      if (tryServeRouterModule(req, res, config)) return;
+
       if (proxyTarget && shouldProxyToBundler(url.pathname)) {
         proxyRequest(req, res, proxyTarget);
         return;
@@ -58,11 +60,38 @@ export function startNodeServer(options: NodeServerOptions) {
 
       const response = await handler({ url, method: req.method ?? 'GET', headers: req.headers as Record<string, string>, body });
 
-      res.writeHead(response.status, response.headers);
-      if (response.body) {
-        if (typeof response.body === 'string') {
-          res.end(response.body);
+      // Native compression middleware — compress string responses based on Accept-Encoding
+      const headers = { ...response.headers };
+      let responseBody: string | Buffer | null = null;
+
+      if (typeof response.body === 'string' && !response.isBase64) {
+        const acceptEncoding = req.headers['accept-encoding'] as string | undefined;
+        if (acceptEncoding) {
+          const { body: compressed, encoding } = compressResponse(response.body, acceptEncoding);
+          if (encoding) {
+            responseBody = compressed;
+            headers['Content-Encoding'] = encoding;
+            headers['Vary'] = headers['Vary'] ? `${headers['Vary']}, Accept-Encoding` : 'Accept-Encoding';
+          } else {
+            responseBody = response.body;
+          }
         } else {
+          responseBody = response.body;
+        }
+      }
+
+      res.writeHead(response.status, headers);
+      if (responseBody) {
+        if (response.isBase64 && typeof responseBody === 'string') {
+          res.end(Buffer.from(responseBody, 'base64'));
+        } else if (typeof responseBody === 'string') {
+          res.end(responseBody);
+        } else if (Buffer.isBuffer(responseBody)) {
+          res.end(responseBody);
+        } else {
+          res.end();
+        }
+      } else if (response.body && typeof response.body !== 'string') {
           const reader = response.body.getReader();
           while (true) {
             const { done, value } = await reader.read();
@@ -70,7 +99,6 @@ export function startNodeServer(options: NodeServerOptions) {
             res.write(value);
           }
           res.end();
-        }
       } else {
         res.end();
       }
@@ -126,7 +154,6 @@ function shouldProxyToBundler(pathname: string): boolean {
   if (pathname.startsWith('/@fs/')) return true;
   if (pathname.startsWith('/@id/')) return true;
   if (pathname.startsWith('/__pledge_hmr')) return true;
-  if (pathname.startsWith('/__pledge_router')) return true;
   if (pathname.startsWith('/__pledge_public/')) return true;
   if (pathname.startsWith('/__pledge_error')) return true;
   if (MODULE_EXTENSIONS.test(pathname)) return true;
@@ -204,7 +231,7 @@ async function tryServeStatic(
   if (!filePath.startsWith(publicDir + sep) && filePath !== publicDir) return false;
 
   try {
-    const content = await readFile(filePath);
+    const content = await readFileFast(filePath);
     const ext = extname(filePath);
     const contentType = getContentType(ext);
     res.writeHead(200, { 'Content-Type': contentType });

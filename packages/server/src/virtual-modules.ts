@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { readdirSync, statSync } from 'node:fs';
 import type { PledgeConfig } from 'pledgestack-shared';
+import { FILE_CONVENTIONS } from 'pledgestack-shared';
 
 /**
  * Serves PledgeStack virtual modules at /__pledge__/* paths.
@@ -42,6 +44,117 @@ export async function tryServePledgeVirtual(
   }
 
   return false;
+}
+
+/**
+ * Serves the /__pledge_router virtual module.
+ *
+ * This intercepts the router module generation from PledgePack's Rust dev server
+ * to fix a bug where route.ts API files were imported with `import default`,
+ * but API routes use named exports (GET, POST, etc.) — no default export.
+ *
+ * The generated module:
+ *   - Imports `default` from page/layout/error/loading/not-found files
+ *   - Imports named exports (GET, POST, PUT, DELETE, PATCH) from route.ts files
+ *   - Exports a route map for client-side navigation
+ */
+export function tryServeRouterModule(
+  req: IncomingMessage,
+  res: ServerResponse,
+  config: PledgeConfig,
+): boolean {
+  const url = req.url ?? '/';
+  const pathname = url.split('?')[0];
+
+  if (pathname !== '/__pledge_router') return false;
+
+  const appDir = join(config.rootDir, config.appDir);
+  const files = scanRouteFiles(appDir);
+  const imports: string[] = [];
+  const routeEntries: string[] = [];
+
+  for (const file of files) {
+    const importPath = `/${file.relativePath}`;
+
+    if (file.convention === FILE_CONVENTIONS.route) {
+      const varName = `route_${routeEntries.length}`;
+      imports.push(`import * as ${varName} from '${importPath}';`);
+      routeEntries.push(`  ${JSON.stringify(file.routePattern)}: { type: 'api', handlers: ${varName} }`);
+    } else {
+      const varName = `mod_${routeEntries.length}`;
+      imports.push(`import ${varName} from '${importPath}';`);
+      const conventionType = file.convention ?? 'page';
+      routeEntries.push(`  ${JSON.stringify(file.routePattern)}: { type: ${JSON.stringify(conventionType)}, component: ${varName} }`);
+    }
+  }
+
+  const code = `// PledgeStack router (auto-generated)
+${imports.join('\n')}
+
+export const routes = {
+${routeEntries.join(',\n')}
+};
+`;
+
+  res.writeHead(200, {
+    'Content-Type': 'application/javascript; charset=utf-8',
+    'Cache-Control': 'no-cache',
+  });
+  res.end(code);
+  return true;
+}
+
+interface RouteFileInfo {
+  relativePath: string;
+  convention: string | null;
+  routePattern: string;
+}
+
+function scanRouteFiles(appDir: string): RouteFileInfo[] {
+  const results: RouteFileInfo[] = [];
+
+  function walk(dir: string, prefix: string) {
+    let entries;
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      let stat;
+      try {
+        stat = statSync(fullPath);
+      } catch {
+        continue;
+      }
+
+      if (stat.isDirectory()) {
+        if (entry.startsWith('.') || entry === 'node_modules') continue;
+        let segment = entry;
+        if (/^\([^)]+\)$/.test(segment)) segment = '';
+        if (segment.startsWith('@')) segment = '';
+        walk(fullPath, prefix + '/' + segment);
+      } else if (stat.isFile() && /\.(tsx|ts|jsx|js)$/.test(entry)) {
+        const base = entry.replace(/\.(tsx|ts|jsx|js)$/, '');
+        const convention = base in FILE_CONVENTIONS ? base : null;
+        if (!convention) continue;
+
+        const relPath = relative(appDir, fullPath).split(sep).join('/');
+        let pattern = prefix || '/';
+        pattern = pattern.replace(/\/+/g, '/') || '/';
+        if (pattern.endsWith('/') && pattern !== '/') {
+          pattern = pattern.slice(0, -1);
+        }
+
+        results.push({ relativePath: relPath, convention, routePattern: pattern });
+      }
+    }
+  }
+
+  walk(appDir, '');
+  return results;
 }
 
 async function serveClientCss(

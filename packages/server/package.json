@@ -26,10 +26,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pledgepack": "^0.2.7",
+    "pledgepack": "^0.2.8",
     "esbuild": "^0.24.0",
     "pledgestack-shared": "workspace:*",
-    "pledgestack-core": "workspace:*"
+    "pledgestack-core": "workspace:*",
+    "pledgestack-sitemap": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

@@ -10,6 +10,8 @@ export const FILE_CONVENTIONS = {
   route: 'route',
   middleware: 'middleware',
   'head': 'head',
+  'opengraph-image': 'opengraph-image',
+  'twitter-image': 'twitter-image',
 } as const;
 
 export type FileConvention = keyof typeof FILE_CONVENTIONS;

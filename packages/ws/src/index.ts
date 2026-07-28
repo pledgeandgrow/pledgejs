@@ -1,4 +1,27 @@
 import type { PledgePlugin, PluginServerContext } from 'pledgestack-shared';
+import { wsCompress, wsDecompress, isNativeWsCompressionAvailable } from 'pledgestack-core';
+
+/**
+ * Compresses a WebSocket message using native permessage-deflate.
+ * Uses rust-ws-compression NAPI addon when available, falls back to Node zlib.
+ */
+export function compressMessage(data: Buffer, level?: number): Buffer {
+  return wsCompress(data, level);
+}
+
+/**
+ * Decompresses a WebSocket message.
+ */
+export function decompressMessage(data: Buffer): Buffer {
+  return wsDecompress(data);
+}
+
+/**
+ * Whether native WebSocket compression is available.
+ */
+export function hasNativeWsCompression(): boolean {
+  return isNativeWsCompressionAvailable();
+}
 
 /**
  * WebSocket support for PledgeStack.

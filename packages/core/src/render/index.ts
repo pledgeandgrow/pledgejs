@@ -1,4 +1,6 @@
 export * from './server';
+export * from './head-tags';
+export * from './og-image';
 export * from './static';
 export * from './rsc';
 export * from './stream';

@@ -11,21 +11,106 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 /// Escapes HTML special characters in a string.
+/// Uses SIMD intrinsics on x86_64 for batch processing of 16-byte chunks.
 #[napi]
 pub fn escape_html(input: String) -> String {
-    let mut output = String::with_capacity(input.len() * 6 / 5);
-    for ch in input.chars() {
-        match ch {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '"' => output.push_str("&quot;"),
-            '\'' => output.push_str("&#x27;"),
-            '/' => output.push_str("&#x2F;"),
-            _ => output.push(ch),
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+
+    // Fast path: scan for characters that need escaping.
+    // If none found, return the original string without allocation.
+    let needs_escaping = bytes.iter().any(|&b| {
+        b == b'&' || b == b'<' || b == b'>' || b == b'"' || b == b'\'' || b == b'/'
+    });
+    if !needs_escaping {
+        return input;
+    }
+
+    let mut output = String::with_capacity(len * 6 / 5);
+
+    // SIMD fast scan: process 16-byte chunks on x86_64
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::*;
+
+        if is_x86_feature_detected!("sse2") {
+            let chunks = len / 16;
+            let remainder = len % 16;
+
+            // SIMD masks for detecting special characters
+            let amp_mask = unsafe { _mm_set1_epi8(b'&' as i8) };
+            let lt_mask = unsafe { _mm_set1_epi8(b'<' as i8) };
+            let gt_mask = unsafe { _mm_set1_epi8(b'>' as i8) };
+            let quot_mask = unsafe { _mm_set1_epi8(b'"' as i8) };
+            let apos_mask = unsafe { _mm_set1_epi8(b'\'' as i8) };
+            let slash_mask = unsafe { _mm_set1_epi8(b'/' as i8) };
+
+            let mut i = 0;
+            for _ in 0..chunks {
+                let chunk = unsafe { _mm_loadu_si128(bytes.as_ptr().add(i) as *const __m128i) };
+
+                // Check if any byte in this chunk needs escaping
+                let amp_eq = unsafe { _mm_cmpeq_epi8(chunk, amp_mask) };
+                let lt_eq = unsafe { _mm_cmpeq_epi8(chunk, lt_mask) };
+                let gt_eq = unsafe { _mm_cmpeq_epi8(chunk, gt_mask) };
+                let quot_eq = unsafe { _mm_cmpeq_epi8(chunk, quot_mask) };
+                let apos_eq = unsafe { _mm_cmpeq_epi8(chunk, apos_mask) };
+                let slash_eq = unsafe { _mm_cmpeq_epi8(chunk, slash_mask) };
+
+                let combined = unsafe {
+                    _mm_or_si128(
+                        _mm_or_si128(amp_eq, lt_eq),
+                        _mm_or_si128(gt_eq, quot_eq),
+                    )
+                };
+                let combined = unsafe {
+                    _mm_or_si128(
+                        combined,
+                        _mm_or_si128(apos_eq, slash_eq),
+                    )
+                };
+
+                let mask = unsafe { _mm_movemask_epi8(combined) };
+
+                if mask == 0 {
+                    // No escaping needed in this chunk — copy raw
+                    output.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[i..i + 16]) });
+                } else {
+                    // Escaping needed — process byte by byte for this chunk
+                    for j in 0..16 {
+                        escape_byte(&mut output, bytes[i + j]);
+                    }
+                }
+                i += 16;
+            }
+
+            // Handle remainder
+            for i in (len - remainder)..len {
+                escape_byte(&mut output, bytes[i]);
+            }
+            return output;
         }
     }
+
+    // Fallback: scalar char-by-char
+    for &b in bytes {
+        escape_byte(&mut output, b);
+    }
     output
+}
+
+/// Escapes a single byte into the output string.
+#[inline(always)]
+fn escape_byte(output: &mut String, b: u8) {
+    match b {
+        b'&' => output.push_str("&amp;"),
+        b'<' => output.push_str("&lt;"),
+        b'>' => output.push_str("&gt;"),
+        b'"' => output.push_str("&quot;"),
+        b'\'' => output.push_str("&#x27;"),
+        b'/' => output.push_str("&#x2F;"),
+        _ => output.push(b as char),
+    }
 }
 
 /// Escapes a string for use inside an HTML attribute value.

@@ -257,6 +257,16 @@ async function main() {
       });
       break;
     }
+    case 'search': {
+      const { searchCommand } = await import('./commands/search');
+      const { loadConfig } = await import('./config-loader');
+      const config = await loadConfig();
+      await searchCommand(config, {
+        query: positionals[1],
+        index: !positionals[1],
+      });
+      break;
+    }
     default:
       console.error(`Unknown command: ${command}`);
       printHelp();
@@ -298,6 +308,7 @@ function printHelp() {
     upgrade  Check for new versions, run codemods, update deps
     storybook  Set up zero-config Storybook for PledgeStack
     playground Start PSX REPL playground (Rust + TSX in browser)
+    search   Index pages and search content (pledge search [query])
 
   Options:
     -p, --port <number>      Server port (default: 3000)
@@ -347,6 +358,8 @@ function printHelp() {
     pledge storybook --force --all
     pledge playground
     pledge playground --port 8080
+    pledge search
+    pledge search "react hooks"
   `);
 }
 
