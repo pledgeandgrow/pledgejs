@@ -13,7 +13,6 @@
 // - Key filtering (keys are not rendered to HTML)
 
 use napi_derive::napi;
-use serde::Deserialize;
 use std::collections::HashMap;
 
 /// DOM node representation (JSON-serializable).

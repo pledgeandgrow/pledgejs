@@ -10,7 +10,7 @@
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 struct Bucket {
     tokens: f64,

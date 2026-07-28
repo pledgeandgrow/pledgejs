@@ -11,7 +11,6 @@
 // - Self-closing and void elements
 
 use napi_derive::napi;
-use serde::Deserialize;
 
 /// A virtual DOM node for Rust-side rendering.
 #[napi(object)]

@@ -12,7 +12,6 @@
 //   S:<id>:<json>                    — suspense boundary
 
 use napi_derive::napi;
-use std::collections::HashMap;
 
 /// Deserialized module reference.
 #[napi(object)]
@@ -81,7 +80,7 @@ pub fn deserialize(payload: String) -> DeserializeResult {
             "M" => {
                 // Module reference: M:id:moduleId:exportName
                 let sub_parts: Vec<&str> = data.splitn(2, ':').collect();
-                let module_id = sub_parts.get(0).unwrap_or(&"");
+                let module_id = sub_parts.first().unwrap_or(&"");
                 let export_name = sub_parts.get(1).unwrap_or(&"");
                 module_refs.push(DeserializedModuleRef {
                     id: id.to_string(),
@@ -106,7 +105,7 @@ pub fn deserialize(payload: String) -> DeserializeResult {
             "E" => {
                 // Element reference: E:id:moduleId:exportName
                 let sub_parts: Vec<&str> = data.splitn(2, ':').collect();
-                let module_id = sub_parts.get(0).unwrap_or(&"");
+                let module_id = sub_parts.first().unwrap_or(&"");
                 let export_name = sub_parts.get(1).unwrap_or(&"");
                 let mut ref_obj = serde_json::Map::new();
                 ref_obj.insert(
@@ -169,7 +168,7 @@ pub fn extract_module_references(payload: String) -> Vec<String> {
             let parts: Vec<&str> = line.splitn(3, ':').collect();
             if parts.len() >= 3 {
                 let sub_parts: Vec<&str> = parts[2].splitn(2, ':').collect();
-                if let Some(module_id) = sub_parts.get(0) {
+                if let Some(module_id) = sub_parts.first() {
                     let ref_str =
                         format!("{}:{}", module_id, sub_parts.get(1).unwrap_or(&"default"));
                     if !refs.contains(&ref_str) {

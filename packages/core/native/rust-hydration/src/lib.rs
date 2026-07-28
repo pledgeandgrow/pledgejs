@@ -8,6 +8,8 @@ use napi_derive::napi;
 use std::collections::HashSet;
 
 /// Hydration point found in the HTML.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[napi(object)]
 pub struct HydrationPoint {
     pub selector: String,
@@ -138,7 +140,7 @@ fn find_required_chunks(html: &str) -> Vec<String> {
 }
 
 fn generate_full(
-    points: &[HydrationPoint],
+    _points: &[HydrationPoint],
     chunks: &[String],
     hydration_data: Option<&str>,
     minify: bool,

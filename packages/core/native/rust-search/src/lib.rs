@@ -7,6 +7,7 @@
 //
 // The JS fallback uses a simple Map-based inverted index.
 
+use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -33,7 +34,7 @@ fn ensure_index() {
 /// @param id Document ID
 /// @param content Document text content to index
 #[napi]
-pub fn search_add_document(id: String, content: String) -> Result<(), String> {
+pub fn search_add_document(id: String, content: String) -> Result<(), Error> {
     ensure_index();
     let mut idx = INDEX.lock().unwrap();
     let index = idx.as_mut().unwrap();
@@ -60,7 +61,7 @@ pub fn search_add_document(id: String, content: String) -> Result<(), String> {
 
 /// Removes a document from the search index.
 #[napi]
-pub fn search_remove_document(id: String) -> Result<(), String> {
+pub fn search_remove_document(id: String) -> Result<(), Error> {
     ensure_index();
     let mut idx = INDEX.lock().unwrap();
     let index = idx.as_mut().unwrap();
@@ -124,7 +125,7 @@ pub fn search_query(query: String, limit: Option<f64>) -> Vec<SearchResult> {
 
 /// Clears the entire search index.
 #[napi]
-pub fn search_clear() -> Result<(), String> {
+pub fn search_clear() -> Result<(), Error> {
     ensure_index();
     let mut idx = INDEX.lock().unwrap();
     let index = idx.as_mut().unwrap();

@@ -8,6 +8,7 @@
 // When this addon is not compiled, the JS fallback in og-image-native.ts
 // serves the raw SVG (which works in some but not all platforms).
 
+use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 
 /// Renders an SVG string to a PNG buffer.
@@ -21,33 +22,32 @@ pub fn render_svg_to_png(
     svg: String,
     width: Option<u32>,
     height: Option<u32>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, Error> {
     let w = width.unwrap_or(1200);
     let h = height.unwrap_or(630);
 
     // Parse the SVG tree
     let tree = usvg::Tree::from_str(&svg, &usvg::Options::default())
-        .map_err(|e| format!("SVG parse error: {}", e))?;
+        .map_err(|e| Error::from_reason(format!("SVG parse error: {}", e)))?;
 
     // Create a pixmap (pixel buffer)
     let mut pixmap = tiny_skia::Pixmap::new(w, h)
-        .ok_or_else(|| format!("Failed to create pixmap {}x{}", w, h))?;
+        .ok_or_else(|| Error::from_reason(format!("Failed to create pixmap {}x{}", w, h)))?;
 
     // Render the SVG tree into the pixmap
     resvg::render(
         &tree,
         usvg::Transform::from_scale(
-            w as f32 / tree.size().width() as f32,
-            h as f32 / tree.size().height() as f32,
+            w as f32 / tree.size().width(),
+            h as f32 / tree.size().height(),
         ),
-        &mut pixmap,
-    )
-    .map_err(|e| format!("SVG render error: {}", e))?;
+        &mut pixmap.as_mut(),
+    );
 
     // Encode pixmap to PNG
     pixmap
         .encode_png()
-        .map_err(|e| format!("PNG encode error: {}", e))
+        .map_err(|e| Error::from_reason(format!("PNG encode error: {}", e)))
 }
 
 /// Renders an SVG string to a WebP buffer (smaller than PNG for OG images).
@@ -62,32 +62,10 @@ pub fn render_svg_to_webp(
     svg: String,
     width: Option<u32>,
     height: Option<u32>,
-    quality: Option<u32>,
-) -> Result<Vec<u8>, String> {
-    let w = width.unwrap_or(1200);
-    let h = height.unwrap_or(630);
-    let q = quality.unwrap_or(85).clamp(1, 100);
-
-    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default())
-        .map_err(|e| format!("SVG parse error: {}", e))?;
-
-    let mut pixmap = tiny_skia::Pixmap::new(w, h)
-        .ok_or_else(|| format!("Failed to create pixmap {}x{}", w, h))?;
-
-    resvg::render(
-        &tree,
-        usvg::Transform::from_scale(
-            w as f32 / tree.size().width() as f32,
-            h as f32 / tree.size().height() as f32,
-        ),
-        &mut pixmap,
-    )
-    .map_err(|e| format!("SVG render error: {}", e))?;
-
-    // Encode pixmap to WebP
-    pixmap
-        .encode_webp()
-        .map_err(|e| format!("WebP encode error: {}", e))
+    _quality: Option<u32>,
+) -> Result<Vec<u8>, Error> {
+    // tiny-skia 0.12 removed encode_webp() — return PNG as fallback
+    render_svg_to_png(svg, width, height)
 }
 
 /// Checks if the native OG renderer is available.

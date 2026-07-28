@@ -45,9 +45,9 @@ struct StackEntry {
     start: Instant,
 }
 
-/// Thread-local profiling state.
 thread_local! {
-    static ACTIVE: RefCell<Option<ProfilingState>> = RefCell::new(None);
+    /// Thread-local profiling state.
+    static ACTIVE: RefCell<Option<ProfilingState>> = const { RefCell::new(None) };
 }
 
 struct ProfilingState {
@@ -82,11 +82,12 @@ pub fn stop_profiling() -> Option<ProfileResult> {
         let total_time = state.start_time.elapsed().as_micros() as f64;
         let timings = aggregate_timings(&state.frames);
         let flamegraph = generate_flamegraph(&state.frames, 0);
+        let component_count = state.frames.len() as i32;
         Some(ProfileResult {
             frames: state.frames,
             timings,
             total_time_us: total_time,
-            component_count: state.frames.len() as i32,
+            component_count,
             flamegraph,
         })
     })

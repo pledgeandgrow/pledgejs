@@ -7,6 +7,7 @@
 // The JS fallback uses fs.readFile which is still fast but involves
 // an extra copy into the V8 heap.
 
+use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 use std::fs;
 use std::path::Path;
@@ -18,17 +19,20 @@ use std::path::Path;
 /// @param path Absolute path to the file
 /// @returns Buffer containing the file contents
 #[napi]
-pub fn read_file_mmap(path: String) -> Result<Vec<u8>, String> {
+pub fn read_file_mmap(path: String) -> Result<Vec<u8>, Error> {
     let path = Path::new(&path);
 
     if !path.exists() {
-        return Err(format!("File not found: {}", path.display()));
+        return Err(Error::from_reason(format!(
+            "File not found: {}",
+            path.display()
+        )));
     }
 
     // Read file — in production this would use memmap2::Mmap
     // For now we use fs::read which is still faster than Node's fs.readFile
     // because it avoids the V8 buffer copy
-    fs::read(path).map_err(|e| format!("Failed to read file: {}", e))
+    fs::read(path).map_err(|e| Error::from_reason(format!("Failed to read file: {}", e)))
 }
 
 /// Gets file metadata (size, modified time) without reading the file.
@@ -43,9 +47,10 @@ pub struct FileMeta {
 }
 
 #[napi]
-pub fn get_file_meta(path: String) -> Result<FileMeta, String> {
+pub fn get_file_meta(path: String) -> Result<FileMeta, Error> {
     let path = Path::new(&path);
-    let meta = fs::metadata(path).map_err(|e| format!("Failed to get metadata: {}", e))?;
+    let meta = fs::metadata(path)
+        .map_err(|e| Error::from_reason(format!("Failed to get metadata: {}", e)))?;
 
     let modified = meta
         .modified()

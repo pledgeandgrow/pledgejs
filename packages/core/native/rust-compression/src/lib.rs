@@ -10,6 +10,7 @@
 
 use flate2::write::{DeflateEncoder, GzEncoder};
 use flate2::Compression;
+use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 use std::io::Write;
 
@@ -19,15 +20,15 @@ use std::io::Write;
 /// @param level Compression level (1-9, default: 6)
 /// @returns Compressed buffer
 #[napi]
-pub fn gzip_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, String> {
-    let level = level.unwrap_or(6).min(9).max(1);
+pub fn gzip_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, Error> {
+    let level = level.unwrap_or(6).clamp(1, 9);
     let mut encoder = GzEncoder::new(Vec::new(), Compression::new(level));
     encoder
         .write_all(&data)
-        .map_err(|e| format!("Gzip write error: {}", e))?;
+        .map_err(|e| Error::from_reason(format!("Gzip write error: {}", e)))?;
     encoder
         .finish()
-        .map_err(|e| format!("Gzip finish error: {}", e))
+        .map_err(|e| Error::from_reason(format!("Gzip finish error: {}", e)))
 }
 
 /// Compresses data using deflate.
@@ -36,15 +37,15 @@ pub fn gzip_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, Strin
 /// @param level Compression level (1-9, default: 6)
 /// @returns Compressed buffer
 #[napi]
-pub fn deflate_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, String> {
-    let level = level.unwrap_or(6).min(9).max(1);
+pub fn deflate_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, Error> {
+    let level = level.unwrap_or(6).clamp(1, 9);
     let mut encoder = DeflateEncoder::new(Vec::new(), Compression::new(level));
     encoder
         .write_all(&data)
-        .map_err(|e| format!("Deflate write error: {}", e))?;
+        .map_err(|e| Error::from_reason(format!("Deflate write error: {}", e)))?;
     encoder
         .finish()
-        .map_err(|e| format!("Deflate finish error: {}", e))
+        .map_err(|e| Error::from_reason(format!("Deflate finish error: {}", e)))
 }
 
 /// Decompresses gzip data.
@@ -52,14 +53,14 @@ pub fn deflate_compress(data: Vec<u8>, level: Option<u32>) -> Result<Vec<u8>, St
 /// @param data Compressed buffer
 /// @returns Decompressed buffer
 #[napi]
-pub fn gzip_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
+pub fn gzip_decompress(data: Vec<u8>) -> Result<Vec<u8>, Error> {
     use flate2::read::GzDecoder;
     use std::io::Read;
     let mut decoder = GzDecoder::new(&data[..]);
     let mut output = Vec::new();
     decoder
         .read_to_end(&mut output)
-        .map_err(|e| format!("Gzip decompress error: {}", e))?;
+        .map_err(|e| Error::from_reason(format!("Gzip decompress error: {}", e)))?;
     Ok(output)
 }
 

@@ -52,6 +52,9 @@ pledgepack-output/
 packages/pledgepack/bin/*.exe
 packages/pledgepack/bin/pledgepack
 
+# Rust build artifacts
+packages/core/native/target/
+
 # Playground / app builds
 apps/*/dist/
 apps/*/.output/

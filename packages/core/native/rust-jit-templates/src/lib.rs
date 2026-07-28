@@ -10,6 +10,7 @@
 //
 // The JS fallback uses template string caching.
 
+use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -79,7 +80,7 @@ pub fn record_render(
 /// @param route_pattern The route pattern
 /// @param template The compiled template string
 #[napi]
-pub fn store_compiled_template(route_pattern: String, template: String) -> Result<(), String> {
+pub fn store_compiled_template(route_pattern: String, template: String) -> Result<(), Error> {
     ensure_profiles();
     let mut profiles = PROFILES.lock().unwrap();
     let map = profiles.as_mut().unwrap();

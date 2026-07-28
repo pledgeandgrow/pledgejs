@@ -7,8 +7,6 @@
 // over the JS fallback for HTML string construction.
 
 use napi_derive::napi;
-use serde::Deserialize;
-use std::collections::HashMap;
 
 /// Escapes HTML special characters in a string.
 /// Uses SIMD intrinsics on x86_64 for batch processing of 16-byte chunks.
@@ -77,8 +75,8 @@ pub fn escape_html(input: String) -> String {
             }
 
             // Handle remainder
-            for i in (len - remainder)..len {
-                escape_byte(&mut output, bytes[i]);
+            for &b in bytes.iter().take(len).skip(len - remainder) {
+                escape_byte(&mut output, b);
             }
             return output;
         }
@@ -383,7 +381,7 @@ pub fn render_head(
                 tag.push_str(&format!(" src=\"{}\"", escape_attr(src.clone())));
                 tag.push_str("></script>\n");
             } else if let Some(ref content) = script.content {
-                tag.push_str(">");
+                tag.push('>');
                 tag.push_str(content);
                 tag.push_str("</script>\n");
             } else {
@@ -412,7 +410,7 @@ pub fn render_html_shell(
     html.push_str(&head_html);
     html.push_str("\n<body>\n");
     html.push_str(&body_content);
-    html.push_str("\n");
+    html.push('\n');
     if let Some(ref script) = manifest_script {
         html.push_str(script);
         html.push('\n');
@@ -423,7 +421,7 @@ pub fn render_html_shell(
 
 /// Renders an error page HTML shell.
 #[napi]
-pub fn render_error_shell(status_code: i32, title: String, message: String) -> String {
+pub fn render_error_shell(status_code: i32, _title: String, message: String) -> String {
     let status_text = match status_code {
         404 => "Not Found",
         500 => "Internal Server Error",

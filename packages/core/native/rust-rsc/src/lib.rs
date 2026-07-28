@@ -13,8 +13,6 @@
 //   - Suspense: S:id:json
 
 use napi_derive::napi;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A client component reference.
 #[napi(object)]
@@ -49,10 +47,10 @@ pub struct RSCSerializeResult {
 
 /// RSC row types in the flight protocol.
 const ROW_MODULE: &str = "M";
-const ROW_ELEMENT: &str = "E";
+const _ROW_ELEMENT: &str = "E";
 const ROW_MODEL: &str = "J";
 const ROW_TEXT: &str = "T";
-const ROW_SUSPENSE: &str = "S";
+const _ROW_SUSPENSE: &str = "S";
 
 /// Serializes a JSON value into the RSC flight format.
 ///
@@ -68,7 +66,7 @@ pub fn serialize_rsc(
     let start = std::time::Instant::now();
     let mut payload = String::with_capacity(data.len() * 2);
     let mut row_count = 0i32;
-    let mut refs = client_refs.unwrap_or_default();
+    let refs = client_refs.unwrap_or_default();
 
     // Write module references
     for (i, reference) in refs.iter().enumerate() {
@@ -109,9 +107,9 @@ pub fn serialize_rsc(
 /// Serializes a JSON value into the flight model format.
 fn serialize_flight_model(
     val: &serde_json::Value,
-    id: usize,
-    payload: &mut String,
-    row_count: &mut i32,
+    _id: usize,
+    _payload: &mut String,
+    _row_count: &mut i32,
 ) -> String {
     match val {
         serde_json::Value::Null => "null".to_string(),
@@ -121,7 +119,7 @@ fn serialize_flight_model(
         serde_json::Value::Array(arr) => {
             let parts: Vec<String> = arr
                 .iter()
-                .map(|v| serialize_flight_model(v, id, payload, row_count))
+                .map(|v| serialize_flight_model(v, _id, _payload, _row_count))
                 .collect();
             format!("[{}]", parts.join(","))
         }
@@ -132,7 +130,7 @@ fn serialize_flight_model(
                     format!(
                         "\"{}\":{}",
                         escape_flight_string(k),
-                        serialize_flight_model(v, id, payload, row_count)
+                        serialize_flight_model(v, _id, _payload, _row_count)
                     )
                 })
                 .collect();

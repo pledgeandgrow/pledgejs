@@ -7,6 +7,7 @@
 // This eliminates the need for Redis or external cache services for ISR.
 // The store is process-local and crash-safe (writes are flushed to disk).
 
+use napi::bindgen_prelude::{Buffer, Error};
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::fs;
@@ -25,7 +26,7 @@ fn ensure_store() -> &'static Mutex<Option<HashMap<String, Vec<u8>>>> {
 }
 
 #[napi]
-pub fn kv_open(path: String) -> Result<(), String> {
+pub fn kv_open(path: String) -> Result<(), Error> {
     let mut p = STORE_PATH.lock().unwrap();
     *p = Some(path.clone());
 
@@ -35,9 +36,10 @@ pub fn kv_open(path: String) -> Result<(), String> {
     // Load from disk if exists
     let pathbuf = PathBuf::from(&path);
     if pathbuf.exists() {
-        let data = fs::read(&pathbuf).map_err(|e| format!("Failed to read KV store: {}", e))?;
+        let data = fs::read(&pathbuf)
+            .map_err(|e| Error::from_reason(format!("Failed to read KV store: {}", e)))?;
         let map: HashMap<String, Vec<u8>> = serde_json::from_slice(&data)
-            .map_err(|e| format!("Failed to parse KV store: {}", e))?;
+            .map_err(|e| Error::from_reason(format!("Failed to parse KV store: {}", e)))?;
         *store = Some(map);
     }
 
@@ -45,7 +47,7 @@ pub fn kv_open(path: String) -> Result<(), String> {
 }
 
 #[napi]
-pub fn kv_get(key: String) -> Result<Option<Buffer>, String> {
+pub fn kv_get(key: String) -> Result<Option<Buffer>, Error> {
     let store = ensure_store();
     let guard = store.lock().unwrap();
     if let Some(ref map) = *guard {
@@ -56,7 +58,7 @@ pub fn kv_get(key: String) -> Result<Option<Buffer>, String> {
 }
 
 #[napi]
-pub fn kv_set(key: String, value: Buffer) -> Result<(), String> {
+pub fn kv_set(key: String, value: Buffer) -> Result<(), Error> {
     let store = ensure_store();
     {
         let mut guard = store.lock().unwrap();
@@ -68,7 +70,7 @@ pub fn kv_set(key: String, value: Buffer) -> Result<(), String> {
 }
 
 #[napi]
-pub fn kv_delete(key: String) -> Result<(), String> {
+pub fn kv_delete(key: String) -> Result<(), Error> {
     let store = ensure_store();
     {
         let mut guard = store.lock().unwrap();
@@ -80,7 +82,7 @@ pub fn kv_delete(key: String) -> Result<(), String> {
 }
 
 #[napi]
-pub fn kv_clear() -> Result<(), String> {
+pub fn kv_clear() -> Result<(), Error> {
     let store = ensure_store();
     {
         let mut guard = store.lock().unwrap();
@@ -92,7 +94,7 @@ pub fn kv_clear() -> Result<(), String> {
 }
 
 #[napi]
-pub fn kv_keys() -> Result<Vec<String>, String> {
+pub fn kv_keys() -> Result<Vec<String>, Error> {
     let store = ensure_store();
     let guard = store.lock().unwrap();
     if let Some(ref map) = *guard {
@@ -103,7 +105,7 @@ pub fn kv_keys() -> Result<Vec<String>, String> {
 }
 
 #[napi]
-pub fn kv_size() -> Result<f64, String> {
+pub fn kv_size() -> Result<f64, Error> {
     let store = ensure_store();
     let guard = store.lock().unwrap();
     if let Some(ref map) = *guard {
@@ -114,22 +116,20 @@ pub fn kv_size() -> Result<f64, String> {
 }
 
 #[napi]
-pub fn kv_flush() -> Result<(), String> {
+pub fn kv_flush() -> Result<(), Error> {
     flush_to_disk()
 }
 
-fn flush_to_disk() -> Result<(), String> {
+fn flush_to_disk() -> Result<(), Error> {
     let path_guard = STORE_PATH.lock().unwrap();
     if let Some(ref path) = *path_guard {
         let store = STORE.lock().unwrap();
         if let Some(ref map) = *store {
             let data = serde_json::to_vec(map)
-                .map_err(|e| format!("Failed to serialize KV store: {}", e))?;
-            fs::write(path, data).map_err(|e| format!("Failed to write KV store: {}", e))?;
+                .map_err(|e| Error::from_reason(format!("Failed to serialize KV store: {}", e)))?;
+            fs::write(path, data)
+                .map_err(|e| Error::from_reason(format!("Failed to write KV store: {}", e)))?;
         }
     }
     Ok(())
 }
-
-// Re-export Buffer from napi
-use napi::bindgen_prelude::Buffer;
