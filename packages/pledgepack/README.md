@@ -1,6 +1,6 @@
 # PledgePack (Legacy Placeholder)
 
-> **Note:** PledgePack is now installed from npm as `pledgepack@^0.1.1`. This directory is a legacy placeholder excluded from the pnpm workspace. It is not used or maintained.
+> **Note:** PledgePack is now installed from npm as `pledgepack@^0.2.8`. This directory is a legacy placeholder excluded from the pnpm workspace. It is not used or maintained.
 
 ## Actual PledgePack
 
@@ -22,5 +22,5 @@ pledge bench    # Benchmark builds
 ```
 
 - **Repository:** `https://github.com/pledgeandgrow/pledgerepo`
-- **npm:** `pledgepack` (currently `0.1.1`)
+- **npm:** `pledgepack` (currently `0.2.8`)
 - **Binary:** Native Rust binary distributed via GitHub Releases + postinstall download

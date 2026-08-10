@@ -40,7 +40,8 @@
   },
   "dependencies": {
     "pledgestack-shared": "workspace:*",
-    "pledgestack-server": "workspace:*"
+    "pledgestack-server": "workspace:*",
+    "pledgestack-core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

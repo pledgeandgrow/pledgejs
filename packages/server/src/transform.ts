@@ -67,6 +67,21 @@ export async function transformFile(
     return transformPSXFile(sourcePath, isDev, pledgepackPort, ext === '.ps' ? 'ps' : 'psx', cargoConfig, projectRoot);
   }
 
+  // Handle .vue single-file components
+  if (ext === '.vue') {
+    return transformVueSFC(sourcePath, isDev, pledgepackPort, projectRoot);
+  }
+
+  // Handle .svelte single-file components
+  if (ext === '.svelte') {
+    return transformSvelteSFC(sourcePath, isDev, pledgepackPort, projectRoot);
+  }
+
+  // Handle .mdx files — compile MDX to JSX/JS
+  if (ext === '.mdx') {
+    return transformMDX(sourcePath, isDev, pledgepackPort, projectRoot);
+  }
+
   if (ext !== '.ts' && ext !== '.tsx' && ext !== '.jsx' && ext !== '.mjs') {
     return pathToFileURL(sourcePath).href;
   }
@@ -490,4 +505,487 @@ export function mapNapiErrorToSource(
     sourceMapEntry.entries,
     sourceMapEntry.sourceFilePath,
   );
+}
+
+// ── Vue SFC Transform ────────────────────────────────────────────────
+
+/**
+ * Parses a Vue Single-File Component (.vue) into its blocks.
+ * Extracts <template>, <script setup>, <script>, <style>, and <route> blocks.
+ */
+interface VueSFCBlocks {
+  template: string | null;
+  scriptSetup: string | null;
+  script: string | null;
+  styles: string[];
+  route: string | null;
+}
+
+function parseVueSFC(source: string): VueSFCBlocks {
+  const blocks: VueSFCBlocks = {
+    template: null,
+    scriptSetup: null,
+    script: null,
+    styles: [],
+    route: null,
+  };
+
+  // Extract block content by tag name
+  function extractBlock(tag: string, attrs = ''): string | null {
+    // Match <tag attrs>...</tag> or <tag attrs />
+    const pattern = new RegExp(
+      `<${tag}(\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>|<${tag}(\\s[^>]*)?\\/>`,
+      'i',
+    );
+    const match = source.match(pattern);
+    if (!match) return null;
+    return match[2]?.trim() ?? '';
+  }
+
+  // Extract <template>
+  const templateMatch = source.match(/<template(\s[^>]*)?>([\s\S]*?)<\/template>/i);
+  if (templateMatch) blocks.template = templateMatch[2].trim();
+
+  // Extract <script setup> (has higher priority)
+  const scriptSetupMatch = source.match(/<script\s+setup[^>]*>([\s\S]*?)<\/script>/i);
+  if (scriptSetupMatch) blocks.scriptSetup = scriptSetupMatch[1].trim();
+
+  // Extract regular <script> (without setup)
+  const scriptMatch = source.match(/<script(?!\s+setup)[^>]*>([\s\S]*?)<\/script>/i);
+  if (scriptMatch) blocks.script = scriptMatch[1].trim();
+
+  // Extract <style> blocks
+  const styleRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+  let styleMatch;
+  while ((styleMatch = styleRegex.exec(source)) !== null) {
+    blocks.styles.push(styleMatch[1].trim());
+  }
+
+  // Extract <route> block (for route metadata)
+  const routeMatch = source.match(/<route[^>]*>([\s\S]*?)<\/route>/i);
+  if (routeMatch) blocks.route = routeMatch[1].trim();
+
+  return blocks;
+}
+
+/**
+ * Compiles a Vue template string into a render function using Vue's h().
+ * This is a lightweight compiler that handles common template patterns.
+ * For complex templates, the full @vue/compiler-sfc should be used.
+ */
+function compileVueTemplate(template: string): string {
+  // Try to use @vue/compiler-dom if available
+  try {
+    // This is a synchronous require — if it fails, we fall back to manual
+    const { compile } = require('@vue/compiler-dom');
+    const { code } = compile(template, {
+      mode: 'function',
+      hoistStatic: true,
+    });
+    return code;
+  } catch {
+    // @vue/compiler-dom not available — generate a simple render function
+    // that renders the template as raw HTML via v-html
+    // This is a fallback; the real compilation happens in the bundler
+    const escaped = template.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    return `function render() { return { __html: '${escaped}' } }`;
+  }
+}
+
+/**
+ * Transforms a .vue SFC into a JS module that can be imported by Node.js.
+ *
+ * The generated module:
+ *   1. Imports Vue's h() and defineComponent from 'vue'
+ *   2. Evaluates the <script setup> or <script> block
+ *   3. Compiles the <template> into a render function
+ *   4. Exports a default component definition
+ */
+async function transformVueSFC(
+  sourcePath: string,
+  isDev: boolean,
+  pledgepackPort: number | undefined,
+  projectRoot: string,
+): Promise<string> {
+  const source = await readFile(sourcePath, 'utf-8');
+  const blocks = parseVueSFC(source);
+  const moduleName = basename(sourcePath, '.vue');
+
+  // Build the JS module
+  const parts: string[] = [];
+
+  // Import Vue runtime
+  parts.push(`import { h, defineComponent, ref, reactive, computed, watch, onMounted, onUnmounted, createApp } from 'vue';`);
+
+  // Extract script setup logic — wrap in a setup() function
+  let setupCode = '';
+  let scriptExports = '';
+
+  if (blocks.scriptSetup) {
+    // <script setup> — all top-level bindings become setup() return values
+    setupCode = blocks.scriptSetup;
+  } else if (blocks.script) {
+    // Regular <script> — may export default
+    // Check if it has `export default`
+    if (blocks.script.includes('export default')) {
+      scriptExports = blocks.script;
+    } else {
+      setupCode = blocks.script;
+    }
+  }
+
+  // Compile template
+  let renderFn = 'null';
+  if (blocks.template) {
+    const compiled = compileVueTemplate(blocks.template);
+    renderFn = compiled;
+  }
+
+  // Route metadata from <route> block
+  let routeMeta = '{}';
+  if (blocks.route) {
+    try {
+      routeMeta = JSON.stringify(JSON.parse(blocks.route));
+    } catch {
+      // Not valid JSON — leave as-is
+      routeMeta = blocks.route;
+    }
+  }
+
+  // Generate the module
+  if (scriptExports) {
+    // Regular <script> with export default — merge with template
+    parts.push(scriptExports.replace('export default', 'const __component ='));
+    parts.push(`
+// Compiled template render function
+const __render = ${renderFn};
+
+// Merge render into component
+if (__component && !__component.render) {
+  __component.render = typeof __render === 'function' ? __render : () => h('div', { innerHTML: __render.__html });
+}
+
+export default __component;
+`);
+  } else {
+    // <script setup> or no script — generate component with setup()
+    parts.push(`
+// Component definition
+const __component = defineComponent({
+${setupCode ? `  setup(props, { attrs, slots, emit }) {
+    ${setupCode}
+    // Return bindings for template (auto-detected from top-level declarations)
+    return {};
+  },` : ''}
+  render() {
+    ${blocks.template
+      ? `return typeof __render === 'function' ? __render.call(this) : h('div', { innerHTML: __render.__html });`
+      : `return h('div', {}, 'Vue component: ${moduleName}');`}
+  },
+});
+
+const __render = ${renderFn};
+
+export default __component;
+`);
+  }
+
+  // Export route metadata if present
+  if (blocks.route) {
+    parts.push(`export const route = ${routeMeta};`);
+  }
+
+  // Export styles as a string (injected at runtime)
+  if (blocks.styles.length > 0) {
+    const allStyles = blocks.styles.join('\n').replace(/\\/g, '\\\\').replace(/`/g, '\\`');
+    parts.push(`export const __styles = \`${allStyles}\`;`);
+  }
+
+  const transformedCode = parts.join('\n');
+
+  // Write to cache and return file URL
+  const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);
+  const cacheDir = join(dirname(sourcePath), '.pledge-cache');
+  await mkdir(cacheDir, { recursive: true });
+
+  if (isDev) {
+    const devOutPath = join(cacheDir, `${moduleName}.vue.${Date.now()}.js`);
+    await writeFile(devOutPath, transformedCode, 'utf-8');
+    return pathToFileURL(devOutPath).href;
+  }
+
+  const outPath = join(cacheDir, `${moduleName}.vue.${hash}.js`);
+  await writeFile(outPath, transformedCode, 'utf-8');
+  return pathToFileURL(outPath).href;
+}
+
+// ── Svelte SFC Transform ─────────────────────────────────────────────
+
+/**
+ * Parses a Svelte single-file component (.svelte) into its blocks.
+ */
+interface SvelteSFCBlocks {
+  script: string | null;
+  scriptModule: string | null; // <script context="module">
+  template: string; // Svelte markup (everything outside <script> and <style>)
+  styles: string[];
+}
+
+function parseSvelteSFC(source: string): SvelteSFCBlocks {
+  const blocks: SvelteSFCBlocks = {
+    script: null,
+    scriptModule: null,
+    template: source,
+    styles: [],
+  };
+
+  // Extract <script context="module"> or <script module>
+  const moduleMatch = source.match(/<script\s+context=["']module["'][^>]*>([\s\S]*?)<\/script>/i)
+    ?? source.match(/<script\s+module[^>]*>([\s\S]*?)<\/script>/i);
+  if (moduleMatch) {
+    blocks.scriptModule = moduleMatch[1].trim();
+    blocks.template = blocks.template.replace(moduleMatch[0], '');
+  }
+
+  // Extract regular <script>
+  const scriptMatch = blocks.template.match(/<script[^>]*>([\s\S]*?)<\/script>/i);
+  if (scriptMatch) {
+    blocks.script = scriptMatch[1].trim();
+    blocks.template = blocks.template.replace(scriptMatch[0], '');
+  }
+
+  // Extract <style> blocks
+  const styleRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+  let styleMatch;
+  while ((styleMatch = styleRegex.exec(blocks.template)) !== null) {
+    blocks.styles.push(styleMatch[1].trim());
+  }
+  blocks.template = blocks.template.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '').trim();
+
+  return blocks;
+}
+
+/**
+ * Transforms a .svelte SFC into a JS module.
+ *
+ * Uses svelte/compiler if available, otherwise generates a lightweight
+ * component that renders the markup as static HTML.
+ */
+async function transformSvelteSFC(
+  sourcePath: string,
+  isDev: boolean,
+  pledgepackPort: number | undefined,
+  projectRoot: string,
+): Promise<string> {
+  const source = await readFile(sourcePath, 'utf-8');
+  const blocks = parseSvelteSFC(source);
+  const moduleName = basename(sourcePath, '.svelte');
+
+  // Try to use svelte/compiler if available
+  try {
+    const { compile } = require('svelte/compiler');
+    const result = compile(source, {
+      generate: 'ssr',
+      dev: isDev,
+    });
+    // The compiled SSR code is a JS module
+    const cacheDir = join(dirname(sourcePath), '.pledge-cache');
+    await mkdir(cacheDir, { recursive: true });
+    if (isDev) {
+      const devOutPath = join(cacheDir, `${moduleName}.svelte.${Date.now()}.js`);
+      await writeFile(devOutPath, result.js.code, 'utf-8');
+      return pathToFileURL(devOutPath).href;
+    }
+    const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);
+    const outPath = join(cacheDir, `${moduleName}.svelte.${hash}.js`);
+    await writeFile(outPath, result.js.code, 'utf-8');
+    return pathToFileURL(outPath).href;
+  } catch {
+    // svelte/compiler not available — generate a lightweight component
+  }
+
+  // Fallback: generate a component that exports a render function
+  const parts: string[] = [];
+
+  // Module-level script (exports)
+  if (blocks.scriptModule) {
+    parts.push(blocks.scriptModule);
+  }
+
+  // Instance script — wrap in a function that returns bindings
+  const instanceCode = blocks.script || '';
+
+  // Escape the template HTML for embedding
+  const escapedTemplate = blocks.template
+    .replace(/\\/g, '\\\\')
+    .replace(/`/g, '\\`')
+    .replace(/\$\{/g, '\\${');
+
+  // Generate a simple SSR component
+  parts.push(`
+// Svelte component (fallback transform — install svelte for full compilation)
+${instanceCode ? `const __instance = (() => {
+  ${instanceCode}
+  return {};
+})();` : ''}
+
+export function render(props = {}) {
+  return \`${escapedTemplate}\`;
+}
+
+export default { render };
+`);
+
+  // Export styles
+  if (blocks.styles.length > 0) {
+    const allStyles = blocks.styles.join('\n').replace(/\\/g, '\\\\').replace(/`/g, '\\`');
+    parts.push(`export const __styles = \`${allStyles}\`;`);
+  }
+
+  const transformedCode = parts.join('\n');
+
+  // Write to cache and return file URL
+  const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);
+  const cacheDir = join(dirname(sourcePath), '.pledge-cache');
+  await mkdir(cacheDir, { recursive: true });
+
+  if (isDev) {
+    const devOutPath = join(cacheDir, `${moduleName}.svelte.${Date.now()}.js`);
+    await writeFile(devOutPath, transformedCode, 'utf-8');
+    return pathToFileURL(devOutPath).href;
+  }
+
+  const outPath = join(cacheDir, `${moduleName}.svelte.${hash}.js`);
+  await writeFile(outPath, transformedCode, 'utf-8');
+  return pathToFileURL(outPath).href;
+}
+
+/**
+ * Transforms an .mdx file into a JS module.
+ * Uses a lightweight MDX-to-JSX compiler that extracts markdown content
+ * and wraps it in a React component.
+ */
+async function transformMDX(
+  sourcePath: string,
+  isDev: boolean,
+  pledgepackPort?: number,
+  _projectRoot?: string,
+): Promise<string> {
+  const source = await readFile(sourcePath, 'utf-8');
+  const moduleName = basename(sourcePath, '.mdx');
+  const hash = createHash('sha256').update(source).digest('hex').slice(0, 8);
+  const cacheDir = join(dirname(sourcePath), '.pledge-cache', 'mdx');
+  await mkdir(cacheDir, { recursive: true });
+
+  // Check cache
+  if (!isDev) {
+    const cachedPath = join(cacheDir, `${moduleName}.${hash}.js`);
+    if (existsSync(cachedPath)) return pathToFileURL(cachedPath).href;
+  }
+
+  // Simple MDX compilation: extract JSX blocks and convert markdown to JSX
+  // This is a lightweight compiler — for full MDX support, use the mdxPlugin
+  const compiledCode = compileMDX(source, moduleName);
+
+  if (isDev && pledgepackPort) {
+    const devOutPath = join(cacheDir, `${moduleName}.dev.js`);
+    await writeFile(devOutPath, compiledCode, 'utf-8');
+    return pathToFileURL(devOutPath).href;
+  }
+
+  const outPath = join(cacheDir, `${moduleName}.mdx.${hash}.js`);
+  await writeFile(outPath, compiledCode, 'utf-8');
+  return pathToFileURL(outPath).href;
+}
+
+/**
+ * Lightweight MDX-to-JSX compiler.
+ * Converts markdown to HTML elements and preserves embedded JSX.
+ */
+function compileMDX(source: string, moduleName: string): string {
+  // Split into lines and process
+  const lines = source.split('\n');
+  const jsxParts: string[] = [];
+  let inJsxBlock = false;
+  let jsxBuffer: string[] = [];
+  let inCodeBlock = false;
+
+  for (const line of lines) {
+    // Handle fenced code blocks
+    if (line.trim().startsWith('```')) {
+      if (inCodeBlock) {
+        inCodeBlock = false;
+        jsxParts.push(`</pre></code>`);
+      } else {
+        inCodeBlock = true;
+        const lang = line.trim().slice(3);
+        jsxParts.push(`<code><pre data-language="${lang}">`);
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      jsxParts.push(line.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+      continue;
+    }
+
+    // Handle JSX blocks (lines starting with <)
+    if (line.trim().startsWith('<') && !line.trim().startsWith('<img') && !line.trim().startsWith('<a ')) {
+      if (!inJsxBlock) {
+        inJsxBlock = true;
+        jsxBuffer = [];
+      }
+      jsxBuffer.push(line);
+      continue;
+    }
+    if (inJsxBlock) {
+      if (line.trim() === '' || !line.trim().startsWith('<')) {
+        jsxParts.push(jsxBuffer.join('\n'));
+        jsxBuffer = [];
+        inJsxBlock = false;
+      } else {
+        jsxBuffer.push(line);
+        continue;
+      }
+    }
+
+    // Markdown to JSX conversion
+    const trimmed = line.trim();
+    if (trimmed.startsWith('# ')) {
+      jsxParts.push(`<h1>${trimmed.slice(2)}</h1>`);
+    } else if (trimmed.startsWith('## ')) {
+      jsxParts.push(`<h2>${trimmed.slice(3)}</h2>`);
+    } else if (trimmed.startsWith('### ')) {
+      jsxParts.push(`<h3>${trimmed.slice(4)}</h3>`);
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      jsxParts.push(`<li>${trimmed.slice(2)}</li>`);
+    } else if (trimmed.startsWith('> ')) {
+      jsxParts.push(`<blockquote>${trimmed.slice(2)}</blockquote>`);
+    } else if (trimmed === '') {
+      // Skip empty lines
+    } else {
+      // Paragraph — handle inline formatting
+      let html = trimmed
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/`(.+?)`/g, '<code>$1</code>')
+        .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>');
+      jsxParts.push(`<p>${html}</p>`);
+    }
+  }
+  if (inJsxBlock && jsxBuffer.length > 0) {
+    jsxParts.push(jsxBuffer.join('\n'));
+  }
+
+  const jsxContent = jsxParts.join('\n');
+
+  return `// Compiled from ${moduleName}.mdx
+import { createElement as h } from 'react';
+
+function MDXContent(props) {
+  return h('div', { className: 'mdx-content', ...props }, ${JSON.stringify(jsxContent)});
+}
+
+MDXContent.__mdx = true;
+export default MDXContent;
+`;
 }

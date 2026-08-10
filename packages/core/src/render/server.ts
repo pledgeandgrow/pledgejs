@@ -6,7 +6,8 @@ import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModu
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
 import { renderHeadTags, renderViewportTags, mergeMetadata } from './head-tags';
-import { recordRender, getCompiledTemplate } from '../psx/jit-templates';
+import { recordRender, getCompiledTemplate, storeCompiledTemplate } from '../psx/jit-templates';
+import { escapeHtmlShared } from './head-tags';
 
 /** Simple string hash for template profiling */
 function simpleHash(str: string): number {
@@ -53,13 +54,73 @@ class ErrorBoundary extends Component<{ fallback: ComponentType<{ error: Error; 
 /**
  * Renders a route match to an HTML string using SSR.
  * Wraps the page in its layout chain with loading and error boundaries.
+ *
+ * Delegates to the active renderer adapter if initialized (framework-agnostic).
+ * Falls back to the built-in React renderer if no adapter is registered.
  */
 export async function renderSSR(ctx: SSRContext): Promise<string> {
+  // Try to use the renderer adapter (framework-agnostic path)
+  try {
+    const { getRenderer, isRendererInitialized } = await import('./renderer-manager');
+    if (isRendererInitialized()) {
+      const renderer = getRenderer();
+      return renderer.renderToString({
+        match: ctx.match,
+        tree: ctx.tree,
+        modules: ctx.modules as Map<string, unknown>,
+        searchParams: ctx.searchParams,
+        rsc: ctx.config.rsc,
+      });
+    }
+  } catch (err) {
+    console.warn('[pledgestack] Custom renderer not available, using built-in:', err);
+  }
+
+  // Try hybrid SSR (Rust static + React dynamic) when Rust addons are available
+  try {
+    const { renderHybridSSR } = await import('./hybrid-ssr');
+    const { isRustDomRendererAvailable } = await import('./rust-dom-renderer');
+    if (isRustDomRendererAvailable()) {
+      const result = await renderHybridSSR({
+        config: ctx.config,
+        match: ctx.match,
+        tree: ctx.tree,
+        modules: ctx.modules as Map<string, PageModule | LayoutModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule | TemplateModule>,
+        searchParams: ctx.searchParams,
+      });
+      if (result.html) return result.html;
+    }
+  } catch (err) {
+    console.warn('[pledgestack] Hybrid SSR failed, using standard React renderer:', err);
+  }
+
+  // Built-in React renderer (backward compatibility)
   const { match, tree, modules } = ctx;
 
   const pageModule = modules.get(match.route.filePath) as PageModule | undefined;
   if (!pageModule) {
-    throw new Error(`Page module not found: ${match.route.filePath}`);
+    // Instead of crashing, render a fallback error page
+    console.error(`[pledgestack] Page module not found: ${match.route.filePath}`);
+    const errorModule = match.route.errorFilePath
+      ? modules.get(match.route.errorFilePath) as ErrorModule | undefined
+      : undefined;
+    if (errorModule) {
+      const errorElement = createElement(errorModule.default, {
+        error: new Error(`Module not found: ${match.route.filePath}`),
+        reset: () => {},
+      });
+      const errorHtml = renderToString(errorElement);
+      return wrapHtml(errorHtml, match.route, { title: 'Module Not Found' });
+    }
+    return wrapHtml(
+      `<div style="text-align:center;padding:2rem;font-family:sans-serif">
+        <h1>Module Not Found</h1>
+        <p>The page module could not be loaded: <code>${match.route.filePath}</code></p>
+        <p>Try restarting the dev server or running <code>pledge build</code>.</p>
+      </div>`,
+      match.route,
+      { title: 'Module Not Found' },
+    );
   }
 
   // Resolve page metadata (from generateMetadata or static metadata export)
@@ -177,9 +238,18 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
   // JIT template profiling — check if a compiled template exists for this route
   const compiledTemplate = getCompiledTemplate(match.route.pattern);
   if (compiledTemplate) {
-    // Use compiled template (bypasses React reconciliation for hot routes)
-    // The compiled template is a function that produces HTML directly from params
-    // For now, we still render via React but record the render for profiling
+    // Use compiled template — bypasses React reconciliation for hot routes.
+    // The compiled template is an HTML string with {{placeholder}} markers
+    // that are replaced with route-specific data.
+    const filled = fillCompiledTemplate(compiledTemplate, {
+      params: match.params,
+      searchParams: ctx.searchParams ?? {},
+      metadata,
+    });
+    // Record this render for JIT profiling (keeps the template hot)
+    const templateHash = simpleHash(filled);
+    recordRender(match.route.pattern, templateHash);
+    return filled;
   }
 
   const html = renderToString(createElement(() => element as ReactNode));
@@ -187,9 +257,55 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
 
   // Record this render for JIT profiling
   const templateHash = simpleHash(fullHtml);
-  recordRender(match.route.pattern, templateHash);
+  const profileResult = recordRender(match.route.pattern, templateHash);
+
+  // If the profiler says we should compile, store the template for future use
+  if (profileResult.shouldCompile) {
+    await storeCompiledTemplate(match.route.pattern, fullHtml);
+  }
 
   return fullHtml;
+}
+
+/**
+ * Fills a compiled HTML template with route-specific data.
+ *
+ * Compiled templates contain {{placeholder}} markers that are replaced
+ * with values from the render context. Supported placeholders:
+ * - {{param.NAME}} — route params
+ * - {{searchParam.NAME}} — search params
+ * - {{title}} — page title from metadata
+ * - {{description}} — page description from metadata
+ */
+function fillCompiledTemplate(
+  template: string,
+  data: {
+    params: Record<string, string>;
+    searchParams: Record<string, string>;
+    metadata: HeadMetadata;
+  },
+): string {
+  let result = template;
+
+  // Replace param placeholders
+  for (const [key, value] of Object.entries(data.params)) {
+    result = result.replaceAll(`{{param.${key}}}`, escapeHtmlShared(value));
+  }
+
+  // Replace searchParam placeholders
+  for (const [key, value] of Object.entries(data.searchParams)) {
+    result = result.replaceAll(`{{searchParam.${key}}}`, escapeHtmlShared(value));
+  }
+
+  // Replace metadata placeholders
+  if (data.metadata.title) {
+    result = result.replaceAll(`{{title}}`, escapeHtmlShared(data.metadata.title));
+  }
+  if (data.metadata.description) {
+    result = result.replaceAll(`{{description}}`, escapeHtmlShared(data.metadata.description));
+  }
+
+  return result;
 }
 
 /**
@@ -246,8 +362,8 @@ async function resolveMetadata(pageModule: PageModule, params: Record<string, st
   if (pageModule.generateMetadata) {
     try {
       return await pageModule.generateMetadata(params);
-    } catch {
-      // Fall through to static metadata
+    } catch (err) {
+      console.warn('[pledgestack] generateMetadata() failed, using static metadata:', err);
     }
   }
 
@@ -265,8 +381,8 @@ async function resolveLayoutMetadata(layoutModule: LayoutModule, params: Record<
   if (layoutModule.generateMetadata) {
     try {
       return await layoutModule.generateMetadata(params);
-    } catch {
-      // Fall through to static metadata
+    } catch (err) {
+      console.warn('[pledgestack] Layout generateMetadata() failed, using static metadata:', err);
     }
   }
   if (layoutModule.metadata) {
@@ -290,8 +406,8 @@ async function resolveHead(
         const headElement = createElement(headModule.default, {});
         const headContent = renderToString(headElement);
         return headContent;
-      } catch {
-        // Fall through to metadata-based head
+      } catch (err) {
+        console.warn('[pledgestack] Head component render failed, using metadata tags:', err);
       }
     }
   }
@@ -332,8 +448,8 @@ async function resolveViewport(pageModule: PageModule): Promise<Viewport | undef
   if (pageModule.generateViewport) {
     try {
       return await pageModule.generateViewport();
-    } catch {
-      // Fall through to static viewport
+    } catch (err) {
+      console.warn('[pledgestack] generateViewport() failed, using static viewport:', err);
     }
   }
   if (pageModule.viewport) {

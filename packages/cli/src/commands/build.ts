@@ -1,6 +1,7 @@
 import { mkdir, writeFile, copyFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { PledgeConfig } from 'pledgestack-shared';
+import { PluginRunner } from 'pledgestack-shared';
 import { resolveBundlerAdapter } from '../bundler-resolver';
 import { scanAppDir, resolveRoutes, generateStaticPages, generateStaticExport, renderSSR, buildAllTargets, writeRouteTypes, detectRouteConflicts, formatRouteConflicts } from 'pledgestack-core';
 import { createModuleLoader, loadEnv } from 'pledgestack-server';
@@ -17,11 +18,22 @@ import { processTailwind, ensureTailwindConfig } from '../tailwind';
  */
 export async function buildCommand(opts?: { crossCompile?: boolean }): Promise<void> {
   const { loadConfig } = await import('../config-loader');
-  const config = await loadConfig();
+  let config: PledgeConfig;
+  try {
+    config = await loadConfig();
+  } catch (err) {
+    console.error('\n  ✖ Failed to load configuration:\n');
+    console.error(`    ${err}\n`);
+    process.exit(1);
+  }
 
   loadEnv(config.rootDir, 'production');
 
   console.log('\n  PledgeStack — Building for production...\n');
+
+  // Run plugin buildStart hooks
+  const pluginRunner = new PluginRunner(config.plugins ?? []);
+  await pluginRunner.runBuildStart(config);
 
   // 1. Run the configured bundler
   const bundlerName = config.bundler ?? 'pledgepack';
@@ -74,6 +86,7 @@ export async function buildCommand(opts?: { crossCompile?: boolean }): Promise<v
       config,
       routes,
       outputDir: outDir,
+      modules: modules as Map<string, { generateStaticParams?: () => Promise<Record<string, string>[]> }>,
       renderPage: async (route, params) => {
         const match = router.match(route.pattern);
         if (!match) throw new Error(`No match for route: ${route.pattern}`);
@@ -129,6 +142,29 @@ export async function buildCommand(opts?: { crossCompile?: boolean }): Promise<v
       console.error(`  ✗ ${failed} target(s) failed`);
     }
     console.log(`  ✓ Manifest written to ${join(distDir, 'manifest.json')}`);
+  }
+
+  // Run plugin buildEnd hooks
+  await pluginRunner.runBuildEnd(config);
+
+  // Generate SBOM for supply chain security
+  try {
+    const { writeSBOM } = await import('pledgestack-server');
+    const sbomPath = writeSBOM(config.rootDir, join(config.rootDir, config.outDir));
+    console.log(`  ✓ SBOM written to ${sbomPath}`);
+  } catch (err) {
+    console.warn(`  ⚠ SBOM generation failed: ${err}`);
+  }
+
+  // Purge CDN cache if configured
+  if ((config as unknown as Record<string, unknown>).cdn) {
+    try {
+      const { purgeCache } = await import('pledgestack-server');
+      await purgeCache((config as unknown as Record<string, unknown>).cdn as Record<string, unknown>);
+      console.log('  ✓ CDN cache purged');
+    } catch (err) {
+      console.warn(`  ⚠ CDN purge failed: ${err}`);
+    }
   }
 
   console.log('\n  Build complete!\n');

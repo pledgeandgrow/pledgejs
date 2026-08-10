@@ -129,6 +129,66 @@ interface FailedAttempt {
 
 const attemptStore = new Map<string, FailedAttempt>();
 
+/** Max entries in the brute force store before cleanup evicts stale entries */
+const MAX_ATTEMPT_STORE_ENTRIES = 10000;
+
+/** Periodic cleanup interval (10 minutes) */
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+let bruteForceCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Removes stale entries from the attempt store.
+ * An entry is stale if its window has passed AND it's not currently locked out.
+ */
+function cleanupStaleAttempts(): void {
+  const now = Date.now();
+  for (const [key, entry] of attemptStore.entries()) {
+    const windowPassed = now - entry.firstAttemptAt > defaultBruteForceConfig.windowMs;
+    const notLocked = entry.lockedUntil <= now;
+    if (windowPassed && notLocked) {
+      attemptStore.delete(key);
+    }
+  }
+}
+
+/**
+ * Ensures the periodic cleanup timer is running.
+ * Called automatically when brute force protection is used.
+ */
+function ensureBruteForceCleanup(): void {
+  if (bruteForceCleanupTimer) return;
+  bruteForceCleanupTimer = setInterval(cleanupStaleAttempts, CLEANUP_INTERVAL_MS);
+  if (bruteForceCleanupTimer.unref) bruteForceCleanupTimer.unref();
+}
+
+/**
+ * Stops the brute force cleanup timer (for tests or graceful shutdown).
+ */
+export function stopBruteForceCleanup(): void {
+  if (bruteForceCleanupTimer) {
+    clearInterval(bruteForceCleanupTimer);
+    bruteForceCleanupTimer = null;
+  }
+}
+
+/**
+ * Enforces max entry limit by removing stale entries first, then oldest if needed.
+ */
+function enforceAttemptStoreLimit(): void {
+  if (attemptStore.size <= MAX_ATTEMPT_STORE_ENTRIES) return;
+  // First try cleaning up stale entries
+  cleanupStaleAttempts();
+  // If still over limit, remove oldest entries
+  if (attemptStore.size <= MAX_ATTEMPT_STORE_ENTRIES) return;
+  const toEvict = attemptStore.size - MAX_ATTEMPT_STORE_ENTRIES;
+  let count = 0;
+  for (const key of attemptStore.keys()) {
+    if (count >= toEvict) break;
+    attemptStore.delete(key);
+    count++;
+  }
+}
+
 export interface BruteForceConfig {
   /** Max attempts before lockout */
   maxAttempts: number;
@@ -169,6 +229,7 @@ export function checkBruteForce(
   identifier: string,
   config: Partial<BruteForceConfig> = {},
 ): BruteForceCheckResult {
+  ensureBruteForceCleanup();
   const cfg = { ...defaultBruteForceConfig, ...config };
   const now = Date.now();
   let entry = attemptStore.get(identifier);
@@ -248,6 +309,7 @@ export function recordFailedAttempt(
   }
 
   attemptStore.set(identifier, entry);
+  enforceAttemptStoreLimit();
 
   return checkBruteForce(identifier, config);
 }

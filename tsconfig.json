@@ -11,6 +11,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "ignoreDeprecations": "5.0",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
@@ -55,6 +56,14 @@
       "pledgestack-overlay/*": ["./packages/overlay/src/*"],
       "pledgestack-seo": ["./packages/seo/src/index.ts"],
       "pledgestack-seo/*": ["./packages/seo/src/*"],
+      "pledgestack-renderer-react": ["./packages/renderer-react/src/index.ts"],
+      "pledgestack-renderer-react/*": ["./packages/renderer-react/src/*"],
+      "pledgestack-renderer-vue": ["./packages/renderer-vue/src/index.ts"],
+      "pledgestack-renderer-vue/*": ["./packages/renderer-vue/src/*"],
+      "pledgestack-renderer-solid": ["./packages/renderer-solid/src/index.ts"],
+      "pledgestack-renderer-solid/*": ["./packages/renderer-solid/src/*"],
+      "pledgestack-renderer-svelte": ["./packages/renderer-svelte/src/index.ts"],
+      "pledgestack-renderer-svelte/*": ["./packages/renderer-svelte/src/*"],
       "pledgepack": ["./packages/pledgepack/index.d.ts"]
     }
   },

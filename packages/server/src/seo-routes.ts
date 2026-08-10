@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { PledgeConfig, PledgeResponse } from 'pledgestack-shared';
 import type { RouteTree, RouteTreeNode } from 'pledgestack-core';
 import { generateRobotsTxt, generateSitemapXML, routesToSitemapEntries } from 'pledgestack-sitemap';
+import { generateRSSFeed, generateAtomFeed, generateJSONFeed, type FeedItem } from 'pledgestack-rss';
 
 /**
  * Checks if a file exists in the public directory.
@@ -110,6 +111,62 @@ export async function tryServeSeoRoute(
       status: 200,
       headers: { 'Content-Type': 'application/xml; charset=utf-8' },
       body: sitemapContent,
+    };
+  }
+
+  // RSS feed (rss.xml) — generated from feed.ts or feed/ directory if present
+  if (pathname === '/rss.xml' || pathname === '/feed.xml' || pathname === '/feed.json' || pathname === '/atom.xml') {
+    // Check public/ for static feed first
+    const filename = pathname.slice(1);
+    const staticContent = await tryReadPublicFile(config, filename);
+    if (staticContent !== null) {
+      const contentType = pathname.endsWith('.json')
+        ? 'application/json; charset=utf-8'
+        : 'application/rss+xml; charset=utf-8';
+      return { status: 200, headers: { 'Content-Type': contentType }, body: staticContent };
+    }
+
+    // Try to load feed items from the app's feed module
+    const baseUrl = config.siteUrl ?? `http://localhost:3000`;
+    let items: FeedItem[] = [];
+    try {
+      const feedPath = join(config.rootDir, config.appDir, 'feed.ts');
+      const { existsSync } = await import('node:fs');
+      if (existsSync(feedPath)) {
+        const mod = await import(feedPath).catch(() => null);
+        if (mod?.default) {
+          items = await mod.default();
+        }
+      }
+    } catch {
+      // No feed module — return empty feed
+    }
+
+    const feedOpts = {
+      title: 'RSS Feed',
+      description: 'Latest updates',
+      link: baseUrl,
+      items,
+    };
+
+    if (pathname === '/feed.json') {
+      return {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: generateJSONFeed(feedOpts),
+      };
+    }
+    if (pathname === '/atom.xml') {
+      return {
+        status: 200,
+        headers: { 'Content-Type': 'application/atom+xml; charset=utf-8' },
+        body: generateAtomFeed(feedOpts),
+      };
+    }
+    return {
+      status: 200,
+      headers: { 'Content-Type': 'application/rss+xml; charset=utf-8' },
+      body: generateRSSFeed(feedOpts),
     };
   }
 

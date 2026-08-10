@@ -1,4 +1,4 @@
-import type { Server } from 'node:http';
+import type { Server, IncomingMessage, ServerResponse } from 'node:http';
 
 export interface GracefulShutdownOptions {
   /** Timeout before forcing shutdown (default: 10000ms) */
@@ -11,6 +11,44 @@ export interface GracefulShutdownOptions {
   servers?: Server[];
 }
 
+/**
+ * Tracks in-flight requests so graceful shutdown can wait for them to complete.
+ */
+class RequestTracker {
+  private inflight = new Set<IncomingMessage>();
+  private drainWaiters: Array<() => void> = [];
+
+  track(req: IncomingMessage, res: ServerResponse): void {
+    this.inflight.add(req);
+    res.on('finish', () => {
+      this.inflight.delete(req);
+      if (this.inflight.size === 0) {
+        for (const waiter of this.drainWaiters) waiter();
+        this.drainWaiters = [];
+      }
+    });
+    res.on('close', () => {
+      this.inflight.delete(req);
+      if (this.inflight.size === 0) {
+        for (const waiter of this.drainWaiters) waiter();
+        this.drainWaiters = [];
+      }
+    });
+  }
+
+  get count(): number {
+    return this.inflight.size;
+  }
+
+  /** Returns a promise that resolves when all in-flight requests complete */
+  waitForDrain(): Promise<void> {
+    if (this.inflight.size === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.drainWaiters.push(resolve);
+    });
+  }
+}
+
 export function setupGracefulShutdown(options: GracefulShutdownOptions = {}) {
   const {
     timeout = 10000,
@@ -20,6 +58,12 @@ export function setupGracefulShutdown(options: GracefulShutdownOptions = {}) {
   } = options;
 
   let shuttingDown = false;
+  const tracker = new RequestTracker();
+
+  /** Middleware to track in-flight requests. Call this for each request. */
+  function trackRequest(req: IncomingMessage, res: ServerResponse): void {
+    tracker.track(req, res);
+  }
 
   async function shutdown(signal: string) {
     if (shuttingDown) return;
@@ -32,12 +76,18 @@ export function setupGracefulShutdown(options: GracefulShutdownOptions = {}) {
       process.exit(1);
     }, timeout);
 
+    // Stop accepting new connections
     for (const server of servers) {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      server.close();
     }
 
+    // Wait for in-flight requests to complete
+    if (tracker.count > 0) {
+      logger(`Waiting for ${tracker.count} in-flight request(s) to complete...`);
+      await tracker.waitForDrain();
+    }
+
+    // Run shutdown hooks
     for (const fn of onShutdown) {
       try {
         await fn();
@@ -54,5 +104,5 @@ export function setupGracefulShutdown(options: GracefulShutdownOptions = {}) {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  return { shutdown, isShuttingDown: () => shuttingDown };
+  return { shutdown, isShuttingDown: () => shuttingDown, trackRequest, getInflightCount: () => tracker.count };
 }

@@ -34,34 +34,48 @@ function compilePattern(pattern: MatcherPattern): RegExp {
     }
   }
 
-  // Check if it looks like a regex (starts with / and contains regex chars)
-  if (pattern.startsWith('/') && /[\(\)\?\!\|\[\]\{\}\+\*\\\^]/.test(pattern.slice(1))) {
-    // Treat as regex — strip leading and trailing /
+  // Check if it looks like a regex literal: /pattern/flags
+  // Must start with / and end with /flags where flags are valid regex flags
+  if (pattern.startsWith('/') && pattern.length > 1) {
     const body = pattern.slice(1);
     const lastSlash = body.lastIndexOf('/');
-    try {
-      if (lastSlash !== -1) {
-        const flags = body.slice(lastSlash + 1);
+    if (lastSlash !== -1) {
+      const flags = body.slice(lastSlash + 1);
+      // Only treat as regex literal if flags are valid regex flags
+      if (lastSlash > 0 && /^[gimsuyd]*$/.test(flags)) {
         const source = body.slice(0, lastSlash);
-        return new RegExp(source, flags);
+        try {
+          return new RegExp(source, flags);
+        } catch (err) {
+          throw new Error(`Invalid middleware regex pattern "${pattern}": ${(err as Error).message}`);
+        }
       }
-      // No closing slash — treat as regex source directly
-      return new RegExp(body);
+    }
+  }
+
+  // Check for regex-specific syntax that indicates a raw regex (not a glob/path pattern)
+  // Patterns like ((?!api).*) or (^/api) should be treated as raw regex
+  if (/\(\?!|\(\?=|\(\?:|\(\?<=|\(\?<!|\[\^|\|/.test(pattern)) {
+    try {
+      return new RegExp(pattern);
     } catch (err) {
       throw new Error(`Invalid middleware regex pattern "${pattern}": ${(err as Error).message}`);
     }
   }
 
-  // Convert path pattern to regex
+  // Convert path pattern to regex (glob-like syntax)
   let regex = pattern
-    .replace(/:[a-zA-Z0-9_]+/g, '[^/]+')     // :param → [^/]+
-    .replace(/\*/g, '.*')                      // * → .*
-    .replace(/\?/g, '[^/]?');                   // ? → [^/]?
+    .replace(/:[a-zA-Z0-9_]+/g, '\x00PARAM\x00')  // :param → placeholder
+    .replace(/\*/g, '\x00STAR\x00')                  // * → placeholder
+    .replace(/\?/g, '\x00OPT\x00');                   // ? → placeholder
 
-  // Escape special regex chars that aren't our replacements
+  // Escape special regex chars
   regex = regex.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  // Restore .* and [^/]+ that were escaped
-  regex = regex.replace(/\\\.\*/g, '.*').replace(/\\\[\\^\/\\\]\\+/g, '[^/]+');
+
+  // Replace placeholders with actual regex patterns
+  regex = regex.replace(/\x00PARAM\x00/g, '[^/]+')
+    .replace(/\x00STAR\x00/g, '.*')
+    .replace(/\x00OPT\x00/g, '[^/]?');
 
   return new RegExp(`^${regex}$`);
 }

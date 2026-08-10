@@ -31,7 +31,7 @@ let rustHydrationAddon: Record<string, (...args: unknown[]) => unknown> | null =
 export function isRustHydrationGeneratorAvailable(): boolean {
   if (rustHydrationAvailable !== null) return rustHydrationAvailable;
   try {
-    const addon = require('../native/rust-hydration-generator.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../native/rust-hydration.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.generateHydrationScript === 'function') {
       rustHydrationAddon = addon;
       rustHydrationAvailable = true;

@@ -267,6 +267,38 @@ async function main() {
       });
       break;
     }
+    case 'codemod': {
+      const { runCodemod, listCodemods } = await import('./commands/codemod');
+      const codemodName = positionals[1];
+      if (!codemodName) {
+        // List available codemods if no name provided
+        const codemods = listCodemods();
+        console.log('\n  Available codemods:');
+        for (const c of codemods) {
+          console.log(`    ${c.name} — ${c.description}`);
+        }
+        console.log('\n  Usage: pledge codemod <name> <path>\n');
+        break;
+      }
+      const targetPath = positionals[2] ?? '.';
+      await runCodemod({ name: codemodName, path: targetPath, dryRun: values.check as boolean | undefined });
+      break;
+    }
+    case 'docker': {
+      const { generateDockerfile, generateDockerIgnore, generateDockerCompose } = await import('./commands/docker');
+      const subcommand = positionals[1] ?? 'generate';
+      if (subcommand === 'compose') {
+        await generateDockerCompose({ port: opts.port });
+        console.log('  ✓ docker-compose.yml generated');
+      } else if (subcommand === 'ignore') {
+        await generateDockerIgnore();
+        console.log('  ✓ .dockerignore generated');
+      } else {
+        await generateDockerfile({ port: opts.port, output: values.output as string | undefined });
+        console.log('  ✓ Dockerfile generated');
+      }
+      break;
+    }
     default:
       console.error(`Unknown command: ${command}`);
       printHelp();
@@ -309,6 +341,8 @@ function printHelp() {
     storybook  Set up zero-config Storybook for PledgeStack
     playground Start PSX REPL playground (Rust + TSX in browser)
     search   Index pages and search content (pledge search [query])
+    codemod  Run code transformations (pledge codemod <name> <path>)
+    docker   Generate Dockerfile, .dockerignore, docker-compose.yml
 
   Options:
     -p, --port <number>      Server port (default: 3000)
@@ -360,6 +394,11 @@ function printHelp() {
     pledge playground --port 8080
     pledge search
     pledge search "react hooks"
+    pledge codemod
+    pledge codemod pledgejs-to-pledgestack src/
+    pledge docker
+    pledge docker compose
+    pledge docker ignore
   `);
 }
 

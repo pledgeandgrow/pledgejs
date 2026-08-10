@@ -30,7 +30,9 @@
     "esbuild": "^0.24.0",
     "pledgestack-shared": "workspace:*",
     "pledgestack-core": "workspace:*",
-    "pledgestack-sitemap": "workspace:*"
+    "pledgestack-sitemap": "workspace:*",
+    "pledgestack-auth": "workspace:*",
+    "pledgestack-rss": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

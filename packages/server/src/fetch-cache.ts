@@ -28,7 +28,7 @@ export {
 
 import { createHash } from 'node:crypto';
 import { clearCache as clearCoreCache, revalidateTag as coreRevalidateTag, revalidatePath as coreRevalidatePath } from 'pledgestack-core';
-import { kvOpen, kvSet, isNativeKvStoreAvailable } from 'pledgestack-core';
+import { kvOpen, kvSet, kvGet, kvKeys, isNativeKvStoreAvailable } from 'pledgestack-core';
 
 // --- Server-specific extensions ---
 
@@ -50,6 +50,26 @@ interface ServerCacheEntry {
 const serverCache = new Map<string, ServerCacheEntry>();
 const serverTagIndex = new Map<string, Set<string>>();
 
+/** Maximum server cache entries before LRU eviction */
+const MAX_SERVER_CACHE_ENTRIES = 5000;
+
+function enforceServerMaxEntries(): void {
+  if (serverCache.size <= MAX_SERVER_CACHE_ENTRIES) return;
+  const toEvict = serverCache.size - MAX_SERVER_CACHE_ENTRIES;
+  let count = 0;
+  for (const key of serverCache.keys()) {
+    if (count >= toEvict) break;
+    serverCache.delete(key);
+    for (const [tag, keys] of serverTagIndex.entries()) {
+      if (keys.has(key)) {
+        keys.delete(key);
+        if (keys.size === 0) serverTagIndex.delete(tag);
+      }
+    }
+    count++;
+  }
+}
+
 /**
  * Server-side cached fetch with Response cloning and background revalidation.
  * Supports 'force-cache', 'no-store', 'default', and 'isr' cache modes.
@@ -62,6 +82,20 @@ export async function serverCachedFetch(url: string | URL, options: FetchOptions
   const cacheMode = options.cache ?? 'default';
   const revalidate = options.revalidate;
   const tags = options.tags ?? [];
+
+  // SSRF protection — validate URL before fetching
+  try {
+    const { isSafeUrl } = await import('pledgestack-auth');
+    const result = await isSafeUrl(urlStr);
+    if (!result.safe) {
+      throw new Error(`SSRF blocked: ${urlStr} — ${result.reason ?? 'private/internal address'}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('SSRF blocked')) {
+      throw err;
+    }
+    // URL parsing failed — let the actual fetch handle it
+  }
 
   if (cacheMode === 'no-store') {
     return fetch(url, stripPledgeOptions(options));
@@ -106,6 +140,8 @@ export async function serverCachedFetch(url: string | URL, options: FetchOptions
     if (!serverTagIndex.has(tag)) serverTagIndex.set(tag, new Set());
     serverTagIndex.get(tag)!.add(cacheKey);
   }
+
+  enforceServerMaxEntries();
 
   return response.clone();
 }
@@ -219,14 +255,64 @@ async function persistToKV(cacheKey: string, response: Response): Promise<void> 
 }
 
 /**
- * Retrieves a cached response from the KV store.
+ * Retrieves cached responses from the KV store.
  * Used on server startup to restore cache from disk.
+ * Iterates all keys with the fetch-cache: prefix and loads them into serverCache.
  */
 export async function restoreFromKV(): Promise<void> {
   if (!kvInitialized) return;
-  // In a full implementation, we'd iterate all keys with the prefix
-  // and restore them into the serverCache Map.
-  // For now, this is a placeholder for the restore logic.
+
+  try {
+    const allKeys = await kvKeys();
+    const cacheKeys = allKeys.filter((k) => k.startsWith(KV_PREFIX));
+
+    for (const key of cacheKeys) {
+      try {
+        const buf = await kvGet(key);
+        if (!buf) continue;
+
+        const entry = JSON.parse(buf.toString('utf-8')) as {
+          url: string;
+          status: number;
+          headers: Record<string, string>;
+          body: string;
+          timestamp: number;
+          revalidate?: number;
+          tags?: string[];
+        };
+
+        // Reconstruct Response object from cached data
+        const response = new Response(entry.body, {
+          status: entry.status,
+          headers: entry.headers,
+        });
+
+        const cacheKey = key.slice(KV_PREFIX.length);
+        const cacheEntry: ServerCacheEntry = {
+          response,
+          timestamp: entry.timestamp,
+          revalidate: entry.revalidate,
+          tags: entry.tags ?? [],
+        };
+
+        serverCache.set(cacheKey, cacheEntry);
+
+        // Rebuild tag index
+        for (const tag of cacheEntry.tags) {
+          let tagSet = serverTagIndex.get(tag);
+          if (!tagSet) {
+            tagSet = new Set();
+            serverTagIndex.set(tag, tagSet);
+          }
+          tagSet.add(cacheKey);
+        }
+      } catch {
+        // Skip corrupted entries
+      }
+    }
+  } catch {
+    // KV store not available or read failed — continue with empty cache
+  }
 }
 
 /**

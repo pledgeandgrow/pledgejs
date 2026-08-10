@@ -31,6 +31,78 @@ const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<unknown>>();
 const tagIndex = new Map<string, Set<string>>();
 
+/** Maximum number of cache entries before LRU eviction kicks in */
+const MAX_CACHE_ENTRIES = 10000;
+
+/** Interval for periodic expired-entry cleanup (5 minutes) */
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Evicts least-recently-used entries when cache exceeds MAX_CACHE_ENTRIES.
+ * Map iteration order in JS follows insertion order, so the first entries
+ * are the oldest. We delete from the front until we're under the limit.
+ */
+function enforceMaxEntries(): void {
+  if (cache.size <= MAX_CACHE_ENTRIES) return;
+  const toEvict = cache.size - MAX_CACHE_ENTRIES;
+  let count = 0;
+  for (const key of cache.keys()) {
+    if (count >= toEvict) break;
+    cache.delete(key);
+    // Clean up tag index for evicted key
+    for (const [tag, keys] of tagIndex.entries()) {
+      if (keys.has(key)) {
+        keys.delete(key);
+        if (keys.size === 0) tagIndex.delete(tag);
+      }
+    }
+    count++;
+  }
+}
+
+/**
+ * Removes expired entries from the cache.
+ * Called periodically by the cleanup timer.
+ */
+function cleanupExpiredEntries(): void {
+  const now = Date.now();
+  for (const [key, entry] of cache.entries()) {
+    const age = (now - entry.timestamp) / 1000;
+    // Remove entries that have passed their revalidation window
+    // (Infinity means cache forever, so skip those)
+    if (entry.revalidate !== Infinity && age > entry.revalidate * 2) {
+      cache.delete(key);
+      for (const [tag, keys] of tagIndex.entries()) {
+        if (keys.has(key)) {
+          keys.delete(key);
+          if (keys.size === 0) tagIndex.delete(tag);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Starts the periodic cleanup timer. Called automatically on first cache use.
+ */
+function ensureCleanupTimer(): void {
+  if (cleanupTimer) return;
+  cleanupTimer = setInterval(cleanupExpiredEntries, CLEANUP_INTERVAL_MS);
+  // Don't keep the process alive just for cleanup
+  if (cleanupTimer.unref) cleanupTimer.unref();
+}
+
+/**
+ * Stops the cleanup timer (for tests or graceful shutdown).
+ */
+export function stopCacheCleanup(): void {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+}
+
 /**
  * Cached fetch — wraps global fetch with caching and revalidation support.
  *
@@ -51,6 +123,8 @@ export async function cachedFetch(
   if (cacheOpts.noStore || revalidate === 0) {
     return globalThis.fetch(url, options);
   }
+
+  ensureCleanupTimer();
 
   const now = Date.now();
   const cached = cache.get(cacheKey);
@@ -100,6 +174,8 @@ export async function cachedFetch(
       if (!tagIndex.has(tag)) tagIndex.set(tag, new Set());
       tagIndex.get(tag)!.add(cacheKey);
     }
+
+    enforceMaxEntries();
 
     return new Response(JSON.stringify(data), {
       status: 200,
@@ -191,6 +267,8 @@ export function unstable_cache<T extends (...args: never[]) => Promise<unknown>>
         tagIndex.get(tag)!.add(cacheKey);
       }
     }
+
+    enforceMaxEntries();
 
     return data;
   };

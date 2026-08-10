@@ -10,6 +10,7 @@ export * from './ppr';
 export * from './flight';
 export * from './lazy-layouts';
 export * from './streaming-metadata';
+export * from './renderer-manager';
 export * from './rust-ssr';
 export * from './rust-rsc';
 export * from './rust-html';

@@ -1,4 +1,5 @@
 import type { I18nConfig } from './types';
+import type { Framework } from './renderer';
 
 export type Runtime = 'node' | 'edge';
 
@@ -17,7 +18,9 @@ export interface PledgeConfig {
   outDir: string;
   /** Default runtime for routes (default: 'node') */
   defaultRuntime: Runtime;
-  /** Whether to enable React Server Components (default: true) */
+  /** UI framework to use (default: 'react'). PledgeStack is framework-agnostic — install the corresponding renderer package. */
+  framework?: Framework;
+  /** Whether to enable React Server Components (default: true, React only — ignored for other frameworks) */
   rsc: boolean;
   /** Whether to enable Tailwind CSS (default: true) */
   tailwind: boolean;
@@ -39,6 +42,16 @@ export interface PledgeConfig {
   bundler?: 'pledgepack' | 'vite' | 'rollup' | 'turbopack' | 'rsbuild' | 'webpack';
   /** Site URL for SEO (sitemap, robots.txt, canonical URLs) */
   siteUrl?: string;
+  /** Security headers configuration — when true, auto-applies default security headers to all responses (default: true) */
+  securityHeaders?: boolean;
+  /** Partial Prerendering — prerender static shell at build time, stream dynamic holes at request time (default: false) */
+  ppr?: boolean;
+  /** Bot detection — auto-detect and challenge bots (default: false) */
+  botDetection?: boolean;
+  /** Rate limiting — auto-apply rate limiting to all requests (default: false) */
+  rateLimit?: boolean | { maxTokens?: number; refillRate?: number };
+  /** Brute force protection — auto-protect auth endpoints (default: false) */
+  bruteForceProtection?: boolean;
 }
 
 /**
@@ -255,10 +268,12 @@ export const DEFAULT_CONFIG: PledgeConfig = {
   publicDir: 'public',
   outDir: '.pledge',
   defaultRuntime: 'node',
+  framework: 'react',
   rsc: true,
   tailwind: true,
   output: 'standalone',
   bundler: 'pledgepack',
+  securityHeaders: true,
   cargo: DEFAULT_CARGO_CONFIG,
   alias: {
     '@/app/*': 'app/*',
@@ -297,4 +312,127 @@ export function resolveConfig(userConfig: UserConfig): PledgeConfig {
 
 export function defineConfig(config: UserConfig): UserConfig {
   return config;
+}
+
+/**
+ * Validates a resolved PledgeConfig and returns an array of error messages.
+ * Returns an empty array if the config is valid.
+ */
+export function validateConfig(config: PledgeConfig): string[] {
+  const errors: string[] = [];
+
+  // Required string fields
+  if (!config.rootDir || typeof config.rootDir !== 'string') {
+    errors.push('config.rootDir must be a non-empty string');
+  }
+  if (!config.appDir || typeof config.appDir !== 'string') {
+    errors.push('config.appDir must be a non-empty string (default: "app")');
+  }
+  if (!config.publicDir || typeof config.publicDir !== 'string') {
+    errors.push('config.publicDir must be a non-empty string (default: "public")');
+  }
+  if (!config.outDir || typeof config.outDir !== 'string') {
+    errors.push('config.outDir must be a non-empty string (default: ".pledge")');
+  }
+
+  // Enum fields
+  const validRuntimes: Runtime[] = ['node', 'edge'];
+  if (!validRuntimes.includes(config.defaultRuntime)) {
+    errors.push(`config.defaultRuntime must be one of: ${validRuntimes.join(', ')} (got: "${config.defaultRuntime}")`);
+  }
+
+  const validOutputs: OutputMode[] = ['standalone', 'export'];
+  if (!validOutputs.includes(config.output)) {
+    errors.push(`config.output must be one of: ${validOutputs.join(', ')} (got: "${config.output}")`);
+  }
+
+  if (config.framework) {
+    const validFrameworks: Framework[] = ['react', 'vue', 'solid', 'svelte'];
+    if (!validFrameworks.includes(config.framework)) {
+      errors.push(`config.framework must be one of: ${validFrameworks.join(', ')} (got: "${config.framework}")`);
+    }
+  }
+
+  if (config.bundler) {
+    const validBundlers = ['pledgepack', 'vite', 'rollup', 'turbopack', 'rsbuild', 'webpack'];
+    if (!validBundlers.includes(config.bundler)) {
+      errors.push(`config.bundler must be one of: ${validBundlers.join(', ')} (got: "${config.bundler}")`);
+    }
+  }
+
+  // Boolean fields
+  if (typeof config.rsc !== 'boolean') {
+    errors.push('config.rsc must be a boolean');
+  }
+  if (typeof config.tailwind !== 'boolean') {
+    errors.push('config.tailwind must be a boolean');
+  }
+  if (typeof config.securityHeaders !== 'boolean') {
+    errors.push('config.securityHeaders must be a boolean');
+  }
+
+  // Optional typed fields
+  if (config.ppr !== undefined && typeof config.ppr !== 'boolean') {
+    errors.push('config.ppr must be a boolean if provided');
+  }
+  if (config.botDetection !== undefined && typeof config.botDetection !== 'boolean') {
+    errors.push('config.botDetection must be a boolean if provided');
+  }
+  if (config.bruteForceProtection !== undefined && typeof config.bruteForceProtection !== 'boolean') {
+    errors.push('config.bruteForceProtection must be a boolean if provided');
+  }
+
+  // Rate limit config
+  if (config.rateLimit !== undefined) {
+    if (typeof config.rateLimit === 'object') {
+      if (config.rateLimit.maxTokens !== undefined && (typeof config.rateLimit.maxTokens !== 'number' || config.rateLimit.maxTokens <= 0)) {
+        errors.push('config.rateLimit.maxTokens must be a positive number');
+      }
+      if (config.rateLimit.refillRate !== undefined && (typeof config.rateLimit.refillRate !== 'number' || config.rateLimit.refillRate <= 0)) {
+        errors.push('config.rateLimit.refillRate must be a positive number');
+      }
+    } else if (typeof config.rateLimit !== 'boolean') {
+      errors.push('config.rateLimit must be a boolean or an object with maxTokens/refillRate');
+    }
+  }
+
+  // Alias must be a record of strings
+  if (config.alias) {
+    if (typeof config.alias !== 'object') {
+      errors.push('config.alias must be a Record<string, string>');
+    } else {
+      for (const [key, value] of Object.entries(config.alias)) {
+        if (typeof value !== 'string') {
+          errors.push(`config.alias["${key}"] must be a string`);
+        }
+      }
+    }
+  }
+
+  // Plugins must be an array
+  if (config.plugins) {
+    if (!Array.isArray(config.plugins)) {
+      errors.push('config.plugins must be an array');
+    } else {
+      for (let i = 0; i < config.plugins.length; i++) {
+        const plugin = config.plugins[i];
+        if (!plugin || typeof plugin !== 'object') {
+          errors.push(`config.plugins[${i}] must be a PledgePlugin object`);
+        } else if (typeof plugin.name !== 'string') {
+          errors.push(`config.plugins[${i}].name must be a string`);
+        }
+      }
+    }
+  }
+
+  // Site URL must be a valid URL if provided
+  if (config.siteUrl) {
+    try {
+      new URL(config.siteUrl);
+    } catch {
+      errors.push(`config.siteUrl must be a valid URL (got: "${config.siteUrl}")`);
+    }
+  }
+
+  return errors;
 }

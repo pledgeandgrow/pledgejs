@@ -45,7 +45,7 @@ export function createModuleLoader(
   async function resolveImportUrl(resolvedPath: string): Promise<string> {
     const ext = extname(resolvedPath);
 
-    if (isDev && (ext === '.ts' || ext === '.tsx' || ext === '.jsx' || ext === '.psx' || ext === '.ps')) {
+    if (isDev && (ext === '.ts' || ext === '.tsx' || ext === '.jsx' || ext === '.psx' || ext === '.ps' || ext === '.vue' || ext === '.svelte')) {
       if (adapter) {
         const result = await adapter.transformFile(resolvedPath, {
           isDev: true,

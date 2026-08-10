@@ -91,26 +91,43 @@ export function isParallelSlot(segment: string): boolean {
  */
 export function compilePattern(pattern: string): { regex: RegExp; paramNames: string[] } {
   const paramNames: string[] = [];
-  const regexStr = pattern
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => {
-      // Catch-all *slug
-      if (segment.startsWith('*')) {
-        const name = segment.slice(1);
-        paramNames.push(name);
-        return '(?:/(.*))?';
-      }
-      // Dynamic :slug
-      if (segment.startsWith(':')) {
-        const name = segment.slice(1);
-        paramNames.push(name);
-        return '([^/]+)';
-      }
-      // Static
-      return segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    })
-    .join('/');
+  const segments = pattern.split('/').filter(Boolean);
+  const regexParts: string[] = [];
+
+  for (const segment of segments) {
+    // Catch-all *slug — matches zero or more path segments
+    if (segment.startsWith('*')) {
+      const name = segment.slice(1);
+      paramNames.push(name);
+      // Match optional /rest — the leading / is part of the optional group
+      // so this works whether or not there are additional segments
+      regexParts.push('(?:/(.*))?');
+      continue;
+    }
+    // Dynamic :slug
+    if (segment.startsWith(':')) {
+      const name = segment.slice(1);
+      paramNames.push(name);
+      regexParts.push('([^/]+)');
+      continue;
+    }
+    // Static
+    regexParts.push(segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  }
+
+  // Build regex: join parts with /, but catch-all parts already include optional /
+  // We need to handle the case where a catch-all is the last segment
+  let regexStr = '';
+  for (let i = 0; i < regexParts.length; i++) {
+    const part = regexParts[i];
+    if (part.startsWith('(?:/')) {
+      // Catch-all — don't add leading / (it's in the group)
+      regexStr += part;
+    } else {
+      if (regexStr) regexStr += '/';
+      regexStr += part;
+    }
+  }
 
   return {
     regex: new RegExp(`^/${regexStr}/?$`),

@@ -34,9 +34,13 @@ async function resolveLatestVersions(): Promise<{ pledgestack: string; pledgepac
 const TEMPLATES = ['default', 'blog', 'api', 'saas', 'portfolio', 'dashboard', 'ecommerce'] as const;
 type Template = (typeof TEMPLATES)[number];
 
+const FRAMEWORKS = ['react', 'vue', 'solid', 'svelte'] as const;
+type Framework = (typeof FRAMEWORKS)[number];
+
 interface CreateOptions {
   name: string;
   template: Template;
+  framework: Framework;
   installDeps: boolean;
 }
 
@@ -57,6 +61,17 @@ function parseArgs(argv: string[]): Partial<CreateOptions> {
       const val = arg.split('=')[1];
       if (val && TEMPLATES.includes(val as Template)) {
         opts.template = val as Template;
+      }
+    } else if (arg === '--framework' || arg === '-f') {
+      const val = args[i + 1];
+      if (val && FRAMEWORKS.includes(val as Framework)) {
+        opts.framework = val as Framework;
+        i++;
+      }
+    } else if (arg.startsWith('--framework=')) {
+      const val = arg.split('=')[1];
+      if (val && FRAMEWORKS.includes(val as Framework)) {
+        opts.framework = val as Framework;
       }
     } else if (arg === '--install' || arg === '--no-install') {
       opts.installDeps = arg === '--install';
@@ -101,6 +116,21 @@ export async function createApp(): Promise<void> {
     });
   }
 
+  if (!cliOpts.framework) {
+    questions.push({
+      type: 'select',
+      name: 'framework',
+      message: 'Which UI framework would you like to use?',
+      choices: [
+        { title: 'React — Most popular, full RSC support', value: 'react' },
+        { title: 'Vue — Progressive framework, great DX', value: 'vue' },
+        { title: 'Solid — Fine-grained reactivity, blazing fast', value: 'solid' },
+        { title: 'Svelte — Compile-time optimizations, small bundles', value: 'svelte' },
+      ],
+      initial: 0,
+    });
+  }
+
   if (cliOpts.installDeps === undefined) {
     questions.push({
       type: 'confirm',
@@ -115,6 +145,7 @@ export async function createApp(): Promise<void> {
   const options: CreateOptions = {
     name: cliOpts.name || response.name,
     template: cliOpts.template || response.template,
+    framework: cliOpts.framework || response.framework,
     installDeps: cliOpts.installDeps ?? response.installDeps,
   };
 
@@ -122,7 +153,7 @@ export async function createApp(): Promise<void> {
 }
 
 async function scaffold(options: CreateOptions): Promise<void> {
-  const { name, template, installDeps } = options;
+  const { name, template, framework, installDeps } = options;
   const targetDir = resolve(process.cwd(), name);
 
   if (existsSync(targetDir)) {
@@ -131,21 +162,26 @@ async function scaffold(options: CreateOptions): Promise<void> {
   }
 
   console.log(`\nCreating a new PledgeStack app in ${targetDir}\n`);
+  console.log(`  Framework: ${framework}\n`);
+  console.log(`  Template: ${template}\n`);
 
   console.log('Resolving latest package versions...\n');
   const versions = await resolveLatestVersions();
 
-  const templateDir = getTemplateDir(template);
+  // For non-React frameworks with the default template, use the framework-specific template
+  const templateDir = (template === 'default' && framework !== 'react')
+    ? getFrameworkTemplateDir(framework)
+    : getTemplateDir(template);
   cpSync(templateDir, targetDir, { recursive: true });
 
   writeFileSync(
     join(targetDir, 'package.json'),
-    JSON.stringify(generatePackageJson(name, versions), null, 2) + '\n',
+    JSON.stringify(generatePackageJson(name, versions, options.framework), null, 2) + '\n',
   );
 
   writeFileSync(
     join(targetDir, 'tsconfig.json'),
-    JSON.stringify(generateTsConfig(), null, 2) + '\n',
+    JSON.stringify(generateTsConfig(options.framework), null, 2) + '\n',
   );
 
   writeFileSync(
@@ -189,8 +225,13 @@ function getTemplateDir(template: Template): string {
   return join(__dirname, '..', 'templates', template);
 }
 
-function generatePackageJson(name: string, versions: { pledgestack: string; pledgepack: string }) {
-  return {
+function getFrameworkTemplateDir(framework: Framework): string {
+  const __dirname = fileURLToPath(new URL('.', import.meta.url));
+  return join(__dirname, '..', 'templates', framework);
+}
+
+function generatePackageJson(name: string, versions: { pledgestack: string; pledgepack: string }, framework: Framework) {
+  const base = {
     name: name.toLowerCase().replace(/\s+/g, '-'),
     version: '0.0.1',
     private: true,
@@ -200,22 +241,71 @@ function generatePackageJson(name: string, versions: { pledgestack: string; pled
       build: 'pledge build',
       start: 'pledge start',
     },
-    dependencies: {
-      react: '^19.2.0',
-      'react-dom': '^19.2.0',
-      pledgestack: versions.pledgestack,
-    },
     devDependencies: {
       pledgepack: versions.pledgepack,
       typescript: '^5.7.0',
-      '@types/react': '^19.2.0',
-      '@types/react-dom': '^19.2.0',
       '@types/node': '^22.0.0',
     },
     engines: {
       node: '>=20.0.0',
     },
   };
+
+  switch (framework) {
+    case 'react':
+      return {
+        ...base,
+        dependencies: {
+          react: '^19.2.0',
+          'react-dom': '^19.2.0',
+          pledgestack: versions.pledgestack,
+          'pledgestack-renderer-react': versions.pledgestack,
+        },
+        devDependencies: {
+          ...base.devDependencies,
+          '@types/react': '^19.2.0',
+          '@types/react-dom': '^19.2.0',
+        },
+      };
+    case 'vue':
+      return {
+        ...base,
+        dependencies: {
+          vue: '^3.5.0',
+          pledgestack: versions.pledgestack,
+          'pledgestack-renderer-vue': versions.pledgestack,
+        },
+        devDependencies: {
+          ...base.devDependencies,
+          'vue-tsc': '^2.1.0',
+        },
+      };
+    case 'solid':
+      return {
+        ...base,
+        dependencies: {
+          'solid-js': '^1.9.0',
+          pledgestack: versions.pledgestack,
+          'pledgestack-renderer-solid': versions.pledgestack,
+        },
+        devDependencies: {
+          ...base.devDependencies,
+        },
+      };
+    case 'svelte':
+      return {
+        ...base,
+        dependencies: {
+          svelte: '^5.0.0',
+          pledgestack: versions.pledgestack,
+          'pledgestack-renderer-svelte': versions.pledgestack,
+        },
+        devDependencies: {
+          ...base.devDependencies,
+          'svelte-check': '^4.0.0',
+        },
+      };
+  }
 }
 
 function detectPackageManager(): 'pnpm' | 'npm' | 'yarn' {
@@ -231,14 +321,13 @@ function detectPackageManager(): 'pnpm' | 'npm' | 'yarn' {
   }
 }
 
-function generateTsConfig() {
-  return {
+function generateTsConfig(framework: Framework) {
+  const base = {
     compilerOptions: {
       target: 'ES2022',
       module: 'ESNext',
       moduleResolution: 'bundler',
       lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-      jsx: 'react-jsx',
       strict: true,
       esModuleInterop: true,
       skipLibCheck: true,
@@ -248,6 +337,16 @@ function generateTsConfig() {
     },
     include: ['app', 'pledge.config.ts'],
   };
+
+  switch (framework) {
+    case 'react':
+      return { ...base, compilerOptions: { ...base.compilerOptions, jsx: 'react-jsx' } };
+    case 'solid':
+      return { ...base, compilerOptions: { ...base.compilerOptions, jsx: 'preserve', jsxImportSource: 'solid-js' } };
+    case 'vue':
+    case 'svelte':
+      return base;
+  }
 }
 
 function generateGitignore(): string {

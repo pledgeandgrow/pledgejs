@@ -45,8 +45,28 @@ class StreamErrorBoundary extends Component<{ fallback: ComponentType<{ error: E
  * Renders a route match to a streaming HTML response.
  * Uses renderToPipeableStream for Suspense boundary streaming.
  * Sends the shell HTML immediately, then streams deferred content as it resolves.
+ *
+ * Delegates to the active renderer adapter if initialized (framework-agnostic).
+ * Falls back to the built-in React renderer if no adapter is registered.
  */
 export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
+  // Try to use the renderer adapter (framework-agnostic path)
+  try {
+    const { getRenderer, isRendererInitialized } = await import('./renderer-manager');
+    if (isRendererInitialized()) {
+      const renderer = getRenderer();
+      return renderer.renderToStream({
+        match: ctx.match,
+        tree: ctx.tree,
+        modules: ctx.modules as Map<string, unknown>,
+        searchParams: ctx.searchParams,
+      });
+    }
+  } catch {
+    // Renderer not available — fall through to built-in React renderer
+  }
+
+  // Built-in React renderer (backward compatibility)
   const { match, tree, modules } = ctx;
 
   const pageModule = modules.get(match.route.filePath) as PageModule | undefined;

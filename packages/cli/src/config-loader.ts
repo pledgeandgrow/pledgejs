@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { PledgeConfig, UserConfig } from 'pledgestack-shared';
-import { resolveConfig } from 'pledgestack-shared';
+import { resolveConfig, validateConfig } from 'pledgestack-shared';
 
 /**
  * Loads the pledge.config.ts or pledge.config.js from the project root.
@@ -53,7 +53,16 @@ export async function loadConfig(rootDir?: string): Promise<PledgeConfig> {
     ? deepMergeConfig(baseConfig, envConfig)
     : baseConfig;
 
-  return resolveConfig({ ...mergedConfig, rootDir: root });
+  const resolved = resolveConfig({ ...mergedConfig, rootDir: root });
+
+  // Validate config and throw with helpful error messages if invalid
+  const errors = validateConfig(resolved);
+  if (errors.length > 0) {
+    const msg = errors.map((e) => `  • ${e}`).join('\n');
+    throw new Error(`Invalid pledge.config.ts:\n${msg}\n\nSee https://pledgestack.dev/docs/config for valid options.`);
+  }
+
+  return resolved;
 }
 
 /**

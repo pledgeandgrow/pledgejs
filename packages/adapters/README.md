@@ -44,4 +44,42 @@ PledgePack generates edge-safe bundles. Use `createEdgeConfig(target)` to get th
 ```typescript
 import { createEdgeConfig } from 'pledgestack-adapters';
 const edgeConfig = createEdgeConfig('cloudflare');
+// { excludeNodeBuiltins: ['fs', 'path', ...], polyfills: ['buffer', 'process'], minify: true, sourceMaps: false }
+```
+
+### Edge Bundle Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `excludeNodeBuiltins` | Node.js modules to exclude from edge bundle | `['fs', 'path', 'os', 'child_process', ...]` |
+| `polyfills` | Browser polyfills to inject | `['buffer', 'process', 'stream']` |
+| `minify` | Minify the bundle | `true` |
+| `sourceMaps` | Generate source maps | `false` |
+
+## Edge Security Features
+
+The Cloudflare adapter includes built-in edge security:
+
+- **Rate limiting** — Configurable per-IP rate limits at the edge
+- **Bot detection** — User-agent based bot filtering
+- **Geo restrictions** — Block or allow specific countries
+- **CSP headers** — Content-Security-Policy injection at the edge
+- **KV storage** — `createKvAdapter()` for Cloudflare Workers KV as cache backend
+
+```typescript
+import { createCloudflareAdapter } from 'pledgestack-adapters/cloudflare';
+
+const app = createCloudflareAdapter(config, {
+  rateLimit: { requests: 100, window: '1m' },
+  botDetection: true,
+  geoBlock: { blockedCountries: ['XX'] },
+});
+```
+
+## Vercel Config Generation
+
+```typescript
+import { generateVercelConfig } from 'pledgestack-adapters/vercel';
+const vercelJson = generateVercelConfig(config);
+// Generates vercel.json with edge functions, rewrites, headers
 ```

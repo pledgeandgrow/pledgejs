@@ -56,8 +56,37 @@ class StreamErrorBoundary extends Component<{ fallback: ComponentType<{ error: E
  * This is the true streaming implementation — unlike renderSSRStream which
  * buffers everything into a string, this function returns a ReadableStream
  * that can be set as the response body.
+ *
+ * Delegates to the active renderer adapter if initialized (framework-agnostic).
+ * Falls back to the built-in React renderer if no adapter is registered.
  */
 export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableStream<Uint8Array>> {
+  // Try to use the renderer adapter (framework-agnostic path)
+  try {
+    const { getRenderer, isRendererInitialized } = await import('./renderer-manager');
+    if (isRendererInitialized()) {
+      const renderer = getRenderer();
+      if (renderer.renderRSCStream) {
+        return renderer.renderRSCStream({
+          match: ctx.match,
+          tree: ctx.tree,
+          modules: ctx.modules as Map<string, unknown>,
+          searchParams: ctx.searchParams,
+          rsc: ctx.config.rsc,
+        });
+      }
+      return renderer.renderToReadableStream({
+        match: ctx.match,
+        tree: ctx.tree,
+        modules: ctx.modules as Map<string, unknown>,
+        searchParams: ctx.searchParams,
+      });
+    }
+  } catch {
+    // Renderer not available — fall through to built-in React renderer
+  }
+
+  // Built-in React renderer (backward compatibility)
   const { match, tree, modules } = ctx;
 
   const pageModule = modules.get(match.route.filePath) as PageModule | undefined;

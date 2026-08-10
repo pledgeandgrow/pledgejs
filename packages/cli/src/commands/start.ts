@@ -14,7 +14,14 @@ import { resolveBundlerAdapter } from '../bundler-resolver';
  */
 export async function startCommand(options: { port?: number; hostname?: string } = {}): Promise<void> {
   const { loadConfig } = await import('../config-loader');
-  const config = await loadConfig();
+  let config;
+  try {
+    config = await loadConfig();
+  } catch (err) {
+    console.error('\n  ✖ Failed to load configuration:\n');
+    console.error(`    ${err}\n`);
+    process.exit(1);
+  }
 
   const port = options.port ?? 3000;
   const hostname = options.hostname ?? 'localhost';

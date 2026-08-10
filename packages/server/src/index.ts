@@ -28,3 +28,6 @@ export * from './safety-net';
 export * from './seo-routes';
 export * from './og-image';
 export * from './rate-limiter';
+export * from './security-headers';
+export * from './cors';
+export * from './virtual-modules';

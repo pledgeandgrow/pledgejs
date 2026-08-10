@@ -30,6 +30,76 @@ export function useRouter(): ClientRouterContextValue {
   return ctx;
 }
 
+/**
+ * Returns the current pathname (e.g. "/blog/hello-world").
+ * Next.js-compatible: `const pathname = usePathname()`
+ */
+export function usePathname(): string {
+  return useRouter().pathname;
+}
+
+/**
+ * Returns the current search params as a readonly record.
+ * Next.js-compatible: `const searchParams = useSearchParams()`
+ *
+ * Returns a URLSearchParams-like object with get(), getAll(), has(), entries(),
+ * and forEach() methods for compatibility with Next.js apps.
+ */
+export function useSearchParams(): ReadonlyURLSearchParams {
+  const { query } = useRouter();
+  return new ReadonlyURLSearchParams(query);
+}
+
+/**
+ * A readonly wrapper around URLSearchParams backed by the router's query object.
+ */
+export class ReadonlyURLSearchParams {
+  private readonly params: Record<string, string>;
+
+  constructor(params: Record<string, string>) {
+    this.params = params;
+  }
+
+  get(name: string): string | null {
+    return this.params[name] ?? null;
+  }
+
+  getAll(name: string): string[] {
+    const value = this.params[name];
+    return value ? [value] : [];
+  }
+
+  has(name: string): boolean {
+    return name in this.params;
+  }
+
+  entries(): IterableIterator<[string, string]> {
+    return Object.entries(this.params)[Symbol.iterator]();
+  }
+
+  keys(): IterableIterator<string> {
+    return Object.keys(this.params)[Symbol.iterator]();
+  }
+
+  values(): IterableIterator<string> {
+    return Object.values(this.params)[Symbol.iterator]();
+  }
+
+  forEach(callback: (value: string, key: string, parent: this) => void): void {
+    for (const [key, value] of Object.entries(this.params)) {
+      callback(value, key, this);
+    }
+  }
+
+  get size(): number {
+    return Object.keys(this.params).length;
+  }
+
+  toString(): string {
+    return new URLSearchParams(this.params).toString();
+  }
+}
+
 function prefetchPage(href: string, priority: 'high' | 'low' | 'auto' = 'auto'): void {
   const path = href.split('#')[0].split('?')[0];
   if (prefetchedPages.has(path)) return;

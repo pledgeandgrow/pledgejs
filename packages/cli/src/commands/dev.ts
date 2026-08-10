@@ -26,7 +26,14 @@ const DEFAULT_BUNDLER_PORT = 3001;
  */
 export async function devCommand(options: { port?: number; hostname?: string } = {}): Promise<void> {
   const { loadConfig } = await import('../config-loader');
-  const config = await loadConfig();
+  let config: PledgeConfig;
+  try {
+    config = await loadConfig();
+  } catch (err) {
+    console.error('\n  ✖ Failed to load configuration:\n');
+    console.error(`    ${err}\n`);
+    process.exit(1);
+  }
 
   loadEnv(config.rootDir, 'development');
 

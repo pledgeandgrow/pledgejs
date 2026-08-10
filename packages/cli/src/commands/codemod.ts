@@ -15,7 +15,7 @@ export interface CodemodTransform {
   transform: (source: string, filePath: string) => { code: string; changes: number };
 }
 
-const REGISTERED_CODEMODS: CodemodTransform[] = [
+export const REGISTERED_CODEMODS: CodemodTransform[] = [
   {
     name: 'pledgejs-to-pledgestack',
     description: 'Rename PledgeJS references to PledgeStack',

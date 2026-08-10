@@ -41,8 +41,39 @@ export interface RSCContext {
  *
  * Returns a ReadableStream that progressively sends HTML chunks
  * instead of buffering everything into a single string.
+ *
+ * Delegates to the active renderer adapter if initialized (framework-agnostic).
+ * The React adapter uses real react-server-dom-webpack/server for flight payloads.
+ * Falls back to the built-in React streaming SSR if no adapter is registered.
  */
 export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableStream<Uint8Array>> {
+  // Try to use the renderer adapter (framework-agnostic path)
+  try {
+    const { getRenderer, isRendererInitialized } = await import('./renderer-manager');
+    if (isRendererInitialized()) {
+      const renderer = getRenderer();
+      if (renderer.renderRSCStream) {
+        return renderer.renderRSCStream({
+          match: ctx.match,
+          tree: ctx.tree,
+          modules: ctx.modules as Map<string, unknown>,
+          searchParams: ctx.searchParams,
+          rsc: ctx.config.rsc,
+          clientManifest: ctx.clientManifest,
+        });
+      }
+      return renderer.renderToReadableStream({
+        match: ctx.match,
+        tree: ctx.tree,
+        modules: ctx.modules as Map<string, unknown>,
+        searchParams: ctx.searchParams,
+      });
+    }
+  } catch {
+    // Renderer not available — fall through to built-in React renderer
+  }
+
+  // Built-in React renderer (backward compatibility)
   const { match, tree, modules } = ctx;
 
   const pageModule = modules.get(match.route.filePath) as PageModule | undefined;
@@ -126,8 +157,31 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
 /**
  * Backward-compatible wrapper that buffers the streaming RSC render into a string.
  * Prefer renderRSCToHTMLStream for true streaming.
+ *
+ * Delegates to the active renderer adapter's renderRSC if available (React only).
  */
 export async function renderRSCToHTML(ctx: RSCContext): Promise<string> {
+  // Try to use the renderer adapter's renderRSC (React only — produces real flight payload)
+  try {
+    const { getRenderer, isRendererInitialized } = await import('./renderer-manager');
+    if (isRendererInitialized()) {
+      const renderer = getRenderer();
+      if (renderer.renderRSC) {
+        return renderer.renderRSC({
+          match: ctx.match,
+          tree: ctx.tree,
+          modules: ctx.modules as Map<string, unknown>,
+          searchParams: ctx.searchParams,
+          rsc: ctx.config.rsc,
+          clientManifest: ctx.clientManifest,
+        });
+      }
+    }
+  } catch {
+    // Renderer not available — fall through to built-in
+  }
+
+  // Built-in: buffer the streaming render
   const stream = await renderRSCToHTMLStream(ctx);
   const reader = stream.getReader();
   const decoder = new TextDecoder();

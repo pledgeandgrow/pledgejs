@@ -10,6 +10,21 @@ npx create-pledge-app my-app
 pnpm create pledgestack my-app
 ```
 
+## Frameworks
+
+PledgeStack supports four UI frameworks via pluggable renderer adapters:
+
+- **React** — Default, with RSC support
+- **Vue** — Vue 3 with `<script setup>`
+- **Solid** — SolidJS with fine-grained reactivity
+- **Svelte** — Svelte 5 with runes
+
+Select during scaffolding or pass `--framework vue`:
+
+```bash
+npx create-pledge-app my-app --framework vue
+```
+
 ## Templates
 
 - **default** — Full-featured starter with blog, features page, and dark theme
