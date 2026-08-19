@@ -64,7 +64,7 @@ npx pledge start
 | `pledge docs` | Generate API reference (TypeDoc) |
 | `pledge upgrade` | Upgrade PledgeStack with codemods |
 | `pledge why <module>` | Trace why a module is in the bundle |
-| `pledge docker` | Generate Dockerfile, .dockerignore, docker-compose.yml |
+| `pledge docker [--optimized]` | Generate Dockerfile, .dockerignore, docker-compose.yml. `--optimized` produces a Rust-addon-aware multi-stage build instead of the plain single-stage default. |
 | `pledge storybook` | Set up Storybook |
 | `pledge codemod` | Run code transformations (next-to-pledge, next-image, next-router, etc.) |
 | `pledge sync-aliases` | Sync tsconfig path aliases |

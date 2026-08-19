@@ -31,7 +31,7 @@ let rustDeserializerAddon: Record<string, (...args: unknown[]) => unknown> | nul
 export function isRustRSCDeserializerAvailable(): boolean {
   if (rustDeserializerAvailable !== null) return rustDeserializerAvailable;
   try {
-    const addon = require('../native/rust-rsc-deserializer.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../../native/rust-rsc-deserializer.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.deserialize === 'function' && typeof addon.deserializeStream === 'function') {
       rustDeserializerAddon = addon;
       rustDeserializerAvailable = true;

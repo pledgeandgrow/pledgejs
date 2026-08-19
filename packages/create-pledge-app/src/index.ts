@@ -98,24 +98,11 @@ export async function createApp(): Promise<void> {
     });
   }
 
-  if (!cliOpts.template) {
-    questions.push({
-      type: 'select',
-      name: 'template',
-      message: 'Which template would you like to use?',
-      choices: [
-        { title: 'Default — Starter app with a single page', value: 'default' },
-        { title: 'Blog — Blog with static generation and dynamic routes', value: 'blog' },
-        { title: 'API — REST API with CRUD routes', value: 'api' },
-        { title: 'SaaS Landing — Marketing page with pricing, features, and testimonials', value: 'saas' },
-        { title: 'Portfolio — Personal portfolio with projects showcase and contact', value: 'portfolio' },
-        { title: 'Dashboard — Admin dashboard with sidebar, stats, charts, and data table', value: 'dashboard' },
-        { title: 'E-commerce — Product listing with filters, cart, and checkout UI', value: 'ecommerce' },
-      ],
-      initial: 0,
-    });
-  }
-
+  // Framework is asked before template: the content templates (blog, api, saas,
+  // portfolio, dashboard, ecommerce) only exist as React source today, so the
+  // template question below needs to know the framework to filter its choices —
+  // picking e.g. framework=vue + template=blog would otherwise copy React JSX
+  // into a project whose package.json/tsconfig.json are generated for Vue.
   if (!cliOpts.framework) {
     questions.push({
       type: 'select',
@@ -127,6 +114,30 @@ export async function createApp(): Promise<void> {
         { title: 'Solid — Fine-grained reactivity, blazing fast', value: 'solid' },
         { title: 'Svelte — Compile-time optimizations, small bundles', value: 'svelte' },
       ],
+      initial: 0,
+    });
+  }
+
+  if (!cliOpts.template) {
+    questions.push({
+      type: 'select',
+      name: 'template',
+      message: 'Which template would you like to use?',
+      choices: (_prev: unknown, values: Partial<CreateOptions>) => {
+        const framework = cliOpts.framework ?? values.framework;
+        if (framework && framework !== 'react') {
+          return [{ title: `Default — Starter app with a single page (${framework})`, value: 'default' }];
+        }
+        return [
+          { title: 'Default — Starter app with a single page', value: 'default' },
+          { title: 'Blog — Blog with static generation and dynamic routes', value: 'blog' },
+          { title: 'API — REST API with CRUD routes', value: 'api' },
+          { title: 'SaaS Landing — Marketing page with pricing, features, and testimonials', value: 'saas' },
+          { title: 'Portfolio — Personal portfolio with projects showcase and contact', value: 'portfolio' },
+          { title: 'Dashboard — Admin dashboard with sidebar, stats, charts, and data table', value: 'dashboard' },
+          { title: 'E-commerce — Product listing with filters, cart, and checkout UI', value: 'ecommerce' },
+        ];
+      },
       initial: 0,
     });
   }
@@ -153,12 +164,26 @@ export async function createApp(): Promise<void> {
 }
 
 async function scaffold(options: CreateOptions): Promise<void> {
-  const { name, template, framework, installDeps } = options;
+  const { name, framework, installDeps } = options;
+  let { template } = options;
   const targetDir = resolve(process.cwd(), name);
 
   if (existsSync(targetDir)) {
     console.error(`Directory "${name}" already exists.`);
     process.exit(1);
+  }
+
+  // The content templates (blog, api, saas, portfolio, dashboard, ecommerce)
+  // only exist as React source. This can still be reached when both --template
+  // and --framework are passed as CLI flags (bypassing the interactive prompt's
+  // filtering above) — fall back to 'default' rather than copy React JSX into
+  // a non-React project.
+  if (template !== 'default' && framework !== 'react') {
+    console.warn(
+      `\n  Template "${template}" is only available for React — it doesn't have a ${framework} version yet.\n` +
+      `  Using the "default" template for ${framework} instead.\n`,
+    );
+    template = 'default';
   }
 
   console.log(`\nCreating a new PledgeStack app in ${targetDir}\n`);

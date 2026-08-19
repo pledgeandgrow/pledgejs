@@ -38,7 +38,7 @@ let rustSSRAddon: Record<string, (...args: unknown[]) => unknown> | null = null;
 export function isRustSSRAvailable(): boolean {
   if (rustSSRAvailable !== null) return rustSSRAvailable;
   try {
-    const addon = require('../native/rust-ssr.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../../native/rust-ssr.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.renderStaticShell === 'function') {
       rustSSRAddon = addon;
       rustSSRAvailable = true;

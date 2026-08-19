@@ -26,6 +26,7 @@ const { values, positionals } = parseArgs({
     'skip-codemods': { type: 'boolean' },
     all: { type: 'boolean' },
     open: { type: 'boolean' },
+    optimized: { type: 'boolean' },
     output: { type: 'string', short: 'o' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -285,14 +286,22 @@ async function main() {
       break;
     }
     case 'docker': {
-      const { generateDockerfile, generateDockerIgnore, generateDockerCompose } = await import('./commands/docker');
+      const { generateDockerfile, generateDockerIgnore, generateDockerCompose, generateOptimizedDockerfile, generateOptimizedDockerCompose } = await import('./commands/docker');
       const subcommand = positionals[1] ?? 'generate';
+      const optimized = Boolean(values.optimized);
       if (subcommand === 'compose') {
-        await generateDockerCompose({ port: opts.port });
+        if (optimized) {
+          await generateOptimizedDockerCompose({ port: opts.port });
+        } else {
+          await generateDockerCompose({ port: opts.port });
+        }
         console.log('  ✓ docker-compose.yml generated');
       } else if (subcommand === 'ignore') {
         await generateDockerIgnore();
         console.log('  ✓ .dockerignore generated');
+      } else if (optimized) {
+        await generateOptimizedDockerfile({ port: opts.port });
+        console.log('  ✓ Dockerfile generated (Rust-addon-optimized multi-stage build)');
       } else {
         await generateDockerfile({ port: opts.port, output: values.output as string | undefined });
         console.log('  ✓ Dockerfile generated');
@@ -397,6 +406,7 @@ function printHelp() {
     pledge codemod
     pledge codemod pledgejs-to-pledgestack src/
     pledge docker
+    pledge docker --optimized     (Rust-addon-aware multi-stage build)
     pledge docker compose
     pledge docker ignore
   `);

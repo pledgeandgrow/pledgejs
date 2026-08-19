@@ -20,11 +20,19 @@ export { createEdgeConfig, type EdgeBundleConfig };
  * ```
  */
 
+/** Minimal Cloudflare KV namespace binding shape (see @cloudflare/workers-types for the full type). */
+export interface CloudflareKvNamespace {
+  get(key: string, options?: { type?: 'text' | 'json' | 'arrayBuffer' | 'stream' }): Promise<unknown>;
+  put(key: string, value: string | ArrayBuffer, options?: { expirationTtl?: number }): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(options?: { prefix?: string }): Promise<{ keys: { name: string }[] }>;
+}
+
 export interface CloudflareEnv {
-  [key: string]: string | { fetch: (request: Request) => Promise<Response> } | undefined;
+  [key: string]: string | { fetch: (request: Request) => Promise<Response> } | CloudflareKvNamespace | undefined;
   ASSETS?: { fetch: (request: Request) => Promise<Response> };
   /** Cloudflare KV binding for edge cache */
-  CACHE?: unknown;
+  CACHE?: CloudflareKvNamespace;
 }
 
 export function createCloudflareAdapter(config: PledgeConfig) {
@@ -57,22 +65,28 @@ export function createCloudflareAdapter(config: PledgeConfig) {
       if (config.rateLimit) {
         const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
         const rateLimitConfig = typeof config.rateLimit === 'object' ? config.rateLimit : {};
-        const rateResult = checkEdgeRateLimit(ip, rateLimitConfig.maxTokens ?? 100, rateLimitConfig.refillRate ?? 10);
-        if (!rateResult.allowed) {
+        const maxTokens = rateLimitConfig.maxTokens ?? 100;
+        const refillRate = rateLimitConfig.refillRate ?? 10;
+        // checkEdgeRateLimit uses a fixed-window model (limit/windowSeconds), while
+        // PledgeConfig.rateLimit describes a token bucket (maxTokens/refillRate) —
+        // approximate the window as the time to fully refill the bucket.
+        const rateResult = checkEdgeRateLimit(ip, {
+          limit: maxTokens,
+          windowSeconds: Math.max(1, Math.ceil(maxTokens / refillRate)),
+          keyBy: 'ip',
+        });
+        if (rateResult.limited) {
+          const retryAfterSeconds = Math.max(0, Math.ceil((rateResult.resetAt - Date.now()) / 1000));
           return new Response(JSON.stringify({ error: 'Too Many Requests' }), {
             status: 429,
-            headers: { 'Content-Type': 'application/json', 'Retry-After': String(Math.ceil(rateResult.retryAfterMs / 1000)) },
+            headers: { 'Content-Type': 'application/json', 'Retry-After': String(retryAfterSeconds) },
           });
         }
       }
 
       // Edge security: bot detection
       if (config.botDetection) {
-        const botResult = detectBot({
-          userAgent: request.headers.get('user-agent') ?? '',
-          method: request.method,
-          path: new URL(request.url).pathname,
-        });
+        const botResult = detectBot(request);
         if (botResult.isBot && botResult.shouldChallenge) {
           return new Response(JSON.stringify({ error: 'Bot detected' }), {
             status: 403,
@@ -82,11 +96,10 @@ export function createCloudflareAdapter(config: PledgeConfig) {
       }
 
       // Edge security: geo restrictions (Cloudflare provides cf-ipcountry header)
-      if (config.i18n?.locales) {
-        const country = request.headers.get('cf-ipcountry') ?? '';
-        const geoResult = checkGeoRestriction(country, []);
-        if (geoResult.blocked) {
-          return new Response(JSON.stringify({ error: 'Access restricted in your region' }), {
+      if (config.geoRestriction) {
+        const geoResult = checkGeoRestriction(request, config.geoRestriction);
+        if (!geoResult.allowed) {
+          return new Response(JSON.stringify({ error: config.geoRestriction.blockMessage ?? 'Access restricted in your region' }), {
             status: 403,
             headers: { 'Content-Type': 'application/json' },
           });
@@ -97,9 +110,9 @@ export function createCloudflareAdapter(config: PledgeConfig) {
       const response = await handler(request);
 
       // Apply CSP headers
-      const csp = edgeCspHeaders();
+      const csp = edgeCspHeaders({});
       const finalHeaders = new Headers(response.headers);
-      for (const [key, value] of Object.entries(csp)) {
+      for (const [key, value] of Object.entries(csp.headers)) {
         if (!finalHeaders.has(key)) finalHeaders.set(key, value);
       }
 

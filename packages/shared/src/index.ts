@@ -6,3 +6,4 @@ export * from './plugin-runner';
 export * from './bundler';
 export * from './transforms';
 export * from './renderer';
+export * from './escape';

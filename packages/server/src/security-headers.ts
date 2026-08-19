@@ -59,7 +59,7 @@ export function applySecurityHeaders(
 
   // Apply CSP header if not already set and config has CSP directives
   if (!('Content-Security-Policy' in result)) {
-    const cspConfig = (config as unknown as Record<string, unknown>).csp as Record<string, string> | undefined;
+    const cspConfig = config.csp;
     if (cspConfig) {
       const directives = Object.entries(cspConfig)
         .map(([key, value]) => `${key} ${value}`)

@@ -29,7 +29,7 @@ function loadNative(): NativeStaticServer | null {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-static-server.node') as NativeStaticServer;
+    const addon = require('../../native/rust-static-server.node') as NativeStaticServer;
     if (typeof addon.readFileMmap === 'function') {
       nativeAddon = addon;
     }

@@ -142,6 +142,9 @@
     "compile": "tsc -p ./",
     "watch": "tsc -w -p ./"
   },
+  "dependencies": {
+    "pledgestack-core": "workspace:*"
+  },
   "devDependencies": {
     "@types/vscode": "^1.80.0",
     "@types/node": "^20.0.0",

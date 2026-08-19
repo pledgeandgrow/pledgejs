@@ -530,18 +530,6 @@ function parseVueSFC(source: string): VueSFCBlocks {
     route: null,
   };
 
-  // Extract block content by tag name
-  function extractBlock(tag: string, attrs = ''): string | null {
-    // Match <tag attrs>...</tag> or <tag attrs />
-    const pattern = new RegExp(
-      `<${tag}(\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>|<${tag}(\\s[^>]*)?\\/>`,
-      'i',
-    );
-    const match = source.match(pattern);
-    if (!match) return null;
-    return match[2]?.trim() ?? '';
-  }
-
   // Extract <template>
   const templateMatch = source.match(/<template(\s[^>]*)?>([\s\S]*?)<\/template>/i);
   if (templateMatch) blocks.template = templateMatch[2].trim();
@@ -604,8 +592,10 @@ function compileVueTemplate(template: string): string {
 async function transformVueSFC(
   sourcePath: string,
   isDev: boolean,
-  pledgepackPort: number | undefined,
-  projectRoot: string,
+  // Reserved for dev-mode module URL rewriting / relative import resolution,
+  // matching transformReactSFC's signature — not yet needed by this transform.
+  _pledgepackPort: number | undefined,
+  _projectRoot: string,
 ): Promise<string> {
   const source = await readFile(sourcePath, 'utf-8');
   const blocks = parseVueSFC(source);
@@ -774,8 +764,10 @@ function parseSvelteSFC(source: string): SvelteSFCBlocks {
 async function transformSvelteSFC(
   sourcePath: string,
   isDev: boolean,
-  pledgepackPort: number | undefined,
-  projectRoot: string,
+  // Reserved for dev-mode module URL rewriting / relative import resolution,
+  // matching transformReactSFC's signature — not yet needed by this transform.
+  _pledgepackPort: number | undefined,
+  _projectRoot: string,
 ): Promise<string> {
   const source = await readFile(sourcePath, 'utf-8');
   const blocks = parseSvelteSFC(source);

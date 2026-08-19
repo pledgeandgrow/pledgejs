@@ -32,7 +32,7 @@ function loadNative(): NativeKvStore | null {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-kv-store.node') as NativeKvStore;
+    const addon = require('../../native/rust-kv-store.node') as NativeKvStore;
     if (typeof addon.kvOpen === 'function') {
       nativeAddon = addon;
     }

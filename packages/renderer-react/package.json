@@ -22,7 +22,16 @@
   },
   "peerDependencies": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-server-dom-webpack": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-server-dom-webpack": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "pledgestack-core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

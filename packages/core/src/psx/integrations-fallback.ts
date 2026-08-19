@@ -5,7 +5,7 @@
  * use Node.js packages to provide the same functionality.
  * This ensures integrations are usable without Rust installed.
  *
- * The fallbacks are automatically used when `require('../native/*.node')` fails.
+ * The fallbacks are automatically used when `require('../../native/*.node')` fails.
  */
 
 import { createHash, randomBytes as nodeRandomBytes, createCipheriv, createDecipheriv, pbkdf2Sync, createHmac } from 'node:crypto';

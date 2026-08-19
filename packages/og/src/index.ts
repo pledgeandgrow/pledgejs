@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { escapeHtml } from 'pledgestack-shared';
 
 /**
  * OpenGraph image generation for PledgeStack.
@@ -169,10 +170,6 @@ export function ogMetaTags(options: {
   }
 
   return tags;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 export type { CSSProperties };

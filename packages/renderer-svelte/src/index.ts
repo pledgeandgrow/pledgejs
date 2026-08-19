@@ -16,7 +16,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
@@ -48,8 +48,6 @@ interface SvelteLayoutModule {
   viewport?: import('pledgestack-shared').Viewport;
 }
 
-type AnySvelteModule = SveltePageModule | SvelteLayoutModule | { default: unknown };
-
 function asPage(mod: unknown): SveltePageModule | undefined {
   const m = mod as SveltePageModule;
   return m && typeof m.default?.render === 'function' ? m : undefined;
@@ -60,10 +58,6 @@ function asLayout(mod: unknown): SvelteLayoutModule | undefined {
 }
 
 // --- Helpers ---
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 function renderHeadTags(metadata: HeadMetadata, route: import('pledgestack-shared').ResolvedRoute): string {
   const tags: string[] = [];
@@ -233,12 +227,11 @@ export class SvelteRendererAdapter implements RendererAdapter {
     const svelteImport = isDev && pledgepackPort
       ? `http://localhost:${pledgepackPort}/node_modules/.vite/svelte.js`
       : 'svelte';
-    const svelteClientImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/svelte/client.js`
-      : 'svelte/client';
 
     return `// PledgeStack Svelte client hydration (auto-generated)
-import { hydrate } from '${svelteClientImport}';
+// Svelte 5 exports hydrate/mount/unmount from the 'svelte' package itself —
+// there is no separate 'svelte/client' subpath export.
+import { hydrate } from '${svelteImport}';
 
 const root = document.getElementById('__pledge_root__');
 if (root) {

@@ -1,7 +1,7 @@
 import { renderToPipeableStream } from 'react-dom/server';
 import { createElement, type ReactNode } from 'react';
 import { Writable } from 'node:stream';
-import type { RouteMatch, PledgeConfig } from 'pledgestack-shared';
+import type { RouteMatch, PledgeConfig, AnyGenericModule } from 'pledgestack-shared';
 import type { PageModule, LayoutModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
@@ -56,7 +56,7 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
         return renderer.renderRSCStream({
           match: ctx.match,
           tree: ctx.tree,
-          modules: ctx.modules as Map<string, unknown>,
+          modules: ctx.modules as unknown as Map<string, AnyGenericModule>,
           searchParams: ctx.searchParams,
           rsc: ctx.config.rsc,
           clientManifest: ctx.clientManifest,
@@ -65,7 +65,7 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
       return renderer.renderToReadableStream({
         match: ctx.match,
         tree: ctx.tree,
-        modules: ctx.modules as Map<string, unknown>,
+        modules: ctx.modules as unknown as Map<string, AnyGenericModule>,
         searchParams: ctx.searchParams,
       });
     }
@@ -170,7 +170,7 @@ export async function renderRSCToHTML(ctx: RSCContext): Promise<string> {
         return renderer.renderRSC({
           match: ctx.match,
           tree: ctx.tree,
-          modules: ctx.modules as Map<string, unknown>,
+          modules: ctx.modules as unknown as Map<string, AnyGenericModule>,
           searchParams: ctx.searchParams,
           rsc: ctx.config.rsc,
           clientManifest: ctx.clientManifest,

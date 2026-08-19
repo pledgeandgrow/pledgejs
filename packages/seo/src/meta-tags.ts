@@ -1,3 +1,5 @@
+import { escapeHtml } from 'pledgestack-shared';
+
 export interface MetaTagInput {
   title?: string;
   description?: string;
@@ -48,8 +50,4 @@ export function generateMetaTags(input: MetaTagInput): string {
   }
 
   return tags.join('\n');
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

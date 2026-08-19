@@ -1,13 +1,7 @@
-export interface CdnPurgeOptions {
-  /** CDN provider */
-  provider: 'cloudflare' | 'fastly' | 'vercel' | 'netlify';
-  /** API token */
-  token: string;
-  /** Zone ID (Cloudflare) or Service ID (Fastly) */
-  zoneId?: string;
-  /** Additional provider-specific options */
-  endpoint?: string;
-}
+import type { CdnConfig } from 'pledgestack-shared';
+
+/** Purge options — same shape as PledgeConfig['cdn'], minus `paths` (passed separately as `urls`). */
+export type CdnPurgeOptions = Omit<CdnConfig, 'paths'>;
 
 export async function purgeCache(
   urls: string[],

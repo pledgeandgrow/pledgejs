@@ -24,7 +24,7 @@ function loadNative(): NativeWsCompression | null {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-ws-compression.node') as NativeWsCompression;
+    const addon = require('../../native/rust-ws-compression.node') as NativeWsCompression;
     if (typeof addon.wsCompress === 'function') {
       nativeAddon = addon;
     }

@@ -10,7 +10,7 @@
     "build:all": "pnpm build:packages && pnpm build",
     "lint": "node packages/cli/dist/bin.js lint",
     "clean": "node packages/cli/dist/bin.js clean",
-    "typecheck": "node packages/cli/dist/bin.js typecheck",
+    "typecheck": "node scripts/typecheck-workspace.mjs",
     "test": "node packages/cli/dist/bin.js test",
     "audit": "pnpm audit --audit-level=high",
     "changeset": "changeset",

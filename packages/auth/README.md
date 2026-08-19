@@ -162,17 +162,30 @@ const rotator = new ApiKeyRotationManager(keys, { rotateEveryDays: 90 });
 
 ## CSRF Protection
 
+Double-submit cookie pattern plus Origin/`Sec-Fetch-Site` validation as
+defense-in-depth. `Sec-Fetch-Site` is only trusted when the browser actually
+sends it with an explicit same-origin/same-site/none value — a request that
+omits the header entirely (older browsers, non-browser HTTP clients) is
+treated as *not* confirmed same-site and falls through to Origin validation,
+rather than being assumed safe.
+
 ```typescript
-import { generateCsrfToken, validateCsrfToken, createCsrfMiddleware, csrfCookie } from 'pledgestack-auth';
+import { generateCsrfToken, csrfCookie, validateCsrfToken, createCsrfMiddleware } from 'pledgestack-auth';
 
-// Generate token
-const { token, cookie } = generateCsrfToken();
+// Generate a token and its Set-Cookie header value
+const token = generateCsrfToken();
+const setCookieHeader = csrfCookie(token);
 
-// Validate
-const valid = validateCsrfToken(token, cookie);
+// Validate the double-submit pair (cookie value vs. header/body value)
+const valid = validateCsrfToken(cookieToken, headerToken);
 
-// Middleware
-const middleware = createCsrfMiddleware({ secret: process.env.CSRF_SECRET! });
+// Middleware — throws a 403 Response if validation fails.
+// `allowedOrigins` is required for the Origin-validation layer to reject
+// anything; without it, the double-submit cookie check above is the only
+// enforced protection.
+const middleware = createCsrfMiddleware({
+  allowedOrigins: ['https://example.com'],
+});
 ```
 
 ## XSS Sanitization

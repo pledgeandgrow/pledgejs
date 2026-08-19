@@ -42,7 +42,7 @@ let rustRSCAddon: Record<string, (...args: unknown[]) => unknown> | null = null;
 export function isRustRSCSerializerAvailable(): boolean {
   if (rustRSCAvailable !== null) return rustRSCAvailable;
   try {
-    const addon = require('../native/rust-rsc.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../../native/rust-rsc.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.serializeRSC === 'function' && typeof addon.analyzeModules === 'function') {
       rustRSCAddon = addon;
       rustRSCAvailable = true;

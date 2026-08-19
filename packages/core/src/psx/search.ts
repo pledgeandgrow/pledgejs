@@ -32,7 +32,7 @@ function loadNative(): NativeSearch | null {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-search.node') as NativeSearch;
+    const addon = require('../../native/rust-search.node') as NativeSearch;
     if (typeof addon.searchAddDocument === 'function') {
       nativeAddon = addon;
     }

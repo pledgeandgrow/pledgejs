@@ -157,13 +157,22 @@ export async function buildCommand(opts?: { crossCompile?: boolean }): Promise<v
   }
 
   // Purge CDN cache if configured
-  if ((config as unknown as Record<string, unknown>).cdn) {
-    try {
-      const { purgeCache } = await import('pledgestack-server');
-      await purgeCache((config as unknown as Record<string, unknown>).cdn as Record<string, unknown>);
-      console.log('  ✓ CDN cache purged');
-    } catch (err) {
-      console.warn(`  ⚠ CDN purge failed: ${err}`);
+  if (config.cdn) {
+    const paths = config.cdn.paths ?? [];
+    if (paths.length === 0) {
+      console.warn('  ⚠ CDN purge skipped: no cdn.paths configured');
+    } else {
+      try {
+        const { purgeCache } = await import('pledgestack-server');
+        const result = await purgeCache(paths, config.cdn);
+        if (result.success) {
+          console.log(`  ✓ CDN cache purged (${result.purged} path${result.purged === 1 ? '' : 's'})`);
+        } else {
+          console.warn(`  ⚠ CDN purge failed: ${result.errors?.join(', ') ?? 'unknown error'}`);
+        }
+      } catch (err) {
+        console.warn(`  ⚠ CDN purge failed: ${err}`);
+      }
     }
   }
 

@@ -322,15 +322,18 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       if (isStateChanging && !isServerAction && config.securityHeaders !== false) {
         const { validateOrigin, isSameSiteRequest } = await import('pledgestack-auth');
         const origin = req.headers['origin'] ?? req.headers['Origin'];
-        if (origin) {
-          if (!isSameSiteRequest(req.headers)) {
-            if (!validateOrigin(origin, [req.url.origin])) {
-              return {
-                status: 403,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ error: 'CSRF check failed: origin mismatch' }),
-              };
-            }
+        // isSameSiteRequest only returns true on an explicit same-origin/
+        // same-site/none Sec-Fetch-Site value — a missing header (older
+        // browsers, non-fetch clients, or a request crafted to omit it)
+        // falls through to Origin validation below rather than being
+        // treated as trusted.
+        if (origin && !isSameSiteRequest(req.headers)) {
+          if (!validateOrigin(origin, [req.url.origin])) {
+            return {
+              status: 403,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ error: 'CSRF check failed: origin mismatch' }),
+            };
           }
         }
       }
@@ -348,13 +351,11 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       }
 
       // i18n: extract locale from pathname if configured
-      let _locale: string | undefined;
       let matchPathname = req.url.pathname;
       if (config.i18n) {
         const { extractLocale } = await import('pledgestack-core');
         const extracted = extractLocale(req.url.pathname, config.i18n);
         if (extracted) {
-          _locale = extracted.locale;
           matchPathname = extracted.pathWithoutLocale;
         } else {
           // No locale prefix and 'always' strategy — redirect to detected locale
@@ -388,7 +389,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         }
 
         // CORS preflight handling for API routes
-        const corsConfig: CorsConfig = (config as unknown as Record<string, unknown>).cors as CorsConfig ?? DEFAULT_CORS_CONFIG;
+        const corsConfig: CorsConfig = config.cors ?? DEFAULT_CORS_CONFIG;
         const corsResult = corsMiddleware(req.method, req.headers, corsConfig);
         if (corsResult && req.method === 'OPTIONS') {
           // Preflight request — return CORS headers directly
@@ -563,7 +564,11 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         let finalHtml = html;
         if (isDev) {
           try {
-            const { createDevtoolsMiddleware } = await import('pledgestack-overlay');
+            // pledgestack-overlay is an optional dev-only dependency — built from
+            // a variable specifier so TS treats this as an untyped dynamic import
+            // instead of pulling the whole package into server's compile graph.
+            const overlayModuleName: string = 'pledgestack-overlay';
+            const { createDevtoolsMiddleware } = await import(overlayModuleName);
             const devtools = createDevtoolsMiddleware();
             finalHtml = devtools.transformHtml(html);
           } catch {

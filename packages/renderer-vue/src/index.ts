@@ -14,10 +14,8 @@ import type {
   Framework,
   HeadMetadata,
   ClientScriptOptions,
-  ResolvedRoute,
-  RouteTree,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
@@ -41,8 +39,6 @@ interface VueLayoutModule {
   viewport?: import('pledgestack-shared').Viewport;
 }
 
-type AnyVueModule = VuePageModule | VueLayoutModule | { default: unknown };
-
 function asPage(mod: unknown): VuePageModule | undefined {
   const m = mod as VuePageModule;
   return m && typeof m.default !== 'undefined' ? m : undefined;
@@ -53,10 +49,6 @@ function asLayout(mod: unknown): VueLayoutModule | undefined {
 }
 
 // --- Helpers ---
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 function renderHeadTags(metadata: HeadMetadata, route: import('pledgestack-shared').ResolvedRoute): string {
   const tags: string[] = [];
@@ -117,7 +109,10 @@ async function getVueServerRenderer(): Promise<{ renderToString: (app: unknown) 
 
 async function createVueApp(component: unknown, props: Record<string, unknown>): Promise<unknown> {
   const vue = await import('vue');
-  return vue.createApp(component, props);
+  // `component` is a dynamically-loaded .vue SFC's default export — its real
+  // shape is only known once the user's module loads, so it can't be typed
+  // as Vue's `Component` here without a hard type dependency on Vue.
+  return vue.createApp(component as any, props);
 }
 
 // --- Layout chain (uses shared implementation from pledgestack-shared) ---
@@ -191,8 +186,8 @@ export class VueRendererAdapter implements RendererAdapter {
         // Create a wrapper app that renders the layout with the previous app as children
         app = vue.createApp({
           render() {
-            return vue.h(layoutModule.default, { params: match.params, searchParams: ctx.searchParams ?? {} }, {
-              default: () => vue.h(pageModule.default, props),
+            return vue.h(layoutModule.default as any, { params: match.params, searchParams: ctx.searchParams ?? {} }, {
+              default: () => vue.h(pageModule.default as any, props),
             });
           },
         });
@@ -258,24 +253,22 @@ export class VueRendererAdapter implements RendererAdapter {
     const vueImport = isDev && pledgepackPort
       ? `http://localhost:${pledgepackPort}/node_modules/.vite/vue.js`
       : 'vue';
-    const vueClientImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/vue/client.js`
-      : 'vue/client';
 
     return `// PledgeStack Vue client hydration (auto-generated)
-import { createApp, hydrate } from '${vueImport}';
+import { createSSRApp } from '${vueImport}';
 
 const root = document.getElementById('__pledge_root__');
 if (root) {
-  // Vue hydration — the SSR content is already in the DOM
-  // The page component is loaded via the router module
+  // Vue 3 hydrates existing SSR-rendered DOM when an app created with
+  // createSSRApp() is mounted onto it (there is no separate hydrate()
+  // export in Vue's public API — mount() IS the hydration path for
+  // createSSRApp-created apps).
   try {
     const { routes } = await import('/__pledge_router');
     const pageRoute = routes[window.location.pathname];
     if (pageRoute && pageRoute.component) {
-      const app = createApp(pageRoute.component);
-      // Hydrate instead of mounting (preserves SSR HTML)
-      await hydrate(app, root);
+      const app = createSSRApp(pageRoute.component);
+      app.mount(root);
     }
   } catch (e) {
     console.error('[pledgestack] Vue hydration error:', e);

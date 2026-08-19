@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse, request as httpRequest } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse, type Server, request as httpRequest } from 'node:http';
 import { join, extname, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { PledgeConfig, BundlerAdapter } from 'pledgestack-shared';

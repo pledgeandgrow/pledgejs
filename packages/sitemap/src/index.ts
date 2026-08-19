@@ -1,4 +1,5 @@
 import type { PledgePlugin } from 'pledgestack-shared';
+import { escapeXml } from 'pledgestack-shared';
 
 /**
  * Sitemap generation plugin for PledgeStack.
@@ -136,10 +137,6 @@ function matchGlob(path: string, pattern: string): boolean {
     .replace(/\*/g, '.*')                    // * → .*
     .replace(/\?/g, '.');                     // ? → .
   return new RegExp(`^${regex}$`).test(path);
-}
-
-function escapeXml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
 
 /**

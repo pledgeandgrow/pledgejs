@@ -68,7 +68,11 @@ async function serveFontCss(
   pathname: string,
 ): Promise<boolean> {
   try {
-    const { resolveFont, fontVarName } = await import('pledgestack-font');
+    // pledgestack-font is an optional dependency — built from a variable
+    // specifier so TS treats this as an untyped dynamic import instead of
+    // pulling the whole package into server's compile graph.
+    const fontModuleName: string = 'pledgestack-font';
+    const { resolveFont, fontVarName } = await import(fontModuleName);
     const family = decodeURIComponent(pathname.replace('/__pledge__/font/', ''));
     const resolved = resolveFont({ family, src: family });
     const css = `@font-face {

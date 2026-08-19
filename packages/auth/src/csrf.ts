@@ -78,11 +78,15 @@ export function validateOrigin(
 
 /**
  * Check Sec-Fetch-Site header for same-origin requests.
- * Returns true if the request is same-origin or same-site.
+ * Returns true only when the header explicitly says so — a missing header
+ * (older browsers, non-browser HTTP clients, or a request deliberately
+ * crafted without it) returns false rather than being assumed safe, since
+ * treating "unknown" as "same-site" would let a forged cross-origin request
+ * skip Origin validation simply by omitting this header.
  */
 export function isSameSiteRequest(headers: Record<string, string>): boolean {
   const secFetchSite = headers['sec-fetch-site'];
-  if (!secFetchSite) return true;
+  if (!secFetchSite) return false;
   return secFetchSite === 'same-origin' || secFetchSite === 'same-site' || secFetchSite === 'none';
 }
 
@@ -108,12 +112,15 @@ export function csrfProtection(req: PledgeRequest, options?: CsrfOptions): boole
     return false;
   }
 
-  if (checkOrigin) {
-    if (!isSameSiteRequest(req.headers)) {
-      const origin = req.headers['origin'];
-      if (options?.allowedOrigins && !validateOrigin(origin, options.allowedOrigins)) {
-        return false;
-      }
+  if (checkOrigin && !isSameSiteRequest(req.headers)) {
+    // Not confirmed same-site (either explicitly cross-site, or the client
+    // didn't send Sec-Fetch-Site at all) — fall back to validating Origin.
+    // Note: this only rejects when `allowedOrigins` is configured; without
+    // it, Origin validation is a no-op and the double-submit cookie check
+    // above remains the only enforced protection.
+    const origin = req.headers['origin'];
+    if (options?.allowedOrigins && !validateOrigin(origin, options.allowedOrigins)) {
+      return false;
     }
   }
 

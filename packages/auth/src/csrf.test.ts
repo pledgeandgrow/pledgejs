@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { generateCsrfToken, csrfCookie, validateCsrfToken, validateOrigin, isSameSiteRequest } from './csrf';
+import { generateCsrfToken, csrfCookie, validateCsrfToken, validateOrigin, isSameSiteRequest, csrfProtection } from './csrf';
+import type { PledgeRequest } from 'pledgestack-shared';
 
 describe('CSRF Protection', () => {
   describe('generateCsrfToken', () => {
@@ -87,6 +88,57 @@ describe('CSRF Protection', () => {
 
     it('returns false when Sec-Fetch-Site is cross-site', () => {
       expect(isSameSiteRequest({ 'sec-fetch-site': 'cross-site' })).toBe(false);
+    });
+
+    it('returns false when Sec-Fetch-Site is missing (not assumed same-site)', () => {
+      expect(isSameSiteRequest({})).toBe(false);
+    });
+  });
+
+  describe('csrfProtection', () => {
+    function makeRequest(overrides: Partial<PledgeRequest> = {}): PledgeRequest {
+      return {
+        url: new URL('https://example.com/api/action'),
+        method: 'POST',
+        headers: {},
+        params: {},
+        query: {},
+        cookies: {},
+        ...overrides,
+      };
+    }
+
+    it('rejects a forged cross-origin request that omits Sec-Fetch-Site, when allowedOrigins is configured', () => {
+      // Double-submit token matches (simulating a case where the attacker
+      // somehow obtained a valid token pair, e.g. via a cookie-scoping bug),
+      // but the request comes from an unlisted Origin and doesn't claim to
+      // be same-site — this must still be rejected by the Origin check.
+      const req = makeRequest({
+        cookies: { __pledge_csrf: 'token123' },
+        headers: { 'x-pledge-csrf': 'token123', origin: 'https://evil.com' },
+      });
+      expect(csrfProtection(req, { allowedOrigins: ['https://example.com'] })).toBe(false);
+    });
+
+    it('accepts a same-origin request that omits Sec-Fetch-Site but has a matching Origin', () => {
+      const req = makeRequest({
+        cookies: { __pledge_csrf: 'token123' },
+        headers: { 'x-pledge-csrf': 'token123', origin: 'https://example.com' },
+      });
+      expect(csrfProtection(req, { allowedOrigins: ['https://example.com'] })).toBe(true);
+    });
+
+    it('accepts a request the browser marks same-origin via Sec-Fetch-Site, even with no Origin header', () => {
+      const req = makeRequest({
+        cookies: { __pledge_csrf: 'token123' },
+        headers: { 'x-pledge-csrf': 'token123', 'sec-fetch-site': 'same-origin' },
+      });
+      expect(csrfProtection(req, { allowedOrigins: ['https://example.com'] })).toBe(true);
+    });
+
+    it('rejects when the double-submit token is missing entirely, regardless of origin checks', () => {
+      const req = makeRequest({ cookies: {}, headers: { origin: 'https://example.com' } });
+      expect(csrfProtection(req, { allowedOrigins: ['https://example.com'] })).toBe(false);
     });
   });
 });

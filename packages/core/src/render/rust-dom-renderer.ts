@@ -33,7 +33,7 @@ let rustDomAddon: Record<string, (...args: unknown[]) => unknown> | null = null;
 export function isRustDomRendererAvailable(): boolean {
   if (rustDomAvailable !== null) return rustDomAvailable;
   try {
-    const addon = require('../native/rust-dom-renderer.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../../native/rust-dom-renderer.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.renderToString === 'function' && typeof addon.renderToStream === 'function') {
       rustDomAddon = addon;
       rustDomAvailable = true;

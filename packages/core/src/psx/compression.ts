@@ -25,7 +25,7 @@ function loadNative(): NativeCompression | null {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-compression.node') as NativeCompression;
+    const addon = require('../../native/rust-compression.node') as NativeCompression;
     if (typeof addon.gzipCompress === 'function') {
       nativeAddon = addon;
     }

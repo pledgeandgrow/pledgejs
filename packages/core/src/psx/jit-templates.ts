@@ -41,7 +41,7 @@ function loadNative(): NativeJitTemplates | null {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-jit-templates.node') as NativeJitTemplates;
+    const addon = require('../../native/rust-jit-templates.node') as NativeJitTemplates;
     if (typeof addon.recordRender === 'function') {
       nativeAddon = addon;
     }

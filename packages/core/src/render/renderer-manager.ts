@@ -26,22 +26,16 @@ export async function initRenderer(config: PledgeConfig): Promise<RendererAdapte
   let adapter = registry.get(framework);
 
   if (!adapter) {
-    // Try to dynamically import the adapter package
+    // Try to dynamically import the adapter package. The specifier is built
+    // from a variable (not a string literal) so TypeScript treats this as an
+    // untyped dynamic import instead of statically resolving and type-checking
+    // the renderer package's source — core must not have a compile-time
+    // dependency on renderer-* packages, since they depend on core, not the
+    // other way around (a literal specifier here creates a circular project
+    // reference and breaks `tsc -b` for every renderer package).
+    const rendererModuleName: string = `pledgestack-renderer-${framework}`;
     try {
-      switch (framework) {
-        case 'react':
-          await import('pledgestack-renderer-react');
-          break;
-        case 'vue':
-          await import('pledgestack-renderer-vue');
-          break;
-        case 'solid':
-          await import('pledgestack-renderer-solid');
-          break;
-        case 'svelte':
-          await import('pledgestack-renderer-svelte');
-          break;
-      }
+      await import(rendererModuleName);
       adapter = registry.get(framework);
     } catch {
       // Adapter package not installed
@@ -53,7 +47,8 @@ export async function initRenderer(config: PledgeConfig): Promise<RendererAdapte
     if (framework !== 'react') {
       console.warn(`[pledgestack] Renderer adapter for "${framework}" not found. Install pledgestack-renderer-${framework} or use framework: 'react'.`);
       try {
-        await import('pledgestack-renderer-react');
+        const reactModuleName: string = 'pledgestack-renderer-react';
+        await import(reactModuleName);
         adapter = registry.get('react');
       } catch {
         // React adapter also not available — use the built-in fallback

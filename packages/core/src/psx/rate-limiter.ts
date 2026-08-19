@@ -29,7 +29,7 @@ function loadNative(): NativeRateLimiter | null {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-rate-limiter.node') as NativeRateLimiter;
+    const addon = require('../../native/rust-rate-limiter.node') as NativeRateLimiter;
     if (typeof addon.checkRateLimit === 'function') {
       nativeAddon = addon;
     }

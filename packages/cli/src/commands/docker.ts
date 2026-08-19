@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import type { DockerBuildConfig } from 'pledgestack-core';
 
 export interface DockerfileOptions {
   /** Node version (default: '20') */
@@ -69,6 +70,29 @@ CMD ["node", ".pledge/server.js"]
 
   await writeFile(output, dockerfile);
   return dockerfile;
+}
+
+/**
+ * Generates a Rust-addon-optimized, multi-stage Dockerfile (rust-builder →
+ * js-builder → runtime) using pledgestack-core's `generateDockerfile`. Unlike
+ * the plain single-stage output above, this compiles packages/core/native's
+ * Rust crates in a dedicated stage and only ships the resulting .node/.so
+ * files (not a Rust toolchain) into the final runtime image — meaningfully
+ * smaller and faster for apps that rely on the native SSR/compression/etc.
+ * addons. Use `pledge docker --optimized`.
+ */
+export async function generateOptimizedDockerfile(config: DockerBuildConfig = {}): Promise<string> {
+  const { generateDockerfile: generateOptimized } = await import('pledgestack-core');
+  const dockerfile = generateOptimized(config);
+  await writeFile('Dockerfile', dockerfile);
+  return dockerfile;
+}
+
+export async function generateOptimizedDockerCompose(config: DockerBuildConfig = {}): Promise<string> {
+  const { generateDockerCompose: generateOptimizedCompose } = await import('pledgestack-core');
+  const compose = generateOptimizedCompose(config);
+  await writeFile('docker-compose.yml', compose);
+  return compose;
 }
 
 export async function generateDockerIgnore(): Promise<void> {

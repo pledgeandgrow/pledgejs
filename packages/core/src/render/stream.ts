@@ -1,7 +1,7 @@
 import { renderToPipeableStream, renderToString } from 'react-dom/server';
 import { createElement, Suspense, Component, type ReactNode, type ComponentType } from 'react';
 import { Writable } from 'node:stream';
-import type { RouteMatch, ResolvedRoute, PledgeConfig, Viewport } from 'pledgestack-shared';
+import type { RouteMatch, ResolvedRoute, PledgeConfig, Viewport, AnyGenericModule } from 'pledgestack-shared';
 import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
@@ -58,7 +58,7 @@ export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
       return renderer.renderToStream({
         match: ctx.match,
         tree: ctx.tree,
-        modules: ctx.modules as Map<string, unknown>,
+        modules: ctx.modules as unknown as Map<string, AnyGenericModule>,
         searchParams: ctx.searchParams,
       });
     }

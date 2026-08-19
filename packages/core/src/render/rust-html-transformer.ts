@@ -33,7 +33,7 @@ let rustTransformerAddon: Record<string, (...args: unknown[]) => unknown> | null
 export function isRustHtmlTransformerAvailable(): boolean {
   if (rustTransformerAvailable !== null) return rustTransformerAvailable;
   try {
-    const addon = require('../native/rust-html-transformer.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../../native/rust-html-transformer.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.createTransformer === 'function') {
       rustTransformerAddon = addon;
       rustTransformerAvailable = true;

@@ -28,6 +28,12 @@
     { "path": "../rss" },
     { "path": "../ws" },
     { "path": "../adapters" },
-    { "path": "../privacy" }
+    { "path": "../privacy" },
+    { "path": "../bundler-pledgepack" },
+    { "path": "../bundler-vite" },
+    { "path": "../bundler-rollup" },
+    { "path": "../bundler-turbopack" },
+    { "path": "../bundler-rsbuild" },
+    { "path": "../bundler-webpack" }
   ]
 }

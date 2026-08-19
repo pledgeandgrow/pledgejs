@@ -28,7 +28,7 @@ function loadNative(): typeof nativeAddon {
   if (loadAttempted) return nativeAddon;
   loadAttempted = true;
   try {
-    const addon = require('../native/rust-og-renderer.node') as NonNullable<typeof nativeAddon>;
+    const addon = require('../../native/rust-og-renderer.node') as NonNullable<typeof nativeAddon>;
     if (typeof addon.renderSvgToPng === 'function') {
       nativeAddon = addon;
     }

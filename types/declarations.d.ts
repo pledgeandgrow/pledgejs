@@ -11,3 +11,12 @@ declare module 'react-server-dom-webpack/client' {
   export function createFromReadableStream(stream: ReadableStream<Uint8Array>): Promise<ReactNode>;
   export function createFromFetch(promise: Promise<Response>): Promise<ReactNode>;
 }
+
+declare module 'react-server-dom-webpack/server' {
+  import type { ReactNode } from 'react';
+  export function renderToReadableStream(
+    model: ReactNode,
+    bundlerConfig?: unknown,
+    options?: { onError?: (error: unknown) => void; identifierPrefix?: string },
+  ): ReadableStream<Uint8Array>;
+}

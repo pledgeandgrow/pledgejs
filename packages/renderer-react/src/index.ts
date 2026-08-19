@@ -16,7 +16,6 @@
 import { renderToString, renderToPipeableStream } from 'react-dom/server';
 import { createElement, Suspense, Component, type ReactNode, type ComponentType } from 'react';
 import { Writable } from 'node:stream';
-import { createRequire } from 'node:module';
 import type {
   RendererAdapter,
   RenderContext,
@@ -24,14 +23,12 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, escapeHtml } from 'pledgestack-shared';
 import type { RouteTree } from 'pledgestack-shared';
 import { getLayoutChain } from './layout-chain';
 import { renderHeadTags, renderViewportTags, mergeMetadata } from './head-tags';
 import { recordRender, getCompiledTemplate, storeCompiledTemplate } from './jit-templates';
 import { isRustSSRAvailable, renderRustSSR } from './rust-accel';
-
-const require = createRequire(import.meta.url);
 
 // --- Module type cast helpers ---
 
@@ -59,8 +56,6 @@ interface ReactErrorModule { default: ComponentType<{ error: Error; reset: () =>
 interface ReactNotFoundModule { default: ComponentType<Record<string, unknown>>; }
 interface ReactHeadModule { default: ComponentType<Record<string, unknown>>; }
 interface ReactTemplateModule { default: ComponentType<{ children: ReactNode }>; }
-
-type AnyReactModule = ReactPageModule | ReactLayoutModule | ReactLoadingModule | ReactErrorModule | ReactNotFoundModule | ReactHeadModule | ReactTemplateModule;
 
 function asPage(mod: unknown): ReactPageModule | undefined {
   const m = mod as ReactPageModule;
@@ -125,10 +120,6 @@ function simpleHash(str: string): number {
   return Math.abs(hash);
 }
 
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
 /**
  * Fills a compiled HTML template with route-specific data.
  * Compiled templates contain {{placeholder}} markers replaced with context values.
@@ -175,7 +166,11 @@ async function resolveViewport(pageModule: ReactPageModule): Promise<import('ple
 
 async function resolveHead(
   route: import('pledgestack-shared').ResolvedRoute,
-  modules: Map<string, AnyReactModule>,
+  // Callers pass RenderContext.modules, typed Map<string, AnyGenericModule>
+  // (the framework-agnostic shared type) — asHead() below safely narrows
+  // individual lookups to ReactHeadModule, so this accepts the same broad
+  // type its callers actually have instead of forcing an upstream cast.
+  modules: Map<string, import('pledgestack-shared').AnyGenericModule>,
   metadata: HeadMetadata,
 ): Promise<string | undefined> {
   if (route.headFilePath) {
@@ -595,26 +590,85 @@ export class ReactRendererAdapter implements RendererAdapter {
   }
 
   async renderRSCStream(ctx: RenderContext): Promise<ReadableStream<Uint8Array>> {
-    // For true RSC streaming, we render the HTML shell + flight data as a stream
-    // Falls back to regular SSR streaming if RSC is not available
+    // True RSC streaming: emit the HTML shell for initial paint, then stream
+    // the flight payload chunk-by-chunk as inline scripts so the client can
+    // start reconstructing the RSC tree before the whole payload has arrived.
+    // Falls back to regular SSR streaming if react-server-dom-webpack isn't available.
+    let rscServer: typeof import('react-server-dom-webpack/server') | undefined;
     try {
-      const rscServer = await import('react-server-dom-webpack/server');
-      if (typeof rscServer.renderToReadableStream === 'function') {
-        const element = buildElementTree(ctx);
-        const flightStream = rscServer.renderToReadableStream(element);
-
-        // Also render HTML for initial paint
-        return this.renderToReadableStream(ctx).then(async (htmlStream) => {
-          // Merge HTML stream with flight stream
-          // For simplicity, we pipe the HTML stream and append flight data
-          return htmlStream;
-        });
-      }
+      rscServer = await import('react-server-dom-webpack/server');
     } catch {
-      // Fall through to SSR streaming
+      rscServer = undefined;
     }
 
-    return this.renderToReadableStream(ctx);
+    if (!rscServer || typeof rscServer.renderToReadableStream !== 'function') {
+      return this.renderToReadableStream(ctx);
+    }
+
+    const { match, modules } = ctx;
+    const pageModule = asPage(modules.get(match.route.filePath));
+    if (!pageModule) throw new Error(`Page module not found: ${match.route.filePath}`);
+
+    const metadata = await resolveMetadata(pageModule, match.params);
+    const viewport = await resolveViewport(pageModule);
+    const headHtml = await resolveHead(match.route, modules, metadata);
+    const headTags = headHtml ?? renderHeadTags(metadata, match.route);
+    const viewportTags = renderViewportTags(viewport);
+    const manifest: PledgeManifest = { pledges: [] };
+    const serializedManifest = JSON.stringify(ctx.clientManifest ?? {});
+    const clientRefs = JSON.stringify(this.extractClientReferences(ctx));
+
+    const element = buildElementTree(ctx);
+    // Render the initial HTML for first paint. The flight stream (read below)
+    // carries the data needed to reconcile a live RSC tree on the client.
+    const htmlContent = renderToString(createElement(() => element as ReactNode));
+    const flightStream = rscServer.renderToReadableStream(element);
+    const flightReader = flightStream.getReader();
+    const flightDecoder = new TextDecoder();
+    const encoder = new TextEncoder();
+
+    const shellBefore = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
+  ${headTags}
+  <link rel="stylesheet" href="/__pledge__/client.css" />
+</head>
+<body>
+  <div id="__pledge_root__">${htmlContent}</div>
+  <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>
+  <script id="__pledge_manifest__" type="application/json">${serializedManifest}</script>
+  <script id="__pledge_client_refs__" type="application/json">${clientRefs}</script>
+`;
+
+    const shellAfter = `  <script type="module" src="/__pledge__/rsc-client.js"></script>
+</body>
+</html>`;
+
+    return new ReadableStream<Uint8Array>({
+      async start(controller) {
+        controller.enqueue(encoder.encode(shellBefore));
+        try {
+          while (true) {
+            const { done, value } = await flightReader.read();
+            if (done) break;
+            const chunkText = flightDecoder.decode(value, { stream: true });
+            // Escape "</script" so a flight chunk can never prematurely close
+            // the inline <script> tag it's embedded in.
+            const escapedChunk = JSON.stringify(chunkText).replace(/<\//g, '<\\/');
+            controller.enqueue(
+              encoder.encode(`  <script>(self.__pledge_rsc_chunks__=self.__pledge_rsc_chunks__||[]).push(${escapedChunk});</script>\n`),
+            );
+          }
+        } catch (err) {
+          controller.error(err);
+          return;
+        }
+        controller.enqueue(encoder.encode(shellAfter));
+        controller.close();
+      },
+    });
   }
 
   async prerenderStaticShell(ctx: RenderContext): Promise<string> {
@@ -728,15 +782,22 @@ export { Link };
 import { hydrateRoot } from '${reactDomClientImport}';
 import { createElement } from '${reactImport}';
 
-// RSC hydration: read the serialized RSC flight payload and hydrate
+// RSC hydration: read the serialized RSC flight payload and hydrate.
+// The payload arrives either as one blob (non-streaming renderRSC(), written
+// to #__pledge_rsc_data__) or as progressively-pushed chunks (streaming
+// renderRSCStream(), collected on self.__pledge_rsc_chunks__ as they arrive).
 const rscDataEl = document.getElementById('__pledge_rsc_data__');
 const manifestEl = document.getElementById('__pledge_manifest__');
 const clientRefsEl = document.getElementById('__pledge_client_refs__');
 const root = document.getElementById('__pledge_root__');
+const streamedChunks = self.__pledge_rsc_chunks__;
+const hasFlightData = Boolean(rscDataEl) || Array.isArray(streamedChunks);
 
-if (root && rscDataEl) {
+if (root && hasFlightData) {
   try {
-    const flightData = rscDataEl.textContent || '';
+    const flightData = Array.isArray(streamedChunks)
+      ? streamedChunks.join('')
+      : (rscDataEl.textContent || '');
     const manifest = manifestEl ? JSON.parse(manifestEl.textContent || '{}') : {};
     const clientRefs = clientRefsEl ? JSON.parse(clientRefsEl.textContent || '[]') : [];
 

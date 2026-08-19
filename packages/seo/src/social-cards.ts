@@ -1,3 +1,5 @@
+import { escapeHtml } from 'pledgestack-shared';
+
 export interface SocialCardInput {
   title: string;
   description: string;
@@ -25,8 +27,4 @@ export function generateSocialCards(input: SocialCardInput): string {
   if (input.image) tags.push(`<meta name="twitter:image" content="${escapeHtml(input.image)}">`);
 
   return tags.join('\n');
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

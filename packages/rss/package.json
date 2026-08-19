@@ -18,6 +18,9 @@
     "clean": "rimraf dist",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "pledgestack-shared": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "rimraf": "^6.0.0",

@@ -8,8 +8,14 @@
  * rendering layer is pluggable via this interface.
  */
 
-import type { ReadableStream } from 'node:stream/web';
 import type { ResolvedRoute, Viewport, RouteMatch, MiddlewareResult } from './types';
+
+// Intentionally using the global (DOM lib) `ReadableStream`, not the one from
+// `node:stream/web` — every renderer adapter constructs/consumes streams via
+// the standard Web Streams API (`new ReadableStream()`, `.getReader()`, etc.),
+// and Node's `stream/web` type declarations lag behind lib.dom.d.ts (missing
+// `values`/`Symbol.asyncIterator`), which made every implementer of this
+// interface fail to type-check against it.
 
 /**
  * Framework types supported by PledgeStack.

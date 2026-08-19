@@ -29,7 +29,7 @@ let rustProfilerAddon: Record<string, (...args: unknown[]) => unknown> | null = 
 export function isRustProfilerAvailable(): boolean {
   if (rustProfilerAvailable !== null) return rustProfilerAvailable;
   try {
-    const addon = require('../native/rust-ssr-profiler.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../../native/rust-ssr-profiler.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.startProfiling === 'function' && typeof addon.stopProfiling === 'function') {
       rustProfilerAddon = addon;
       rustProfilerAvailable = true;

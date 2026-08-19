@@ -77,7 +77,7 @@ export class SqlxPool {
 
   async connect(): Promise<void> {
     try {
-      const addon = require('../native/sqlx.node') as { createPool: (config: SqlxConfig) => unknown };
+      const addon = require('../../native/sqlx.node') as { createPool: (config: SqlxConfig) => unknown };
       this.pool = addon.createPool(this.config);
     } catch {
       // Fall back to JS implementation (pg/mysql2)
@@ -93,7 +93,7 @@ export class SqlxPool {
       const result = await this.fallback.query<T>(sql, ...params);
       return { rows: result.rows, rowsAffected: result.rowsAffected };
     }
-    const addon = require('../native/sqlx.node') as { query: (pool: unknown, sql: string, params: unknown[]) => Promise<SqlxQueryResult<T>> };
+    const addon = require('../../native/sqlx.node') as { query: (pool: unknown, sql: string, params: unknown[]) => Promise<SqlxQueryResult<T>> };
     return addon.query(this.pool, sql, params);
   }
 
@@ -104,7 +104,7 @@ export class SqlxPool {
 
   async transaction<T>(fn: (tx: SqlxTransaction) => Promise<T>): Promise<T> {
     if (!this.pool) await this.connect();
-    const addon = require('../native/sqlx.node') as { beginTransaction: (pool: unknown) => Promise<unknown>; commit: (tx: unknown) => Promise<void>; rollback: (tx: unknown) => Promise<void> };
+    const addon = require('../../native/sqlx.node') as { beginTransaction: (pool: unknown) => Promise<unknown>; commit: (tx: unknown) => Promise<void>; rollback: (tx: unknown) => Promise<void> };
     const tx = await addon.beginTransaction(this.pool);
     try {
       const result = await fn(new SqlxTransaction(tx));
@@ -123,7 +123,7 @@ export class SqlxPool {
       return;
     }
     if (this.pool) {
-      const addon = require('../native/sqlx.node') as { closePool: (pool: unknown) => Promise<void> };
+      const addon = require('../../native/sqlx.node') as { closePool: (pool: unknown) => Promise<void> };
       await addon.closePool(this.pool);
       this.pool = null;
     }
@@ -134,7 +134,7 @@ export class SqlxTransaction {
   constructor(private tx: unknown) {}
 
   async query<T = unknown>(sql: string, ...params: unknown[]): Promise<SqlxQueryResult<T>> {
-    const addon = require('../native/sqlx.node') as { queryInTx: (tx: unknown, sql: string, params: unknown[]) => Promise<SqlxQueryResult<T>> };
+    const addon = require('../../native/sqlx.node') as { queryInTx: (tx: unknown, sql: string, params: unknown[]) => Promise<SqlxQueryResult<T>> };
     return addon.queryInTx(this.tx, sql, params);
   }
 }
@@ -169,7 +169,7 @@ export class SeaOrmDatabase {
 
   async connect(): Promise<void> {
     try {
-      const addon = require('../native/sea-orm.node') as { connect: (config: SeaOrmConfig) => Promise<unknown> };
+      const addon = require('../../native/sea-orm.node') as { connect: (config: SeaOrmConfig) => Promise<unknown> };
       this.connection = await addon.connect(this.config);
     } catch {
       throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
@@ -179,7 +179,7 @@ export class SeaOrmDatabase {
   /** Generates entity models from the database schema */
   async generateEntities(outputDir: string): Promise<SeaOrmEntity[]> {
     try {
-      const addon = require('../native/sea-orm.node') as { generateEntities: (conn: unknown, dir: string) => Promise<SeaOrmEntity[]> };
+      const addon = require('../../native/sea-orm.node') as { generateEntities: (conn: unknown, dir: string) => Promise<SeaOrmEntity[]> };
       return addon.generateEntities(this.connection, outputDir);
     } catch {
       throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
@@ -189,7 +189,7 @@ export class SeaOrmDatabase {
   /** Finds entities by criteria */
   async find<T>(entity: string, criteria: Record<string, unknown>): Promise<T[]> {
     try {
-      const addon = require('../native/sea-orm.node') as { find: (conn: unknown, entity: string, criteria: Record<string, unknown>) => Promise<T[]> };
+      const addon = require('../../native/sea-orm.node') as { find: (conn: unknown, entity: string, criteria: Record<string, unknown>) => Promise<T[]> };
       return addon.find(this.connection, entity, criteria);
     } catch {
       throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
@@ -199,7 +199,7 @@ export class SeaOrmDatabase {
   /** Inserts a new entity */
   async insert<T>(entity: string, data: Partial<T>): Promise<T> {
     try {
-      const addon = require('../native/sea-orm.node') as { insert: (conn: unknown, entity: string, data: unknown) => Promise<T> };
+      const addon = require('../../native/sea-orm.node') as { insert: (conn: unknown, entity: string, data: unknown) => Promise<T> };
       return addon.insert(this.connection, entity, data);
     } catch {
       throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
@@ -209,7 +209,7 @@ export class SeaOrmDatabase {
   /** Updates an entity by ID */
   async update<T>(entity: string, id: string | number, data: Partial<T>): Promise<T> {
     try {
-      const addon = require('../native/sea-orm.node') as { update: (conn: unknown, entity: string, id: string | number, data: unknown) => Promise<T> };
+      const addon = require('../../native/sea-orm.node') as { update: (conn: unknown, entity: string, id: string | number, data: unknown) => Promise<T> };
       return addon.update(this.connection, entity, id, data);
     } catch {
       throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
@@ -219,7 +219,7 @@ export class SeaOrmDatabase {
   /** Deletes an entity by ID */
   async delete(entity: string, id: string | number): Promise<boolean> {
     try {
-      const addon = require('../native/sea-orm.node') as { delete: (conn: unknown, entity: string, id: string | number) => Promise<boolean> };
+      const addon = require('../../native/sea-orm.node') as { delete: (conn: unknown, entity: string, id: string | number) => Promise<boolean> };
       return addon.delete(this.connection, entity, id);
     } catch {
       throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
@@ -259,7 +259,7 @@ export class RedisClient {
 
   async connect(): Promise<void> {
     try {
-      const addon = require('../native/redis.node') as { createClient: (config: RedisConfig) => unknown };
+      const addon = require('../../native/redis.node') as { createClient: (config: RedisConfig) => unknown };
       this.client = addon.createClient(this.config);
     } catch {
       this.useFallback = true;
@@ -271,7 +271,7 @@ export class RedisClient {
   async get(key: string): Promise<string | null> {
     if (!this.client && !this.fallback) await this.connect();
     if (this.useFallback && this.fallback) return this.fallback.get(key);
-    const addon = require('../native/redis.node') as { get: (client: unknown, key: string) => Promise<string | null> };
+    const addon = require('../../native/redis.node') as { get: (client: unknown, key: string) => Promise<string | null> };
     const fullKey = this.config.keyPrefix ? `${this.config.keyPrefix}${key}` : key;
     return addon.get(this.client, fullKey);
   }
@@ -279,7 +279,7 @@ export class RedisClient {
   async set(key: string, value: string, ttl?: number): Promise<void> {
     if (!this.client && !this.fallback) await this.connect();
     if (this.useFallback && this.fallback) { await this.fallback.set(key, value, ttl); return; }
-    const addon = require('../native/redis.node') as { set: (client: unknown, key: string, value: string, ttl?: number) => Promise<void> };
+    const addon = require('../../native/redis.node') as { set: (client: unknown, key: string, value: string, ttl?: number) => Promise<void> };
     const fullKey = this.config.keyPrefix ? `${this.config.keyPrefix}${key}` : key;
     const effectiveTtl = ttl ?? this.config.defaultTtl;
     await addon.set(this.client, fullKey, value, effectiveTtl);
@@ -287,7 +287,7 @@ export class RedisClient {
 
   async del(key: string): Promise<void> {
     if (this.useFallback && this.fallback) { await this.fallback.del(key); return; }
-    const addon = require('../native/redis.node') as { del: (client: unknown, key: string) => Promise<void> };
+    const addon = require('../../native/redis.node') as { del: (client: unknown, key: string) => Promise<void> };
     const fullKey = this.config.keyPrefix ? `${this.config.keyPrefix}${key}` : key;
     await addon.del(this.client, fullKey);
   }
@@ -311,28 +311,28 @@ export class RedisClient {
   /** Pub/Sub: subscribe to a channel */
   async subscribe(channel: string, handler: (message: string) => void): Promise<void> {
     if (!this.subscriber) {
-      const addon = require('../native/redis.node') as { createSubscriber: (config: RedisConfig) => unknown };
+      const addon = require('../../native/redis.node') as { createSubscriber: (config: RedisConfig) => unknown };
       this.subscriber = addon.createSubscriber(this.config);
     }
-    const subAddon = require('../native/redis.node') as { subscribe: (sub: unknown, channel: string, handler: (msg: string) => void) => Promise<void> };
+    const subAddon = require('../../native/redis.node') as { subscribe: (sub: unknown, channel: string, handler: (msg: string) => void) => Promise<void> };
     await subAddon.subscribe(this.subscriber, channel, handler);
   }
 
   /** Pub/Sub: publish to a channel */
   async publish(channel: string, message: string): Promise<number> {
-    const addon = require('../native/redis.node') as { publish: (client: unknown, channel: string, message: string) => Promise<number> };
+    const addon = require('../../native/redis.node') as { publish: (client: unknown, channel: string, message: string) => Promise<number> };
     return addon.publish(this.client, channel, message);
   }
 
   async disconnect(): Promise<void> {
     if (this.useFallback && this.fallback) { await this.fallback.disconnect(); this.fallback = null; return; }
     if (this.client) {
-      const addon = require('../native/redis.node') as { disconnect: (client: unknown) => Promise<void> };
+      const addon = require('../../native/redis.node') as { disconnect: (client: unknown) => Promise<void> };
       await addon.disconnect(this.client);
       this.client = null;
     }
     if (this.subscriber) {
-      const addon = require('../native/redis.node') as { disconnect: (client: unknown) => Promise<void> };
+      const addon = require('../../native/redis.node') as { disconnect: (client: unknown) => Promise<void> };
       await addon.disconnect(this.subscriber);
       this.subscriber = null;
     }
@@ -391,7 +391,7 @@ export class RustAuth {
   /** Hash a password using Argon2 */
   async hashPassword(password: string): Promise<string> {
     try {
-      const addon = require('../native/auth.node') as { hashPassword: (password: string, config: AuthConfig) => Promise<string> };
+      const addon = require('../../native/auth.node') as { hashPassword: (password: string, config: AuthConfig) => Promise<string> };
       return addon.hashPassword(password, this.config);
     } catch {
       return this.getFallback().hashPassword(password);
@@ -401,7 +401,7 @@ export class RustAuth {
   /** Verify a password against an Argon2 hash */
   async verifyPassword(password: string, hash: string): Promise<boolean> {
     try {
-      const addon = require('../native/auth.node') as { verifyPassword: (password: string, hash: string) => Promise<boolean> };
+      const addon = require('../../native/auth.node') as { verifyPassword: (password: string, hash: string) => Promise<boolean> };
       return addon.verifyPassword(password, hash);
     } catch {
       return this.getFallback().verifyPassword(password, hash);
@@ -414,7 +414,7 @@ export class RustAuth {
       throw new Error('JWT secret is required. Set jwtSecret in AuthConfig.');
     }
     try {
-      const addon = require('../native/auth.node') as { signJwt: (payload: JwtPayload, secret: string, expiry: number) => Promise<string> };
+      const addon = require('../../native/auth.node') as { signJwt: (payload: JwtPayload, secret: string, expiry: number) => Promise<string> };
       const now = Math.floor(Date.now() / 1000);
       const fullPayload: JwtPayload = {
         ...payload,
@@ -433,7 +433,7 @@ export class RustAuth {
       throw new Error('JWT secret is required. Set jwtSecret in AuthConfig.');
     }
     try {
-      const addon = require('../native/auth.node') as { verifyJwt: (token: string, secret: string) => Promise<JwtPayload> };
+      const addon = require('../../native/auth.node') as { verifyJwt: (token: string, secret: string) => Promise<JwtPayload> };
       return addon.verifyJwt(token, this.config.jwtSecret);
     } catch {
       return this.getFallback().verifyJwt(token) as Promise<JwtPayload>;
@@ -463,7 +463,7 @@ export class ImageProcessor {
   /** Process an image with the given options */
   static async process(input: Buffer, options: ImageProcessOptions): Promise<Buffer> {
     try {
-      const addon = require('../native/image.node') as { process: (input: Buffer, options: ImageProcessOptions) => Promise<Buffer> };
+      const addon = require('../../native/image.node') as { process: (input: Buffer, options: ImageProcessOptions) => Promise<Buffer> };
       return addon.process(input, options);
     } catch {
       return ImageProcessorFallback.process(input, options);
@@ -488,7 +488,7 @@ export class ImageProcessor {
   /** Get image metadata */
   static async metadata(input: Buffer): Promise<{ width: number; height: number; format: string }> {
     try {
-      const addon = require('../native/image.node') as { metadata: (input: Buffer) => Promise<{ width: number; height: number; format: string }> };
+      const addon = require('../../native/image.node') as { metadata: (input: Buffer) => Promise<{ width: number; height: number; format: string }> };
       return addon.metadata(input);
     } catch {
       return ImageProcessorFallback.metadata(input);
@@ -523,7 +523,7 @@ export class PdfGenerator {
   /** Generate PDF from HTML */
   static async fromHtml(html: string, options?: PdfOptions): Promise<Buffer> {
     try {
-      const addon = require('../native/pdf.node') as { fromHtml: (html: string, options: PdfOptions) => Promise<Buffer> };
+      const addon = require('../../native/pdf.node') as { fromHtml: (html: string, options: PdfOptions) => Promise<Buffer> };
       return addon.fromHtml(html, options ?? {});
     } catch {
       // Fallback: use puppeteer for HTML→PDF
@@ -546,7 +546,7 @@ export class PdfGenerator {
 
   /** Generate PDF from a template */
   static async fromTemplate(template: PdfTemplate, options?: PdfOptions): Promise<Buffer> {
-    const addon = require('../native/pdf.node') as { fromTemplate: (template: PdfTemplate, options: PdfOptions) => Promise<Buffer> };
+    const addon = require('../../native/pdf.node') as { fromTemplate: (template: PdfTemplate, options: PdfOptions) => Promise<Buffer> };
     return addon.fromTemplate(template, options ?? {});
   }
 
@@ -603,7 +603,7 @@ export class JobQueue<T = unknown> {
 
   async connect(): Promise<void> {
     try {
-      const addon = require('../native/jobs.node') as { createQueue: (config: JobQueueConfig) => unknown };
+      const addon = require('../../native/jobs.node') as { createQueue: (config: JobQueueConfig) => unknown };
       this.queue = addon.createQueue(this.config);
     } catch {
       this.useFallback = true;
@@ -619,7 +619,7 @@ export class JobQueue<T = unknown> {
       this.jobs.set(id, { id, payload, attempts: 0, createdAt: Date.now() });
       return id;
     }
-    const addon = require('../native/jobs.node') as { enqueue: (queue: unknown, payload: T) => Promise<string> };
+    const addon = require('../../native/jobs.node') as { enqueue: (queue: unknown, payload: T) => Promise<string> };
     return addon.enqueue(this.queue, payload);
   }
 
@@ -640,7 +640,7 @@ export class JobQueue<T = unknown> {
       }
       return;
     }
-    const addon = require('../native/jobs.node') as { start: (queue: unknown, handler: (job: Job<T>) => Promise<void>) => Promise<void> };
+    const addon = require('../../native/jobs.node') as { start: (queue: unknown, handler: (job: Job<T>) => Promise<void>) => Promise<void> };
     await addon.start(this.queue, handler);
   }
 
@@ -649,7 +649,7 @@ export class JobQueue<T = unknown> {
     if (this.useFallback) {
       return { pending: this.jobs.size, processing: 0, completed: 0, failed: 0 };
     }
-    const addon = require('../native/jobs.node') as { stats: (queue: unknown) => Promise<{ pending: number; processing: number; completed: number; failed: number }> };
+    const addon = require('../../native/jobs.node') as { stats: (queue: unknown) => Promise<{ pending: number; processing: number; completed: number; failed: number }> };
     return addon.stats(this.queue);
   }
 }
@@ -719,7 +719,7 @@ export class CronScheduler {
 
   async start(): Promise<void> {
     try {
-      const addon = require('../native/cron.node') as { createScheduler: () => Promise<unknown> };
+      const addon = require('../../native/cron.node') as { createScheduler: () => Promise<unknown> };
       this.scheduler = await addon.createScheduler();
     } catch {
       this.useFallback = true;
@@ -739,7 +739,7 @@ export class CronScheduler {
       this.jobs.set(id, interval);
       return;
     }
-    const addon = require('../native/cron.node') as { addJob: (scheduler: unknown, id: string, config: CronConfig, handler: () => Promise<void>) => Promise<unknown> };
+    const addon = require('../../native/cron.node') as { addJob: (scheduler: unknown, id: string, config: CronConfig, handler: () => Promise<void>) => Promise<unknown> };
     const job = await addon.addJob(this.scheduler, id, config, handler);
     this.jobs.set(id, job);
   }
@@ -754,7 +754,7 @@ export class CronScheduler {
       return;
     }
     if (!this.scheduler) return;
-    const addon = require('../native/cron.node') as { removeJob: (scheduler: unknown, id: string) => Promise<void> };
+    const addon = require('../../native/cron.node') as { removeJob: (scheduler: unknown, id: string) => Promise<void> };
     await addon.removeJob(this.scheduler, id);
     this.jobs.delete(id);
   }
@@ -772,7 +772,7 @@ export class CronScheduler {
       return;
     }
     if (this.scheduler) {
-      const addon = require('../native/cron.node') as { stop: (scheduler: unknown) => Promise<void> };
+      const addon = require('../../native/cron.node') as { stop: (scheduler: unknown) => Promise<void> };
       await addon.stop(this.scheduler);
       this.scheduler = null;
       this.jobs.clear();
@@ -819,7 +819,7 @@ export class EmailSender {
 
   async send(message: EmailMessage): Promise<void> {
     try {
-      const addon = require('../native/email.node') as { send: (config: EmailConfig, message: EmailMessage) => Promise<void> };
+      const addon = require('../../native/email.node') as { send: (config: EmailConfig, message: EmailMessage) => Promise<void> };
       await addon.send(this.config, message);
     } catch {
       // Fallback: use nodemailer
@@ -851,7 +851,7 @@ export class EmailSender {
     variables: Record<string, unknown>,
   ): Promise<void> {
     try {
-      const addon = require('../native/email.node') as { sendTemplate: (config: EmailConfig, to: string, template: string, vars: Record<string, unknown>) => Promise<void> };
+      const addon = require('../../native/email.node') as { sendTemplate: (config: EmailConfig, to: string, template: string, vars: Record<string, unknown>) => Promise<void> };
       await addon.sendTemplate(this.config, to, templateName, variables);
     } catch {
       // Fallback: render template as simple string replacement
@@ -922,7 +922,7 @@ export class RustHttpClient {
     options: { body?: unknown; headers?: Record<string, string> },
   ): Promise<HttpResponse> {
     try {
-      const addon = require('../native/http-client.node') as { request: (method: string, url: string, options: unknown, config: HttpClientConfig) => Promise<HttpResponse> };
+      const addon = require('../../native/http-client.node') as { request: (method: string, url: string, options: unknown, config: HttpClientConfig) => Promise<HttpResponse> };
       return addon.request(method, url, options, this.config);
     } catch {
       // Fallback: use native fetch (Node 18+)
@@ -1031,7 +1031,7 @@ export class FileProcessor {
   /** Parse an Excel file */
   static async parseExcel(input: Buffer): Promise<{ sheets: Record<string, unknown[][]> }> {
     try {
-      const addon = require('../native/file-process.node') as { parseExcel: (input: Buffer) => Promise<{ sheets: Record<string, unknown[][]> }> };
+      const addon = require('../../native/file-process.node') as { parseExcel: (input: Buffer) => Promise<{ sheets: Record<string, unknown[][]> }> };
       return addon.parseExcel(input);
     } catch {
       return FileProcessorFallback.parseExcel(input);
@@ -1041,7 +1041,7 @@ export class FileProcessor {
   /** Generate an Excel file */
   static async generateExcel(sheets: Record<string, unknown[][]>): Promise<Buffer> {
     try {
-      const addon = require('../native/file-process.node') as { generateExcel: (sheets: Record<string, unknown[][]>) => Promise<Buffer> };
+      const addon = require('../../native/file-process.node') as { generateExcel: (sheets: Record<string, unknown[][]>) => Promise<Buffer> };
       return addon.generateExcel(sheets);
     } catch {
       return FileProcessorFallback.generateExcel(sheets);
@@ -1051,7 +1051,7 @@ export class FileProcessor {
   /** Parse a CSV file */
   static async parseCsv(input: Buffer | string, delimiter?: string): Promise<unknown[][]> {
     try {
-      const addon = require('../native/file-process.node') as { parseCsv: (input: string, delimiter?: string) => Promise<unknown[][]> };
+      const addon = require('../../native/file-process.node') as { parseCsv: (input: string, delimiter?: string) => Promise<unknown[][]> };
       return addon.parseCsv(typeof input === 'string' ? input : input.toString('utf-8'), delimiter);
     } catch {
       return FileProcessorFallback.parseCsv(input, delimiter);
@@ -1061,7 +1061,7 @@ export class FileProcessor {
   /** Generate a CSV file */
   static async generateCsv(rows: unknown[][], delimiter?: string): Promise<string> {
     try {
-      const addon = require('../native/file-process.node') as { generateCsv: (rows: unknown[][], delimiter?: string) => Promise<string> };
+      const addon = require('../../native/file-process.node') as { generateCsv: (rows: unknown[][], delimiter?: string) => Promise<string> };
       return addon.generateCsv(rows, delimiter);
     } catch {
       return FileProcessorFallback.generateCsv(rows, delimiter);
@@ -1108,7 +1108,7 @@ export class RustTracing {
   /** Initialize the tracing subscriber */
   async init(): Promise<void> {
     try {
-      const addon = require('../native/tracing.node') as { init: (config: TracingConfig) => Promise<void> };
+      const addon = require('../../native/tracing.node') as { init: (config: TracingConfig) => Promise<void> };
       await addon.init(this._config);
     } catch {
       await this.getFallback().init();
@@ -1118,7 +1118,7 @@ export class RustTracing {
   /** Start a span */
   async startSpan(name: string, attributes?: Record<string, string>): Promise<string> {
     try {
-      const addon = require('../native/tracing.node') as { startSpan: (name: string, attrs?: Record<string, string>) => Promise<string> };
+      const addon = require('../../native/tracing.node') as { startSpan: (name: string, attrs?: Record<string, string>) => Promise<string> };
       return addon.startSpan(name, attributes);
     } catch {
       return this.getFallback().startSpan(name, attributes);
@@ -1128,7 +1128,7 @@ export class RustTracing {
   /** End a span */
   async endSpan(spanId: string): Promise<void> {
     try {
-      const addon = require('../native/tracing.node') as { endSpan: (spanId: string) => Promise<void> };
+      const addon = require('../../native/tracing.node') as { endSpan: (spanId: string) => Promise<void> };
       await addon.endSpan(spanId);
     } catch {
       await this.getFallback().endSpan(spanId);
@@ -1138,7 +1138,7 @@ export class RustTracing {
   /** Record an event in a span */
   async event(spanId: string, name: string, attributes?: Record<string, string>): Promise<void> {
     try {
-      const addon = require('../native/tracing.node') as { event: (spanId: string, name: string, attrs?: Record<string, string>) => Promise<void> };
+      const addon = require('../../native/tracing.node') as { event: (spanId: string, name: string, attrs?: Record<string, string>) => Promise<void> };
       await addon.event(spanId, name, attributes);
     } catch {
       await this.getFallback().event(spanId, name, attributes);
@@ -1183,7 +1183,7 @@ export class RustCrypto {
   async encrypt(plaintext: Buffer): Promise<{ ciphertext: Buffer; nonce: Buffer; tag: Buffer }> {
     if (!this.config.aesKey) throw new Error('AES key is required');
     try {
-      const addon = require('../native/crypto.node') as { encrypt: (plaintext: Buffer, key: Buffer) => Promise<{ ciphertext: Buffer; nonce: Buffer; tag: Buffer }> };
+      const addon = require('../../native/crypto.node') as { encrypt: (plaintext: Buffer, key: Buffer) => Promise<{ ciphertext: Buffer; nonce: Buffer; tag: Buffer }> };
       return addon.encrypt(plaintext, this.config.aesKey);
     } catch {
       return this.getFallback().encrypt(plaintext, this.config.aesKey);
@@ -1194,7 +1194,7 @@ export class RustCrypto {
   async decrypt(ciphertext: Buffer, nonce: Buffer, tag: Buffer): Promise<Buffer> {
     if (!this.config.aesKey) throw new Error('AES key is required');
     try {
-      const addon = require('../native/crypto.node') as { decrypt: (ciphertext: Buffer, key: Buffer, nonce: Buffer, tag: Buffer) => Promise<Buffer> };
+      const addon = require('../../native/crypto.node') as { decrypt: (ciphertext: Buffer, key: Buffer, nonce: Buffer, tag: Buffer) => Promise<Buffer> };
       return addon.decrypt(ciphertext, this.config.aesKey, nonce, tag);
     } catch {
       return this.getFallback().decrypt(ciphertext, this.config.aesKey, nonce, tag);
@@ -1204,7 +1204,7 @@ export class RustCrypto {
   /** Hash data using SHA-256 */
   async sha256(data: Buffer | string): Promise<string> {
     try {
-      const addon = require('../native/crypto.node') as { sha256: (data: Buffer) => Promise<string> };
+      const addon = require('../../native/crypto.node') as { sha256: (data: Buffer) => Promise<string> };
       const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
       return addon.sha256(buf);
     } catch {
@@ -1215,7 +1215,7 @@ export class RustCrypto {
   /** Hash data using SHA-512 */
   async sha512(data: Buffer | string): Promise<string> {
     try {
-      const addon = require('../native/crypto.node') as { sha512: (data: Buffer) => Promise<string> };
+      const addon = require('../../native/crypto.node') as { sha512: (data: Buffer) => Promise<string> };
       const buf = typeof data === 'string' ? Buffer.from(data, 'utf-8') : data;
       return addon.sha512(buf);
     } catch {
@@ -1226,7 +1226,7 @@ export class RustCrypto {
   /** Generate secure random bytes */
   async randomBytes(length: number): Promise<Buffer> {
     try {
-      const addon = require('../native/crypto.node') as { randomBytes: (length: number) => Promise<Buffer> };
+      const addon = require('../../native/crypto.node') as { randomBytes: (length: number) => Promise<Buffer> };
       return addon.randomBytes(length);
     } catch {
       return this.getFallback().randomBytes(length);
@@ -1236,7 +1236,7 @@ export class RustCrypto {
   /** Generate a UUID v4 */
   async uuid(): Promise<string> {
     try {
-      const addon = require('../native/crypto.node') as { uuid: () => Promise<string> };
+      const addon = require('../../native/crypto.node') as { uuid: () => Promise<string> };
       return addon.uuid();
     } catch {
       return this.getFallback().uuid();
@@ -1283,7 +1283,7 @@ export class MlModel {
 
   async load(): Promise<void> {
     try {
-      const addon = require('../native/ml.node') as { loadModel: (config: MlModelConfig) => Promise<unknown> };
+      const addon = require('../../native/ml.node') as { loadModel: (config: MlModelConfig) => Promise<unknown> };
       this.model = await addon.loadModel(this.config);
     } catch {
       throw new Error(`ML native addon not found. Run \`pledge add ${this.config.backend === 'candle' ? 'candle-core' : 'ort'}\` to install.`);
@@ -1292,20 +1292,20 @@ export class MlModel {
 
   async infer(input: number[] | number[][]): Promise<MlInferenceResult> {
     if (!this.model) await this.load();
-    const addon = require('../native/ml.node') as { infer: (model: unknown, input: unknown) => Promise<MlInferenceResult> };
+    const addon = require('../../native/ml.node') as { infer: (model: unknown, input: unknown) => Promise<MlInferenceResult> };
     return addon.infer(this.model, input);
   }
 
   /** Run batch inference */
   async inferBatch(inputs: (number[] | number[][] )[]): Promise<MlInferenceResult[]> {
     if (!this.model) await this.load();
-    const addon = require('../native/ml.node') as { inferBatch: (model: unknown, inputs: unknown[]) => Promise<MlInferenceResult[]> };
+    const addon = require('../../native/ml.node') as { inferBatch: (model: unknown, inputs: unknown[]) => Promise<MlInferenceResult[]> };
     return addon.inferBatch(this.model, inputs);
   }
 
   async unload(): Promise<void> {
     if (this.model) {
-      const addon = require('../native/ml.node') as { unloadModel: (model: unknown) => Promise<void> };
+      const addon = require('../../native/ml.node') as { unloadModel: (model: unknown) => Promise<void> };
       await addon.unloadModel(this.model);
       this.model = null;
     }

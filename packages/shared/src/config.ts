@@ -52,6 +52,66 @@ export interface PledgeConfig {
   rateLimit?: boolean | { maxTokens?: number; refillRate?: number };
   /** Brute force protection — auto-protect auth endpoints (default: false) */
   bruteForceProtection?: boolean;
+  /** CDN cache purge — run after a successful `pledge build` if configured */
+  cdn?: CdnConfig;
+  /** Geo-restriction — block or allow requests by country at the edge (Cloudflare/Vercel/Deno adapters) */
+  geoRestriction?: GeoRestrictionSettings;
+  /** CORS configuration for API routes. Omit to leave CORS unenforced. */
+  cors?: PledgeCorsConfig;
+  /**
+   * Content-Security-Policy directives (directive name → value), e.g.
+   * `{ 'default-src': "'self'", 'script-src': "'self' 'unsafe-inline'" }`.
+   * Applied when `securityHeaders` is enabled; falls back to a restrictive
+   * built-in default policy when omitted.
+   */
+  csp?: Record<string, string>;
+}
+
+/** CORS configuration — mirrors `CorsConfig` in pledgestack-server's cors.ts. */
+export interface PledgeCorsConfig {
+  /** Allowed origins (e.g. ['https://example.com']). Use ['*'] for any origin. */
+  origins: string[];
+  /** Allowed methods (default: GET, POST, PUT, DELETE, PATCH, OPTIONS) */
+  methods?: string[];
+  /** Allowed headers (default: Content-Type, Authorization, X-Pledge-CSRF) */
+  allowedHeaders?: string[];
+  /** Headers exposed to the client */
+  exposedHeaders?: string[];
+  /** Whether to allow credentials (cookies, Authorization) */
+  credentials?: boolean;
+  /** Max age for preflight cache (seconds, default: 86400) */
+  maxAge?: number;
+}
+
+/**
+ * Geo-restriction configuration — block or allow requests by ISO country code.
+ * Mirrors `GeoRestrictionConfig` in pledgestack-adapters's edge-security.ts.
+ */
+export interface GeoRestrictionSettings {
+  /** Mode: 'block' blocks listed countries, 'allow' only allows listed countries */
+  mode: 'block' | 'allow';
+  /** ISO country codes */
+  countries: string[];
+  /** Custom message for blocked requests */
+  blockMessage?: string;
+}
+
+/**
+ * CDN cache purge configuration.
+ * Mirrors `CdnPurgeOptions` in pledgestack-server's cdn-purge.ts (shared here
+ * so PledgeConfig has a real, checked shape instead of an `unknown` bag).
+ */
+export interface CdnConfig {
+  /** CDN provider */
+  provider: 'cloudflare' | 'fastly' | 'vercel' | 'netlify';
+  /** API token */
+  token: string;
+  /** Zone ID (Cloudflare) or Service ID (Fastly) */
+  zoneId?: string;
+  /** Additional provider-specific options */
+  endpoint?: string;
+  /** URLs/paths to purge after build. If omitted, the purge step is skipped with a warning. */
+  paths?: string[];
 }
 
 /**

@@ -34,7 +34,7 @@ let rustHtmlAddon: Record<string, (...args: unknown[]) => unknown> | null = null
 export function isRustHtmlEngineAvailable(): boolean {
   if (rustHtmlAvailable !== null) return rustHtmlAvailable;
   try {
-    const addon = require('../native/rust-html.node') as Record<string, (...args: unknown[]) => unknown>;
+    const addon = require('../../native/rust-html.node') as Record<string, (...args: unknown[]) => unknown>;
     if (typeof addon.renderHtmlShell === 'function' && typeof addon.renderHead === 'function') {
       rustHtmlAddon = addon;
       rustHtmlAvailable = true;

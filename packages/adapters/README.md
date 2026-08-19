@@ -37,6 +37,10 @@ import { createLambdaHandler } from 'pledgestack-adapters/lambda';
 export const handler = createLambdaHandler({ config });
 ```
 
+`createLambdaHandler` accepts both API Gateway payload format 2.0 (`HttpApi` —
+what `generateSAMTemplate()` below wires up by default) and format 1.0 (REST
+API / `httpMethod`+`path`), detected automatically per request.
+
 ## Edge Bundle Config
 
 PledgePack generates edge-safe bundles. Use `createEdgeConfig(target)` to get the config:
@@ -58,22 +62,27 @@ const edgeConfig = createEdgeConfig('cloudflare');
 
 ## Edge Security Features
 
-The Cloudflare adapter includes built-in edge security:
+The Cloudflare adapter includes built-in edge security, configured on the same
+`PledgeConfig` object you already pass to `createCloudflareAdapter` (there is
+no separate second options argument — `createCloudflareAdapter(config)` takes
+one):
 
-- **Rate limiting** — Configurable per-IP rate limits at the edge
-- **Bot detection** — User-agent based bot filtering
-- **Geo restrictions** — Block or allow specific countries
-- **CSP headers** — Content-Security-Policy injection at the edge
-- **KV storage** — `createKvAdapter()` for Cloudflare Workers KV as cache backend
+- **Rate limiting** — token-bucket, per-IP, via `config.rateLimit`
+- **Bot detection** — User-Agent heuristics, via `config.botDetection`
+- **Geo restrictions** — Block or allow specific countries, via `config.geoRestriction`
+- **CSP headers** — Content-Security-Policy injection at the edge (always applied)
+- **KV storage** — `createKvAdapter()` for Cloudflare Workers KV as cache backend (via the `env.CACHE` binding)
 
 ```typescript
 import { createCloudflareAdapter } from 'pledgestack-adapters/cloudflare';
 
-const app = createCloudflareAdapter(config, {
-  rateLimit: { requests: 100, window: '1m' },
+const app = createCloudflareAdapter({
+  ...config,
+  rateLimit: { maxTokens: 100, refillRate: 10 },
   botDetection: true,
-  geoBlock: { blockedCountries: ['XX'] },
+  geoRestriction: { mode: 'block', countries: ['XX'] },
 });
+export default { fetch: app.fetch };
 ```
 
 ## Vercel Config Generation

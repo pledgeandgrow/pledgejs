@@ -5,7 +5,7 @@
 
 A full-stack **multi-framework** web framework with file-based routing, SSR/SSG/ISR, React Server Components, API routes, middleware, edge runtime support, and Rust native addons for rendering, compression, search, rate limiting, and more. Supports **React, Vue, Solid, and Svelte** via pluggable renderer adapters. Uses PledgePack (Rust+Zig bundler) to build user apps.
 
-> **90 test files · 805 tests · 39 packages** — all passing.
+> **90 test files · 810 tests · 39 packages** — all passing. `pnpm typecheck` runs a real `tsc -b`/`tsc --noEmit` sweep across every package (see `scripts/typecheck-workspace.mjs`).
 
 ## Requirements
 
@@ -69,7 +69,7 @@ npx pledge start    # Start production server
 | `pledge docs` | Generate API reference (TypeDoc) |
 | `pledge upgrade` | Upgrade PledgeStack with codemods |
 | `pledge why <module>` | Trace why a module is in the bundle |
-| `pledge docker` | Generate Dockerfile, .dockerignore, docker-compose.yml |
+| `pledge docker [--optimized]` | Generate Dockerfile, .dockerignore, docker-compose.yml. `--optimized` produces a Rust-addon-aware multi-stage build (compiles `packages/core/native`'s crates in a dedicated stage) instead of the plain single-stage default. |
 | `pledge storybook` | Set up Storybook |
 | `pledge codemod` | Run code transformations (list available codemods with no args) |
 | `pledge sync-aliases` | Sync tsconfig path aliases |
@@ -87,7 +87,7 @@ npx pledge start    # Start production server
 - **Route patterns** — Dynamic segments `[param]`, catch-all `[...param]`, optional catch-all `[[...param]]`, route groups `(group)`, parallel routes `@slot`, intercepting routes `(..)folder`
 - **Server-Side Rendering** — `renderSSR()` with layout chains, error boundaries, Suspense loading states (React), streaming SSR. Each renderer adapter implements its own SSR via the framework's native APIs.
 - **Static Site Generation** — `generateStaticParams` pre-rendering, `static-export` mode
-- **React Server Components** — `react-server-dom-webpack` integration, flight payload generation, RSC streaming, client manifests (React only)
+- **React Server Components** — `react-server-dom-webpack` integration, flight payload generation, progressive RSC streaming (flight chunks are pushed to the client as they arrive, not buffered into one blob), client manifests (React only)
 - **Partial Prerendering (PPR)** — Static shell prerendered at build time, dynamic holes streamed at request time. Rust-based PPR via `rust-ppr.ts` with JS fallback. Set `ppr: true` in config.
 - **API Routes** — `route.ts` with `GET`, `POST`, `PUT`, `DELETE`, `PATCH` handlers. CORS middleware and XSS sanitization auto-applied.
 - **Middleware** — `middleware.ts` with redirect (open-redirect validated), rewrite, headers, short-circuit, matcher config (glob patterns, param patterns, regex)
@@ -220,7 +220,7 @@ SQLx, Redis, Auth (Argon2/JWT), Image processing, PDF generation, Background job
 
 ### Testing
 
-90 test files across the monorepo using Vitest (805 tests, all passing):
+90 test files across the monorepo using Vitest (810 tests, all passing):
 
 - **PSX Integration tests** — Fallback behavior for all 15 Rust wrappers
 - **Render tests** — `rust-html`, `rust-ssr`, `rust-rsc`, `rust-dom-renderer`, `rust-html-transformer`, `rust-hydration`, `rust-ssr-profiler`, PPR, JIT templates
@@ -258,8 +258,8 @@ All templates use the metadata export API (`export const metadata`, `export cons
 - **No Storybook integration** — The `pledge storybook` command is a stub. Storybook setup is manual.
 - **No streaming metadata** — `generateMetadata()` is awaited before rendering. Metadata isn't streamed with the response.
 - **Generated route types** — `pledge generate-route-types` generates typed route declarations from the file-based router. Route params are typed as `Record<string, string>` by default; generated types provide per-route param types.
-- **Rust addons are optional** — All 16 NAPI addons have JS fallbacks. Production performance is better with native addons compiled, but the framework works without them.
-- **PledgePack binary** — Prebuilt binaries are available for macOS (x64/arm64), Linux (x64/arm64), and Windows (x64). Other platforms require building from source (`cargo build --release`).
+- **Rust addons are optional** — All 16 NAPI addons have JS fallbacks. Production performance is better with native addons compiled, but the framework works without them. Run `packages/core/native/build.sh` to compile them into `packages/core/native/*.node`; every consumer (including `pledgestack-renderer-react`, which resolves the addon via `pledgestack-core`'s own module resolution rather than a fixed relative path) picks them up automatically once built. The 13 "PSX Integrations" wrappers (SQLx, Redis, Argon2, image/PDF processing, etc.) are a separate, currently JS-fallback-only layer — no corresponding Rust crates ship in this repo yet, so those always run their JS implementation regardless of whether the 16 native addons above are compiled.
+- **PledgePack binary** — A prebuilt Windows (x64) binary ships in this repo. macOS (x64/arm64) and Linux (x64/arm64) platform packages currently ship without a bundled binary and rely on `postinstall.js` downloading a prebuilt release; if none is published for your platform/version, build from source (`cargo build --release`) in PledgePack's own repository.
 - **MDX compiler is lightweight** — The built-in MDX-to-JSX compiler handles common markdown syntax (headings, lists, bold, italic, code blocks, links) and embedded JSX. For full MDX spec compliance (remark/rehype plugins), use the `pledgestack-mdx` plugin with a custom renderer.
 - **Image optimization endpoint** — The `/__pledge__/image/:path` endpoint currently serves original images with correct content-type and caching headers. Full resize/format conversion requires the `sharp` native module (planned).
 
@@ -384,7 +384,7 @@ export default defineConfig({
   },
   // CORS for API routes (optional)
   cors: {
-    origin: ['https://example.com'],
+    origins: ['https://example.com'],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
   },
   // i18n configuration (optional)
@@ -393,14 +393,19 @@ export default defineConfig({
     defaultLocale: 'en',
     localePrefix: 'always',    // 'always' | 'as-needed'
   },
-  // CDN purge on post-build (optional)
+  // CDN purge — runs once after a successful `pledge build` (optional).
+  // `paths` is required: without it the purge step is skipped with a warning.
   cdn: {
     provider: 'cloudflare',
     zoneId: process.env.CDN_ZONE_ID,
-    apiToken: process.env.CDN_API_TOKEN,
+    token: process.env.CDN_API_TOKEN,
+    paths: ['/', '/blog'],
   },
-  // Request timeout in ms (optional, default: 30000)
-  requestTimeout: 30000,
+  // Geo-restriction at the edge (Cloudflare/Vercel/Deno adapters, optional)
+  geoRestriction: {
+    mode: 'block',              // 'block' | 'allow'
+    countries: ['KP'],          // ISO country codes
+  },
   alias: {
     '@/app/*': 'app/*',
     '@/lib/*': 'lib/*',

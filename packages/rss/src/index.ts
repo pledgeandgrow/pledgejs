@@ -5,6 +5,8 @@
  * RSS 2.0 and Atom feeds.
  */
 
+import { escapeXml } from 'pledgestack-shared';
+
 export interface FeedItem {
   title: string;
   description?: string;
@@ -49,9 +51,6 @@ export interface FeedOptions {
  * Generate an RSS 2.0 feed XML string.
  */
 export function generateRSSFeed(options: FeedOptions): string {
-  const escapeXml = (s: string): string =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-
   const formatDate = (d: string | Date): string => {
     const date = typeof d === 'string' ? new Date(d) : d;
     return date.toUTCString();
@@ -130,9 +129,6 @@ ${items}
  * Generate an Atom 1.0 feed XML string.
  */
 export function generateAtomFeed(options: FeedOptions): string {
-  const escapeXml = (s: string): string =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-
   const formatDate = (d: string | Date): string => {
     const date = typeof d === 'string' ? new Date(d) : d;
     return date.toISOString();

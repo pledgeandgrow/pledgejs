@@ -11,7 +11,9 @@
   "references": [
     { "path": "../shared" },
     { "path": "../core" },
-    { "path": "../sitemap" }
+    { "path": "../sitemap" },
+    { "path": "../auth" },
+    { "path": "../rss" }
   ]
 ,
   "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]

@@ -16,13 +16,13 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
 
 interface SolidPageModule {
-  default: () => unknown; // Solid component
+  default: (props: { params: Record<string, string>; searchParams: Record<string, string> }) => unknown; // Solid component
   metadata?: Record<string, unknown>;
   viewport?: import('pledgestack-shared').Viewport;
   generateStaticParams?: () => Promise<Record<string, string>[]>;
@@ -40,8 +40,6 @@ interface SolidLayoutModule {
   viewport?: import('pledgestack-shared').Viewport;
 }
 
-type AnySolidModule = SolidPageModule | SolidLayoutModule | { default: unknown };
-
 function asPage(mod: unknown): SolidPageModule | undefined {
   const m = mod as SolidPageModule;
   return m && typeof m.default === 'function' ? m : undefined;
@@ -52,10 +50,6 @@ function asLayout(mod: unknown): SolidLayoutModule | undefined {
 }
 
 // --- Helpers ---
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 function renderHeadTags(metadata: HeadMetadata, route: import('pledgestack-shared').ResolvedRoute): string {
   const tags: string[] = [];
@@ -218,7 +212,7 @@ export class SolidRendererAdapter implements RendererAdapter {
     if (notFoundModule && typeof notFoundModule.default === 'function') {
       const renderer = await getSolidServerRenderer();
       if (renderer) {
-        html = renderer.renderToString(() => notFoundModule.default({}));
+        html = renderer.renderToString(() => notFoundModule.default({ params: {}, searchParams: {} }));
       } else {
         html = '404 - Page Not Found';
       }
@@ -241,9 +235,6 @@ export class SolidRendererAdapter implements RendererAdapter {
 
   generateClientScript(options: ClientScriptOptions): string {
     const { isDev, pledgepackPort } = options;
-    const solidImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/solid-js.js`
-      : 'solid-js';
     const solidWebImport = isDev && pledgepackPort
       ? `http://localhost:${pledgepackPort}/node_modules/.vite/solid-js/web.js`
       : 'solid-js/web';

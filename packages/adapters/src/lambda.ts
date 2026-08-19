@@ -18,10 +18,12 @@ export { createEdgeConfig, type EdgeBundleConfig };
  * ```
  */
 
-export interface APIGatewayEvent {
+/** REST API / API Gateway proxy integration payload (format version 1.0). */
+export interface APIGatewayEventV1 {
+  version?: '1.0';
   httpMethod: string;
   path: string;
-  queryStringParameters?: Record<string, string>;
+  queryStringParameters?: Record<string, string> | null;
   headers: Record<string, string>;
   body?: string | null;
   isBase64Encoded?: boolean;
@@ -31,6 +33,30 @@ export interface APIGatewayEvent {
   };
 }
 
+/**
+ * HTTP API payload (format version 2.0) — this is what `generateSAMTemplate`'s
+ * `HttpApi` event source actually sends by default, so it's the shape that
+ * matters most, but v1 (REST API) is also supported below for users who wire
+ * their own API Gateway REST API in front of this handler.
+ */
+export interface APIGatewayEventV2 {
+  version: '2.0';
+  rawPath: string;
+  rawQueryString: string;
+  headers: Record<string, string>;
+  body?: string | null;
+  isBase64Encoded?: boolean;
+  requestContext: {
+    domainName?: string;
+    stage?: string;
+    http: {
+      method: string;
+    };
+  };
+}
+
+export type APIGatewayEvent = APIGatewayEventV1 | APIGatewayEventV2;
+
 export interface APIGatewayResult {
   statusCode: number;
   headers: Record<string, string>;
@@ -38,29 +64,51 @@ export interface APIGatewayResult {
   isBase64Encoded?: boolean;
 }
 
+function isV2Event(event: APIGatewayEvent): event is APIGatewayEventV2 {
+  return 'rawPath' in event;
+}
+
 export function createLambdaHandler(options: { config: PledgeConfig }) {
   const handler = createEdgeHandler({ config: options.config });
 
   return async function lambdaHandler(event: APIGatewayEvent): Promise<APIGatewayResult> {
-    const domain = event.requestContext?.domainName ?? 'localhost';
-    const stage = event.requestContext?.stage ?? 'production';
-    const path = stage === '$default' ? event.path : `/${stage}${event.path}`;
-    const url = new URL(path, `https://${domain}`);
+    let method: string;
+    let rawPath: string;
+    let queryString: string;
+    let domain: string;
+    let stage: string;
 
-    if (event.queryStringParameters) {
-      for (const [key, value] of Object.entries(event.queryStringParameters)) {
-        url.searchParams.set(key, value);
-      }
+    if (isV2Event(event)) {
+      method = event.requestContext.http.method;
+      rawPath = event.rawPath;
+      queryString = event.rawQueryString ?? '';
+      domain = event.requestContext.domainName ?? 'localhost';
+      stage = event.requestContext.stage ?? 'production';
+    } else {
+      method = event.httpMethod;
+      rawPath = event.path;
+      queryString = new URLSearchParams(event.queryStringParameters ?? {}).toString();
+      domain = event.requestContext?.domainName ?? 'localhost';
+      stage = event.requestContext?.stage ?? 'production';
     }
 
+    const path = stage === '$default' ? rawPath : `/${stage}${rawPath}`;
+    const url = new URL(path, `https://${domain}`);
+    if (queryString) url.search = queryString;
+
+    const hasBody = event.body != null && method !== 'GET' && method !== 'HEAD';
+    const body = hasBody
+      ? (event.isBase64Encoded ? Buffer.from(event.body as string, 'base64') : (event.body as string))
+      : undefined;
+
     const request = new Request(url.toString(), {
-      method: event.httpMethod,
+      method,
       headers: event.headers,
-      body: event.body ?? undefined,
+      body,
     });
 
     const response = await handler(request);
-    const body = await response.text();
+    const responseBody = await response.text();
 
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => {
@@ -70,7 +118,7 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
     return {
       statusCode: response.status,
       headers,
-      body,
+      body: responseBody,
     };
   };
 }
