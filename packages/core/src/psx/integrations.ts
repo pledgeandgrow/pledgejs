@@ -30,6 +30,24 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
+/**
+ * Load a native PSX addon, throwing a CLEAR, actionable error when it isn't
+ * available instead of a cryptic `MODULE_NOT_FOUND`. Use this for native calls
+ * that have no JS fallback, so a missing addon fails helpfully rather than
+ * crashing deep in a library call.
+ */
+function loadNativeAddon<T>(name: string, feature: string): T {
+  try {
+    return require(`../../native/${name}.node`) as T;
+  } catch {
+    throw new Error(
+      `PledgeStack: "${feature}" needs the native '${name}' addon, which is not ` +
+      `available in this build (the PSX integration wrappers have no compiled Rust ` +
+      `addon yet — see the "PSX Integrations" note in the README).`,
+    );
+  }
+}
+
 // ============================================================================
 // #256 — SQLx compile-time queries
 // ============================================================================
@@ -103,8 +121,8 @@ export class SqlxPool {
   }
 
   async transaction<T>(fn: (tx: SqlxTransaction) => Promise<T>): Promise<T> {
-    if (!this.pool) await this.connect();
-    const addon = require('../../native/sqlx.node') as { beginTransaction: (pool: unknown) => Promise<unknown>; commit: (tx: unknown) => Promise<void>; rollback: (tx: unknown) => Promise<void> };
+    if (!this.pool && !this.useFallback) await this.connect();
+    const addon = loadNativeAddon<{ beginTransaction: (pool: unknown) => Promise<unknown>; commit: (tx: unknown) => Promise<void>; rollback: (tx: unknown) => Promise<void> }>('sqlx', 'SqlxPool.transaction');
     const tx = await addon.beginTransaction(this.pool);
     try {
       const result = await fn(new SqlxTransaction(tx));
@@ -134,7 +152,7 @@ export class SqlxTransaction {
   constructor(private tx: unknown) {}
 
   async query<T = unknown>(sql: string, ...params: unknown[]): Promise<SqlxQueryResult<T>> {
-    const addon = require('../../native/sqlx.node') as { queryInTx: (tx: unknown, sql: string, params: unknown[]) => Promise<SqlxQueryResult<T>> };
+    const addon = loadNativeAddon<{ queryInTx: (tx: unknown, sql: string, params: unknown[]) => Promise<SqlxQueryResult<T>> }>('sqlx', 'SqlxTransaction.query');
     return addon.queryInTx(this.tx, sql, params);
   }
 }
@@ -311,16 +329,16 @@ export class RedisClient {
   /** Pub/Sub: subscribe to a channel */
   async subscribe(channel: string, handler: (message: string) => void): Promise<void> {
     if (!this.subscriber) {
-      const addon = require('../../native/redis.node') as { createSubscriber: (config: RedisConfig) => unknown };
+      const addon = loadNativeAddon<{ createSubscriber: (config: RedisConfig) => unknown }>('redis', 'RedisClient.subscribe');
       this.subscriber = addon.createSubscriber(this.config);
     }
-    const subAddon = require('../../native/redis.node') as { subscribe: (sub: unknown, channel: string, handler: (msg: string) => void) => Promise<void> };
+    const subAddon = loadNativeAddon<{ subscribe: (sub: unknown, channel: string, handler: (msg: string) => void) => Promise<void> }>('redis', 'RedisClient.subscribe');
     await subAddon.subscribe(this.subscriber, channel, handler);
   }
 
   /** Pub/Sub: publish to a channel */
   async publish(channel: string, message: string): Promise<number> {
-    const addon = require('../../native/redis.node') as { publish: (client: unknown, channel: string, message: string) => Promise<number> };
+    const addon = loadNativeAddon<{ publish: (client: unknown, channel: string, message: string) => Promise<number> }>('redis', 'RedisClient.publish');
     return addon.publish(this.client, channel, message);
   }
 
@@ -546,7 +564,7 @@ export class PdfGenerator {
 
   /** Generate PDF from a template */
   static async fromTemplate(template: PdfTemplate, options?: PdfOptions): Promise<Buffer> {
-    const addon = require('../../native/pdf.node') as { fromTemplate: (template: PdfTemplate, options: PdfOptions) => Promise<Buffer> };
+    const addon = loadNativeAddon<{ fromTemplate: (template: PdfTemplate, options: PdfOptions) => Promise<Buffer> }>('pdf', 'PdfGenerator.fromTemplate');
     return addon.fromTemplate(template, options ?? {});
   }
 

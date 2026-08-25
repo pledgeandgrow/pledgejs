@@ -121,16 +121,24 @@ export function parseSAMLResponse(
 
   if (!xml.includes('samlp:Response') && !xml.includes('saml:Assertion')) return null;
 
-  // Reject anything whose signature does not verify before trusting its claims.
-  if (!verifySAMLSignature(samlResponse, config)) return null;
+  // Obtain the SIGNED, digest-bound assertion and parse every claim from THAT
+  // element only. Parsing claims from the whole document (the previous
+  // behavior) is vulnerable to signature wrapping: an attacker adds a forged
+  // assertion that the regex picks up while a real signed assertion satisfies
+  // the signature check elsewhere.
+  const assertion = getVerifiedAssertion(samlResponse, config);
+  if (!assertion) return null;
 
-  const nameId = extractValue(xml, 'NameID') ?? '';
+  const nameId = extractValue(assertion, 'NameID') ?? '';
   if (!nameId) return null;
 
-  const attributes = extractAttributes(xml);
-  const issuer = extractValue(xml, 'Issuer') ?? config.idpEntityId;
-  const sessionIndex = extractAttribute(xml, 'SessionIndex');
-  const notOnOrAfter = extractAttribute(xml, 'NotOnOrAfter');
+  const attributes = extractAttributes(assertion);
+  const issuer = extractValue(assertion, 'Issuer') ?? config.idpEntityId;
+  // The assertion issuer must match the configured IdP entity id.
+  if (config.idpEntityId && issuer !== config.idpEntityId) return null;
+
+  const sessionIndex = extractAttribute(assertion, 'SessionIndex');
+  const notOnOrAfter = extractAttribute(assertion, 'NotOnOrAfter');
 
   // Enforce the assertion's validity window: an expired assertion is rejected.
   const notOnOrAfterMs = notOnOrAfter ? Date.parse(notOnOrAfter) : undefined;
@@ -145,6 +153,52 @@ export function parseSAMLResponse(
     sessionIndex: sessionIndex ?? undefined,
     notOnOrAfter: notOnOrAfterMs,
   };
+}
+
+/**
+ * Verify the response signature and return the exact assertion element the
+ * signature is bound to (via DigestValue), or null. Among multiple assertions,
+ * the one whose digest matches is selected — so a forged sibling assertion is
+ * never returned. When `wantSignedAssertions === false`, returns the first
+ * assertion without verification.
+ */
+function getVerifiedAssertion(samlResponse: string, config: SAMLConfig): string | null {
+  let xml: string;
+  try {
+    xml = Buffer.from(samlResponse, 'base64').toString('utf8');
+  } catch {
+    return null;
+  }
+
+  if (config.wantSignedAssertions === false) {
+    return extractRawElement(xml, 'Assertion');
+  }
+
+  if (!xml.includes('Signature')) return null;
+  const signatureValue = extractValue(xml, 'SignatureValue');
+  const signedInfo = extractRawElement(xml, 'SignedInfo');
+  const digestValue = extractValue(xml, 'DigestValue');
+  if (!signatureValue || !signedInfo || !digestValue) return null;
+
+  try {
+    const publicKey = createPublicKey(config.idpCertificate);
+    const verify = createVerify('RSA-SHA256');
+    verify.update(signedInfo);
+    verify.end();
+    if (!verify.verify(publicKey, Buffer.from(signatureValue, 'base64'))) return null;
+
+    const expected = Buffer.from(digestValue, 'base64');
+    for (const assertion of extractAllRawElements(xml, 'Assertion')) {
+      const sha256 = createHash('sha256').update(assertion).digest();
+      const sha1 = createHash('sha1').update(assertion).digest();
+      if (timingEqual(expected, sha256) || timingEqual(expected, sha1)) {
+        return assertion;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -170,43 +224,7 @@ export function verifySAMLSignature(
 ): boolean {
   // Default true: only an explicit `false` opts out of signature enforcement.
   if (config.wantSignedAssertions === false) return true;
-
-  let xml: string;
-  try {
-    xml = Buffer.from(samlResponse, 'base64').toString('utf8');
-  } catch {
-    return false;
-  }
-
-  if (!xml.includes('Signature')) return false;
-
-  const signatureValue = extractValue(xml, 'SignatureValue');
-  const signedInfo = extractRawElement(xml, 'SignedInfo');
-  const digestValue = extractValue(xml, 'DigestValue');
-  const assertion = extractRawElement(xml, 'Assertion');
-
-  if (!signatureValue || !signedInfo || !digestValue || !assertion) return false;
-
-  try {
-    // 1. The signature must verify over the SignedInfo element.
-    const publicKey = createPublicKey(config.idpCertificate);
-    const verify = createVerify('RSA-SHA256');
-    verify.update(signedInfo);
-    verify.end();
-    const sigOk = verify.verify(publicKey, Buffer.from(signatureValue, 'base64'));
-    if (!sigOk) return false;
-
-    // 2. The DigestValue in SignedInfo must match a digest of the assertion,
-    //    binding the signature to the assertion body (defends against body
-    //    substitution where a valid SignedInfo is reused with a swapped
-    //    assertion). Both SHA-256 and SHA-1 references are accepted.
-    const expected = Buffer.from(digestValue, 'base64');
-    const sha256 = createHash('sha256').update(assertion).digest();
-    const sha1 = createHash('sha1').update(assertion).digest();
-    return timingEqual(expected, sha256) || timingEqual(expected, sha1);
-  } catch {
-    return false;
-  }
+  return getVerifiedAssertion(samlResponse, config) !== null;
 }
 
 function timingEqual(a: Buffer, b: Buffer): boolean {
@@ -261,6 +279,12 @@ function extractRawElement(xml: string, tag: string): string | null {
   const pattern = new RegExp(`<((?:\\w+:)?${tag})[\\s>][\\s\\S]*?</\\1>`, 'i');
   const match = xml.match(pattern);
   return match ? match[0] : null;
+}
+
+/** Extract every element with the given local name (namespace-prefix agnostic). */
+function extractAllRawElements(xml: string, tag: string): string[] {
+  const pattern = new RegExp(`<((?:\\w+:)?${tag})[\\s>][\\s\\S]*?</\\1>`, 'gi');
+  return xml.match(pattern) ?? [];
 }
 
 function extractAttribute(xml: string, attr: string): string | null {

@@ -266,11 +266,19 @@ function wrapHtml(
   headHtml?: string,
   viewport?: import('pledgestack-shared').Viewport,
   extraScripts = '',
+  routeData?: { params: Record<string, string>; searchParams: Record<string, string>; pattern: string },
 ): string {
   const headTags = headHtml ?? renderHeadTags(metadata, route);
   const viewportTags = renderViewportTags(viewport);
   const manifest: PledgeManifest = { pledges: [] };
   const manifestScript = `<script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>`;
+
+  // Emit the server's resolved route (params, searchParams, matched pattern) so
+  // the client script can rebuild and hydrate the exact same tree. `<` is
+  // escaped to prevent breaking out of the script.
+  const routeJson = JSON.stringify(routeData ?? { params: {}, searchParams: {}, pattern: route.pattern })
+    .replace(/</g, '\\u003c');
+  const routeScript = `<script>window.__PLEDGE_ROUTE__=${routeJson}</script>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -283,6 +291,7 @@ function wrapHtml(
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
+  ${routeScript}
   ${extraScripts}
   <script type="module" src="/__pledge__/client.js"></script>
 </body>
@@ -360,7 +369,11 @@ export class ReactRendererAdapter implements RendererAdapter {
 
     const element = buildElementTree(ctx);
     const html = renderToString(createElement(() => element));
-    const fullHtml = wrapHtml(html, match.route, metadata, headHtml, viewport);
+    const fullHtml = wrapHtml(html, match.route, metadata, headHtml, viewport, '', {
+      params: match.params,
+      searchParams: ctx.searchParams ?? {},
+      pattern: match.route.pattern,
+    });
 
     // Record render for JIT profiling — store template if threshold reached
     const profileResult = recordRender(match.route.pattern, simpleHash(fullHtml));
@@ -742,24 +755,31 @@ export class ReactRendererAdapter implements RendererAdapter {
     return `// PledgeStack React client hydration (auto-generated)
 import { hydrateRoot } from '${reactDomClientImport}';
 import { createElement } from '${reactImport}';
-import { RouterProvider, Link } from '/__pledge_router';
+import { RouterProvider, Link, routes, resolveRouteElement, initPledgeHydration } from '/__pledge_router';
 
 const root = document.getElementById('__pledge_root__');
 if (root) {
-  // Hydrate the SSR content into a live React tree
+  // Rebuild the SAME tree the server rendered (matched page + layout chain,
+  // with the server's params) from the routes map and window.__PLEDGE_ROUTE__,
+  // then hydrate it. Hydrating an empty tree discarded the entire SSR payload.
+  const routeData = window.__PLEDGE_ROUTE__ || { pattern: window.location.pathname, params: {}, searchParams: {} };
+  const tree = resolveRouteElement(routes, routeData);
+  const app = createElement(RouterProvider, { children: tree });
   try {
-    hydrateRoot(root, createElement(RouterProvider, { children: null }), {
+    hydrateRoot(root, app, {
       onRecoverableError(error) {
         console.error('[pledgestack] React hydration recoverable error:', error);
       },
     });
   } catch (e) {
     console.error('[pledgestack] Hydration failed, falling back to client render:', e);
-    // Fallback: full client render
     const { createRoot } = await import('${reactDomClientImport}');
     const reactRoot = createRoot(root);
-    reactRoot.render(createElement(RouterProvider, { children: null }));
+    reactRoot.render(app);
   }
+
+  // Hydrate interactive pledge() islands embedded in the SSR output.
+  try { initPledgeHydration(); } catch (e) { console.error('[pledgestack] pledge hydration failed:', e); }
 
   ${rscEnabled ? '// RSC mode: RSC client handles flight data hydration' : ''}
 }

@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { PledgeConfig, PledgeResponse, MiddlewareResult, ResolvedRoute, PledgeRequest, PluginRenderContext, BundlerAdapter } from 'pledgestack-shared';
 import { scanAppDir, resolveRoutes, createRouter, renderSSR, renderNotFound } from 'pledgestack-core';
+import { getIsr, setIsr, isRevalidating, markRevalidating } from 'pledgestack-core';
 import { renderRSCToHTML } from 'pledgestack-core';
 import { renderRSCStream } from 'pledgestack-core';
 import { renderSSRStream } from 'pledgestack-core';
@@ -41,6 +42,13 @@ function passesCsrf(headers: Record<string, string>, siteOrigin: string): boolea
   const origin = headers['origin'] ?? headers['Origin'];
   if (origin) return validateOrigin(origin, [siteOrigin]);
   return false;
+}
+
+/** Read a page module's ISR revalidate interval (seconds), or 0 if none. */
+function getRevalidateSeconds(mod: unknown): number {
+  const m = mod as { revalidate?: unknown; metadata?: { revalidate?: unknown } } | undefined;
+  const r = typeof m?.revalidate === 'number' ? m.revalidate : m?.metadata?.revalidate;
+  return typeof r === 'number' && r > 0 ? r : 0;
 }
 
 /** Extract the best-available client identifier for rate limiting / lockout. */
@@ -242,8 +250,11 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           return { status: 404, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: `Action "${actionId}" not found` }) };
         }
 
-        // Parse body
-        const rawBody = typeof req.body === 'string' ? req.body : '';
+        // Parse body (may arrive as a Buffer from the Node server, or a string
+        // from edge runtimes).
+        const rawBody = typeof req.body === 'string'
+          ? req.body
+          : Buffer.isBuffer(req.body) ? req.body.toString('utf-8') : '';
         let args: unknown[];
         try {
           const parsed = JSON.parse(rawBody || '{}') as { args?: unknown[] };
@@ -484,17 +495,28 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           | ((req: Request) => Promise<Response> | Response)
           | undefined;
         if (!handlerFn) {
-          return { status: 405, headers: { Allow: Object.keys(mod).join(', ') }, body: 'Method Not Allowed' };
+          // Allow header must list only the HTTP-method exports, not every
+          // module export (config, runtime, default, …).
+          const httpMethods = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'];
+          const allow = Object.keys(mod).filter((k) => httpMethods.includes(k)).join(', ');
+          return { status: 405, headers: { Allow: allow }, body: 'Method Not Allowed' };
         }
         const request = new Request(req.url, {
           method: req.method,
           headers: req.headers as HeadersInit,
-          body: typeof req.body === 'string' ? req.body : undefined,
+          body: req.body == null ? undefined : (req.body as unknown as BodyInit),
         });
         const response = await handlerFn(request);
 
-        // Merge CORS headers into API response
+        // Extract Set-Cookie separately: Headers.entries() combines multiple
+        // Set-Cookie into one comma-joined value (corrupting cookies that
+        // contain commas, e.g. Expires), so pull the real array via
+        // getSetCookie() and drop the combined entry from the flat record.
+        const setCookies = typeof response.headers.getSetCookie === 'function'
+          ? response.headers.getSetCookie()
+          : [];
         const responseHeaders = Object.fromEntries(response.headers.entries());
+        delete responseHeaders['set-cookie'];
         if (corsResult) {
           Object.assign(responseHeaders, corsResult.headers);
         }
@@ -503,6 +525,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           status: response.status,
           headers: responseHeaders,
           body: response.body,
+          ...(setCookies.length > 0 ? { cookies: setCookies } : {}),
         };
       }
 
@@ -633,13 +656,45 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           }
         }
 
-        const html = await renderSSR({
+        // ISR: when the page exports a positive `revalidate` (seconds) and no
+        // query params vary the output, serve from the ISR cache with
+        // stale-while-revalidate. Only in production (dev always renders fresh).
+        const pageMod = context.modules.get(match.route.filePath) as (PageModule & { revalidate?: number }) | undefined;
+        const revalidate = getRevalidateSeconds(pageMod);
+        const isrKey = req.url.pathname;
+        const isrEligible = !isDev
+          && revalidate > 0
+          && Object.keys(pledgeReq.query).length === 0
+          && Object.keys(match.params).length === 0;
+
+        const doRenderSSR = () => renderSSR({
           config,
           match,
           tree: context.tree!,
           modules: context.modules as Map<string, PageModule | LayoutModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule>,
           searchParams: pledgeReq.query,
         });
+
+        let html: string;
+        if (isrEligible) {
+          const cached = getIsr(isrKey);
+          if (cached) {
+            // Serve cached immediately; regenerate in the background if stale.
+            if (cached.stale && !isRevalidating(isrKey)) {
+              markRevalidating(isrKey, true);
+              void doRenderSSR()
+                .then((fresh) => setIsr(isrKey, fresh, revalidate))
+                .catch((e) => console.error('[pledgestack] ISR revalidation failed:', e))
+                .finally(() => markRevalidating(isrKey, false));
+            }
+            html = cached.html;
+          } else {
+            html = await doRenderSSR();
+            setIsr(isrKey, html, revalidate);
+          }
+        } else {
+          html = await doRenderSSR();
+        }
 
         // Inject devtools overlay in dev mode
         let finalHtml = html;

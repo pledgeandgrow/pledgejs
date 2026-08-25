@@ -87,19 +87,18 @@ export async function buildCommand(opts?: { crossCompile?: boolean }): Promise<v
       routes,
       outputDir: outDir,
       modules: modules as Map<string, { generateStaticParams?: () => Promise<Record<string, string>[]> }>,
+      // Render only — generateStaticExport writes the HTML to the correct,
+      // param-substituted path itself (this callback must not write, or dynamic
+      // routes collide on a literal `:slug.html`).
       renderPage: async (route, params) => {
         const match = router.match(route.pattern);
         if (!match) throw new Error(`No match for route: ${route.pattern}`);
-        const html = await renderSSR({
+        return renderSSR({
           config,
           match: { ...match, params },
           tree: router.tree,
           modules: modules as Map<string, import('pledgestack-core').PageModule>,
         });
-        const filePath = join(outDir, route.pattern === '/' ? 'index.html' : `${route.pattern.replace(/^\//, '')}.html`);
-        await mkdir(join(filePath, '..'), { recursive: true });
-        await writeFile(filePath, html);
-        return html;
       },
     });
 

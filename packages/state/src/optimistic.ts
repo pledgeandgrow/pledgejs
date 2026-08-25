@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 export interface OptimisticOptions<T> {
   /** Called when the server confirms the update. */
@@ -14,10 +14,21 @@ export function useOptimisticState<T>(
   const { onConfirm, onRollback } = options;
   const [optimisticState, setOptimisticState] = useState<T>(serverState);
   const previousRef = useRef<T>(serverState);
+  const serverRef = useRef<T>(serverState);
+  const pendingRef = useRef(false);
+
+  // Propagate later server refreshes into the state — but not while a mutation
+  // is in flight (that would clobber the optimistic value). Previously the hook
+  // captured only the initial serverState, so subsequent prop changes were lost.
+  useEffect(() => {
+    serverRef.current = serverState;
+    if (!pendingRef.current) setOptimisticState(serverState);
+  }, [serverState]);
 
   const applyOptimistic = useCallback(
     async (optimistic: T, mutation: () => Promise<T>) => {
-      previousRef.current = optimisticState;
+      previousRef.current = serverRef.current; // roll back to the latest server value
+      pendingRef.current = true;
       setOptimisticState(optimistic);
       try {
         const confirmed = await mutation();
@@ -26,9 +37,11 @@ export function useOptimisticState<T>(
       } catch (err) {
         setOptimisticState(previousRef.current);
         onRollback?.(err instanceof Error ? err : new Error(String(err)), previousRef.current);
+      } finally {
+        pendingRef.current = false;
       }
     },
-    [optimisticState, onConfirm, onRollback],
+    [onConfirm, onRollback],
   );
 
   return [optimisticState, applyOptimistic];

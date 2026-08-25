@@ -1,4 +1,4 @@
-const items: Map<string, { id: string; name: string }> = new Map();
+import { items } from '../store';
 
 function getIdFromUrl(url: string): string {
   const match = url.match(/\/api\/items\/([^/]+)/);

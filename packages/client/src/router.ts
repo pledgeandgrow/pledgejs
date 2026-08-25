@@ -1,5 +1,56 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode, type ComponentType } from 'react';
 import { createElement } from 'react';
+
+/** Route data emitted by SSR into `window.__PLEDGE_ROUTE__`. */
+export interface PledgeRouteData {
+  pattern: string;
+  params: Record<string, string>;
+  searchParams: Record<string, string>;
+}
+
+interface RouteMapEntry {
+  type: string;
+  component?: ComponentType<Record<string, unknown>>;
+}
+
+/**
+ * Rebuild the same React element tree the server rendered — the matched page
+ * component wrapped in its layout chain — from the generated `routes` map and
+ * the SSR route data. This is what the client hydrates against; hydrating an
+ * empty tree (the previous behavior) discarded the entire SSR payload.
+ *
+ * Layouts are resolved by ancestor-prefix walk over the route pattern
+ * (root → leaf) and wrapped innermost-first, mirroring the server's
+ * getLayoutChain composition.
+ */
+export function resolveRouteElement(
+  routes: Record<string, RouteMapEntry>,
+  routeData: PledgeRouteData,
+): ReactNode {
+  const pageEntry = routes[routeData.pattern];
+  if (!pageEntry?.component) return null;
+
+  const props = { params: routeData.params, searchParams: routeData.searchParams };
+  let element: ReactNode = createElement(pageEntry.component, props);
+
+  // Ancestor prefixes of the pattern, root → leaf: '/', '/blog', '/blog/:slug'.
+  const prefixes = ['/'];
+  let acc = '';
+  for (const seg of routeData.pattern.split('/').filter(Boolean)) {
+    acc += `/${seg}`;
+    prefixes.push(acc);
+  }
+  const layouts: ComponentType<Record<string, unknown>>[] = [];
+  for (const prefix of prefixes) {
+    const entry = routes[prefix];
+    if (entry && entry.type === 'layout' && entry.component) layouts.push(entry.component);
+  }
+  // Wrap innermost (leaf) first so the root layout ends up outermost.
+  for (let i = layouts.length - 1; i >= 0; i--) {
+    element = createElement(layouts[i], { ...props, children: element });
+  }
+  return element;
+}
 
 export interface ClientRouterContextValue {
   pathname: string;
@@ -152,7 +203,11 @@ function swapRootContent(content: string): void {
 
 export function RouterProvider({ children }: { children: ReactNode }) {
   const [pathname, setPathname] = useState(window.location.pathname);
-  const [params] = useState<Record<string, string>>({});
+  // Seed params from the SSR route data so useRouter().params is correct on the
+  // initial render instead of always being empty.
+  const [params] = useState<Record<string, string>>(
+    () => (window as { __PLEDGE_ROUTE__?: PledgeRouteData }).__PLEDGE_ROUTE__?.params ?? {},
+  );
   const [query, setQuery] = useState<Record<string, string>>(
     Object.fromEntries(new URLSearchParams(window.location.search).entries()),
   );

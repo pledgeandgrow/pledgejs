@@ -54,6 +54,25 @@ describe('verifyEdgeJwt algorithm handling', () => {
     expect(result.valid).toBe(false);
   });
 
+  it('rejects a token whose nbf is in the future', async () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k1' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ nbf: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url');
+    const token = `${header}.${payload}.${Buffer.from('sig').toString('base64url')}`;
+    const result = await verifyEdgeJwt(token, { jwksUri: 'https://idp.invalid/jwks' });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('not yet valid');
+  });
+
+  it('rejects an audience mismatch but the code path accepts array aud', async () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k1' })).toString('base64url');
+    // aud is an array; the configured audience is not in it → invalid audience.
+    const payload = Buffer.from(JSON.stringify({ aud: ['api-a', 'api-b'] })).toString('base64url');
+    const token = `${header}.${payload}.${Buffer.from('sig').toString('base64url')}`;
+    const result = await verifyEdgeJwt(token, { jwksUri: 'https://idp.invalid/jwks', audience: 'api-c' });
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('audience');
+  });
+
   it('decodes base64url header/payload containing - and _ without throwing', async () => {
     // Header/payload crafted to include URL-alphabet chars; verification will
     // fail later (no JWKS), but decoding must not throw as bare atob() would.

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 export interface UrlStateOptions {
   /** Replace history entry instead of pushing (default: false) */
@@ -25,24 +25,27 @@ export function useUrlState<T>(
   }, [key, defaultValue]);
 
   const [state, setState] = useState<T>(readValue);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const setValue = useCallback(
     (value: T | ((prev: T) => T)) => {
-      setState((prev) => {
-        const next = typeof value === 'function' ? (value as (p: T) => T)(prev) : value;
-        if (typeof window !== 'undefined') {
-          const params = new URLSearchParams(window.location.search);
-          params.set(key, JSON.stringify(next));
-          const url = `${window.location.pathname}?${params.toString()}`;
-          if (replace) {
-            window.history.replaceState({}, '', url);
-          } else {
-            window.history.pushState({}, '', url);
-          }
-          window.dispatchEvent(new PopStateEvent('popstate'));
+      // Compute next and perform the URL side effect OUTSIDE the state updater —
+      // a setState updater must be pure and can run twice under StrictMode /
+      // concurrent rendering, which would push history twice.
+      const next = typeof value === 'function' ? (value as (p: T) => T)(stateRef.current) : value;
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        params.set(key, JSON.stringify(next));
+        const url = `${window.location.pathname}?${params.toString()}`;
+        if (replace) {
+          window.history.replaceState({}, '', url);
+        } else {
+          window.history.pushState({}, '', url);
         }
-        return next;
-      });
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      }
+      setState(next);
     },
     [key, replace],
   );

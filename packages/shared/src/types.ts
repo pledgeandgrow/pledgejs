@@ -92,6 +92,12 @@ export interface PledgeResponse {
   body: string | ReadableStream<Uint8Array> | null;
   /** When true, body is a base64-encoded string (for binary content like images) */
   isBase64?: boolean;
+  /**
+   * Set-Cookie values, one per cookie. `headers` (a flat Record) cannot carry
+   * multiple Set-Cookie headers, so cookies are surfaced here and emitted as
+   * separate Set-Cookie headers by each runtime adapter.
+   */
+  cookies?: string[];
 }
 
 export interface I18nConfig {

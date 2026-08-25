@@ -48,9 +48,14 @@ export async function generateStaticExport(options: StaticExportOptions): Promis
       const paths = await getStaticPaths(route, config, modules);
 
       if (paths.length === 0) {
-        // Static route — render once
-        await renderPage(route, {});
+        // Static route — render once and write to the computed path here, so
+        // the file on disk always matches `writtenFiles` (the renderPage
+        // callback must not write its own path — that diverged and produced
+        // literal `:slug.html` filenames).
+        const html = await renderPage(route, {});
         const outPath = getOutputPath(route.pattern, outputDir);
+        mkdirSync(dirname(outPath), { recursive: true });
+        writeFileSync(outPath, html);
         writtenFiles.push(outPath);
 
         // PPR: also prerender the static shell for SSR routes
@@ -67,10 +72,13 @@ export async function generateStaticExport(options: StaticExportOptions): Promis
           }
         }
       } else {
-        // Dynamic route — render for each param set
+        // Dynamic route — render for each param set, writing to the
+        // param-substituted path.
         for (const params of paths) {
-          await renderPage(route, params);
+          const html = await renderPage(route, params);
           const outPath = getOutputPathWithParams(route.pattern, params, outputDir);
+          mkdirSync(dirname(outPath), { recursive: true });
+          writeFileSync(outPath, html);
           writtenFiles.push(outPath);
 
           // PPR: also prerender the static shell for dynamic SSR routes

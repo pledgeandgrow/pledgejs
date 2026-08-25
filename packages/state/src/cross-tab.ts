@@ -27,6 +27,8 @@ export function useCrossTabState<T>(
   }, [fullKey, defaultValue]);
 
   const [state, setState] = useState<T>(readValue);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -59,18 +61,18 @@ export function useCrossTabState<T>(
 
   const setValue = useCallback(
     (value: T | ((prev: T) => T)) => {
-      setState((prev) => {
-        const next = typeof value === 'function' ? (value as (p: T) => T)(prev) : value;
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem(fullKey, JSON.stringify(next));
-          } catch {
-            /* ignore */
-          }
-          channelRef.current?.postMessage({ key, value: next });
+      // Compute next and do the localStorage/broadcast side effects OUTSIDE the
+      // updater — a setState updater must be pure (StrictMode runs it twice).
+      const next = typeof value === 'function' ? (value as (p: T) => T)(stateRef.current) : value;
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(fullKey, JSON.stringify(next));
+        } catch {
+          /* ignore */
         }
-        return next;
-      });
+        channelRef.current?.postMessage({ key, value: next });
+      }
+      setState(next);
     },
     [fullKey, key],
   );

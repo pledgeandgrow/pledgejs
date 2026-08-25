@@ -21,6 +21,18 @@ interface StorybookOptions {
 }
 
 /**
+ * Resolves the Storybook framework package for a project's UI framework.
+ */
+function storybookFrameworkPackage(framework: string | undefined): string {
+  return ({
+    react: '@storybook/react-vite',
+    vue: '@storybook/vue3-vite',
+    svelte: '@storybook/svelte-vite',
+    solid: 'storybook-solidjs-vite',
+  } as Record<string, string>)[framework ?? 'react'] ?? '@storybook/react-vite';
+}
+
+/**
  * Generates the .storybook/main.ts config.
  */
 function generateMainConfig(config: PledgeConfig): string {
@@ -28,12 +40,7 @@ function generateMainConfig(config: PledgeConfig): string {
   // of hardcoding React — a Vue/Solid/Svelte project got a React-Vite config
   // that couldn't load its components.
   const framework = config.framework ?? 'react';
-  const frameworkPackage = ({
-    react: '@storybook/react-vite',
-    vue: '@storybook/vue3-vite',
-    svelte: '@storybook/svelte-vite',
-    solid: 'storybook-solidjs-vite',
-  } as Record<string, string>)[framework] ?? '@storybook/react-vite';
+  const frameworkPackage = storybookFrameworkPackage(framework);
 
   const isReact = framework === 'react';
   const storyExts = isReact ? 'ts|tsx|mdx' : `ts|${framework === 'svelte' ? 'svelte' : 'js'}|mdx`;
@@ -337,7 +344,11 @@ export async function storybookCommand(opts: StorybookOptions = {}): Promise<voi
 
     pkg.devDependencies = pkg.devDependencies ?? {};
     pkg.devDependencies['storybook'] = '^8.0.0';
-    pkg.devDependencies['@storybook/react-vite'] = '^8.0.0';
+    // Install the framework package that matches the generated main.ts, not a
+    // hardcoded React one — otherwise a Vue/Svelte/Solid project gets a config
+    // referencing (e.g.) @storybook/vue3-vite but only the React adapter
+    // installed, and Storybook fails to boot.
+    pkg.devDependencies[storybookFrameworkPackage(config.framework)] = '^8.0.0';
     pkg.devDependencies['@storybook/addon-essentials'] = '^8.0.0';
     pkg.devDependencies['@storybook/addon-interactions'] = '^8.0.0';
 

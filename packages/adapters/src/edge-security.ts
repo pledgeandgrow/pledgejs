@@ -247,6 +247,9 @@ const jwksCacheByUri = new Map<string, CachedJwks>();
 /**
  * Fetches and caches JWKS keys with automatic rotation.
  */
+/** Cap on distinct JWKS URIs cached, to bound memory. */
+const MAX_JWKS_URIS = 64;
+
 export async function getJwks(config: EdgeJwtConfig): Promise<Record<string, JsonWebKey>> {
   const ttl = (config.cacheTtl ?? 3600) * 1000;
   const cached = jwksCacheByUri.get(config.jwksUri);
@@ -255,12 +258,22 @@ export async function getJwks(config: EdgeJwtConfig): Promise<Record<string, Jso
   }
 
   const response = await fetch(config.jwksUri);
+  // Reject non-2xx responses instead of trying to JSON.parse an HTML error page
+  // (which throws and forces a refetch on every subsequent request).
+  if (!response.ok) {
+    throw new Error(`JWKS fetch failed: ${response.status} ${config.jwksUri}`);
+  }
   const data = await response.json() as { keys: Array<{ kid: string } & JsonWebKey> };
   const keys: Record<string, JsonWebKey> = {};
   for (const key of data.keys) {
     keys[key.kid!] = key;
   }
 
+  // Bound the cache: drop the oldest URI entry when over the cap.
+  if (!jwksCacheByUri.has(config.jwksUri) && jwksCacheByUri.size >= MAX_JWKS_URIS) {
+    const oldest = jwksCacheByUri.keys().next().value;
+    if (oldest !== undefined) jwksCacheByUri.delete(oldest);
+  }
   jwksCacheByUri.set(config.jwksUri, { keys, expiresAt: Date.now() + ttl });
   return keys;
 }
@@ -295,11 +308,20 @@ export async function verifyEdgeJwt(
     if (config.issuer && payload.iss !== config.issuer) {
       return { valid: false, error: 'Invalid issuer' };
     }
-    if (config.audience && payload.aud !== config.audience) {
-      return { valid: false, error: 'Invalid audience' };
+    if (config.audience) {
+      // `aud` may be a string or an array of strings (RFC 7519). Accept when the
+      // configured audience is present in either form.
+      const aud = payload.aud;
+      const ok = Array.isArray(aud) ? aud.includes(config.audience) : aud === config.audience;
+      if (!ok) return { valid: false, error: 'Invalid audience' };
     }
-    if (payload.exp && payload.exp * 1000 < Date.now()) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (payload.exp && payload.exp < nowSec) {
       return { valid: false, error: 'Token expired' };
+    }
+    // Reject tokens that are not yet valid (nbf).
+    if (payload.nbf && payload.nbf > nowSec) {
+      return { valid: false, error: 'Token not yet valid' };
     }
 
     const keys = await getJwks(config);
@@ -596,9 +618,19 @@ export function withEdgeTimeout(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
 
+    // Hand the handler a request whose signal aborts on timeout, so the handler
+    // (and any fetch() it makes with req.signal) is actually cancelled rather
+    // than running to completion after the 504 was already returned.
+    let abortableReq: Request;
+    try {
+      abortableReq = new Request(req, { signal: controller.signal });
+    } catch {
+      abortableReq = req;
+    }
+
     try {
       const response = await Promise.race([
-        handler(req),
+        handler(abortableReq),
         new Promise<Response>((_, reject) => {
           controller.signal.addEventListener('abort', () => {
             reject(new Error('EDGE_TIMEOUT'));

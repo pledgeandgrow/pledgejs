@@ -21,3 +21,4 @@ export * from './rust-rsc-deserializer';
 export * from './rust-ppr';
 export * from './rust-ssr-profiler';
 export * from './rust-hydration';
+export * from './isr-cache';

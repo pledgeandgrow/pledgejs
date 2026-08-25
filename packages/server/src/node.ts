@@ -99,13 +99,18 @@ export function startNodeServer(options: NodeServerOptions) {
 
       if (await tryServeStatic(req, res, config)) return;
 
-      let body: string | null = null;
-      if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+      // Read the request body for any method that can carry one, preserving
+      // raw bytes as a Buffer so binary/multipart uploads aren't corrupted by
+      // UTF-8 decoding (the handler accepts string | Buffer). GET/HEAD never
+      // have a body. (Previously only POST/PUT/PATCH were read, and always
+      // UTF-8-stringified, dropping DELETE bodies and mangling uploads.)
+      let body: Buffer | null = null;
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
         const chunks: Buffer[] = [];
         for await (const chunk of req) {
           chunks.push(chunk as Buffer);
         }
-        body = Buffer.concat(chunks).toString('utf-8');
+        body = chunks.length > 0 ? Buffer.concat(chunks) : null;
       }
 
       const metricsStartTime = metricsMiddleware.requestStart(req.method ?? 'GET', url.pathname);
@@ -114,44 +119,49 @@ export function startNodeServer(options: NodeServerOptions) {
 
       // Auto-apply security headers to all responses
       const isHttps = req.headers['x-forwarded-proto'] === 'https' || (req.socket as { encrypted?: boolean }).encrypted === true;
-      const headers = applySecurityHeaders({ ...response.headers }, config, isHttps);
+      const headers: Record<string, string | string[]> = applySecurityHeaders({ ...response.headers }, config, isHttps);
+      // Emit each Set-Cookie as its own header (Node's writeHead accepts an
+      // array value for a header field).
+      if (response.cookies && response.cookies.length > 0) {
+        headers['Set-Cookie'] = response.cookies;
+      }
       let responseBody: string | Buffer | null = null;
 
-      if (typeof response.body === 'string' && !response.isBase64) {
-        const acceptEncoding = req.headers['accept-encoding'] as string | undefined;
-        if (acceptEncoding) {
-          const { body: compressed, encoding } = compressResponse(response.body, acceptEncoding);
-          if (encoding) {
-            responseBody = compressed;
-            headers['Content-Encoding'] = encoding;
-            headers['Vary'] = headers['Vary'] ? `${headers['Vary']}, Accept-Encoding` : 'Accept-Encoding';
+      if (typeof response.body === 'string') {
+        if (response.isBase64) {
+          // Binary content carried as base64 — decode to bytes and send as-is
+          // (no text compression). This branch was previously unreachable, so
+          // every binary response (OG images, downloads) sent an empty body.
+          responseBody = Buffer.from(response.body, 'base64');
+        } else {
+          const acceptEncoding = req.headers['accept-encoding'] as string | undefined;
+          if (acceptEncoding) {
+            const { body: compressed, encoding } = compressResponse(response.body, acceptEncoding);
+            if (encoding) {
+              responseBody = compressed;
+              headers['Content-Encoding'] = encoding;
+              headers['Vary'] = headers['Vary'] ? `${headers['Vary']}, Accept-Encoding` : 'Accept-Encoding';
+            } else {
+              responseBody = response.body;
+            }
           } else {
             responseBody = response.body;
           }
-        } else {
-          responseBody = response.body;
         }
       }
 
       res.writeHead(response.status, headers);
-      if (responseBody) {
-        if (response.isBase64 && typeof responseBody === 'string') {
-          res.end(Buffer.from(responseBody, 'base64'));
-        } else if (typeof responseBody === 'string') {
-          res.end(responseBody);
-        } else if (Buffer.isBuffer(responseBody)) {
-          res.end(responseBody);
-        } else {
-          res.end();
-        }
+      if (responseBody !== null) {
+        res.end(responseBody);
       } else if (response.body && typeof response.body !== 'string') {
-          const reader = response.body.getReader();
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-          }
-          res.end();
+        // ReadableStream body — pipe it through.
+        const reader = response.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+        res.end();
       } else {
         res.end();
       }

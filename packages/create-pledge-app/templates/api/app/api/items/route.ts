@@ -1,4 +1,4 @@
-const items: Map<string, { id: string; name: string }> = new Map();
+import { items } from './store';
 
 export async function GET() {
   return Response.json(Array.from(items.values()));

@@ -36,4 +36,20 @@ describe('Server Actions (#37)', () => {
     expect(all.some((a) => a.name === 'list-test-1')).toBe(true);
     expect(all.some((a) => a.name === 'list-test-2')).toBe(true);
   });
+
+  it('derives a DETERMINISTIC id — same fn+name yields the same id (so server & client match)', () => {
+    // Two identical serverAction() evaluations (as happens in the server and
+    // client bundles) must produce the same id, or the client POST 404s.
+    const impl = async (x: number) => x + 1;
+    const a = serverAction(impl, { name: 'inc' }) as unknown as { __pledgeActionId: string };
+    const b = serverAction(impl, { name: 'inc' }) as unknown as { __pledgeActionId: string };
+    expect(a.__pledgeActionId).toBe(b.__pledgeActionId);
+    expect(a.__pledgeActionId.startsWith('action_inc_')).toBe(true);
+  });
+
+  it('distinguishes different implementations that share a name', () => {
+    const a = serverAction(async () => 1, { name: 'dup' }) as unknown as { __pledgeActionId: string };
+    const b = serverAction(async () => 2, { name: 'dup' }) as unknown as { __pledgeActionId: string };
+    expect(a.__pledgeActionId).not.toBe(b.__pledgeActionId);
+  });
 });

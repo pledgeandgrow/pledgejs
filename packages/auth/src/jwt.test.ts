@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { decodeJWT, generateKeyPair, signJWT, verifyJWT } from './jwt';
+
+// RSA-2048 key generation is CPU-heavy and can exceed the default 5s timeout
+// when the full suite runs many workers in parallel. Give these tests headroom.
+vi.setConfig({ testTimeout: 30000 });
 
 describe('JWT', () => {
   describe('generateKeyPair', () => {

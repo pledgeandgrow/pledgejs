@@ -258,35 +258,64 @@ export async function reportError(
   if (errorBuffer.length > 100) errorBuffer.shift();
 }
 
+/**
+ * Parse a Sentry DSN (`https://<public_key>@<host>/<project_id>`) into the
+ * ingest URL and public key. The public key is sent via the X-Sentry-Auth
+ * header, NOT in the request body.
+ */
+function parseSentryDsn(dsn: string): { url: string; publicKey: string } | null {
+  try {
+    const u = new URL(dsn);
+    const publicKey = u.username;
+    const projectId = u.pathname.replace(/^\//, '');
+    if (!publicKey || !projectId) return null;
+    return { url: `${u.protocol}//${u.host}/api/${projectId}/envelope/`, publicKey };
+  } catch {
+    return null;
+  }
+}
+
 async function reportToSentry(report: ErrorReport): Promise<void> {
   if (!errorTrackerConfig.dsn) return;
-  // In production, this would use @sentry/node
-  // Here we provide the HTTP envelope API directly
+  const dsn = parseSentryDsn(errorTrackerConfig.dsn);
+  if (!dsn) return;
+
   try {
-    const envelope = {
-      event_id: crypto.randomUUID().replace(/-/g, ''),
-      sent_at: report.timestamp,
-      dsn: errorTrackerConfig.dsn,
-      event: {
-        exception: {
-          values: [{
-            type: report.error.name,
-            value: report.error.message,
-            stacktrace: { frames: parseStack(report.error.stack) },
-          }],
-        },
-        level: report.level,
-        environment: errorTrackerConfig.environment,
-        release: errorTrackerConfig.release,
-        timestamp: report.timestamp,
-        extra: report.context,
+    const eventId = crypto.randomUUID().replace(/-/g, '');
+    const event = {
+      event_id: eventId,
+      timestamp: report.timestamp,
+      level: report.level,
+      environment: errorTrackerConfig.environment,
+      release: errorTrackerConfig.release,
+      exception: {
+        values: [{
+          type: report.error.name,
+          value: report.error.message,
+          stacktrace: { frames: parseStack(report.error.stack) },
+        }],
       },
+      extra: report.context,
     };
-    const url = errorTrackerConfig.dsn.replace(/\/$/, '') + '/api/1/envelope/';
-    await fetch(url, {
+
+    // A Sentry envelope is newline-delimited JSON:
+    //   {envelope header}\n{item header}\n{item payload}
+    // sent to /api/<project>/envelope/ with the public key in X-Sentry-Auth.
+    // (Previously a single JSON object with the DSN in the body was POSTed to a
+    // wrong URL, so every report was rejected and the DSN was leaked in-band.)
+    const body = [
+      JSON.stringify({ event_id: eventId, sent_at: report.timestamp }),
+      JSON.stringify({ type: 'event' }),
+      JSON.stringify(event),
+    ].join('\n');
+
+    await fetch(dsn.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(envelope),
+      headers: {
+        'Content-Type': 'application/x-sentry-envelope',
+        'X-Sentry-Auth': `Sentry sentry_version=7, sentry_key=${dsn.publicKey}, sentry_client=pledgestack/1.0`,
+      },
+      body,
     });
   } catch (err) {
     logger.error('Failed to report to Sentry', { error: err });

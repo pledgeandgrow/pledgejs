@@ -32,34 +32,44 @@ export function usePersistentState<T>(options: PersistenceOptions<T>): [T, (valu
   }
 
   const [state, setState] = useState<T>(defaultValue);
+  // Hold serialize/deserialize/state in refs so an inline function passed by the
+  // caller (a new reference every render) doesn't retrigger the hydration effect
+  // and clobber live state each render.
+  const serializeRef = useRef(serialize);
+  serializeRef.current = serialize;
+  const deserializeRef = useRef(deserialize);
+  deserializeRef.current = deserialize;
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     if (!hydrate || typeof window === 'undefined') return;
     try {
       const raw = storageRef.current?.getItem(key);
       if (raw !== null && raw !== undefined) {
-        setState(deserialize(raw));
+        setState(deserializeRef.current(raw));
       }
     } catch {
       /* ignore */
     }
-  }, [key, hydrate, deserialize]);
+    // Re-hydrate only when the key or hydrate flag changes — NOT when the
+    // deserialize function identity changes.
+  }, [key, hydrate]);
 
   const setValue = useCallback(
     (value: T | ((prev: T) => T)) => {
-      setState((prev) => {
-        const next = typeof value === 'function' ? (value as (p: T) => T)(prev) : value;
-        if (typeof window !== 'undefined' && storageRef.current) {
-          try {
-            storageRef.current.setItem(key, serialize(next));
-          } catch {
-            /* ignore */
-          }
+      // Compute next and persist OUTSIDE the updater (updaters must be pure).
+      const next = typeof value === 'function' ? (value as (p: T) => T)(stateRef.current) : value;
+      if (typeof window !== 'undefined' && storageRef.current) {
+        try {
+          storageRef.current.setItem(key, serializeRef.current(next));
+        } catch {
+          /* ignore */
         }
-        return next;
-      });
+      }
+      setState(next);
     },
-    [key, serialize],
+    [key],
   );
 
   const clear = useCallback(() => {

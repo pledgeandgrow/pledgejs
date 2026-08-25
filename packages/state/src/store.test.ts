@@ -62,3 +62,16 @@ describe('createStore', () => {
     expect(l2).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('createStore dedup (#state)', () => {
+  it('does not notify subscribers when the value is unchanged', () => {
+    const store = createStore({ initialState: { count: 0 } });
+    const same = store.getState();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.setState(same); // identical reference → no notify
+    expect(listener).not.toHaveBeenCalled();
+    store.setState({ count: 1 }); // new value → notify
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+});

@@ -62,6 +62,8 @@ export interface APIGatewayResult {
   headers: Record<string, string>;
   body: string;
   isBase64Encoded?: boolean;
+  /** HTTP API v2 multi-cookie field — one entry per Set-Cookie header. */
+  cookies?: string[];
 }
 
 function isV2Event(event: APIGatewayEvent): event is APIGatewayEventV2 {
@@ -149,8 +151,16 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
 
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === 'set-cookie') return; // handled via `cookies` below
       headers[key] = value;
     });
+
+    // Multiple Set-Cookie headers must be carried in the HTTP API v2 `cookies`
+    // array; forEach/entries would otherwise comma-join them into one broken
+    // header. (getSetCookie returns each cookie separately.)
+    const cookies = typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : [];
 
     // Binary responses (e.g. OG images) must be base64-encoded and flagged, or
     // API Gateway mangles them by treating the bytes as UTF-8 text.
@@ -160,6 +170,7 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
       statusCode: response.status,
       headers,
       body: responseBody,
+      ...(cookies.length > 0 ? { cookies } : {}),
       ...(isBase64Encoded ? { isBase64Encoded: true } : {}),
     };
   };

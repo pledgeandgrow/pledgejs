@@ -66,6 +66,24 @@ describe('SAML signature verification (fail-closed)', () => {
     expect(parseSAMLResponse(signed, baseConfig)).toBeNull();
   });
 
+  it('resists signature wrapping — a forged sibling assertion does not grant identity', () => {
+    // Take a validly-signed response and inject a forged (unsigned) assertion
+    // before the real one. Claims must come from the digest-bound assertion.
+    const signed = buildSignedResponse('alice@example.com');
+    const xml = Buffer.from(signed, 'base64').toString('utf8');
+    const forged = '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"><saml:Issuer>idp</saml:Issuer><saml:Subject><saml:NameID>attacker@evil.com</saml:NameID></saml:Subject></saml:Assertion>';
+    // Insert the forged assertion right after the opening Response tag.
+    const wrapped = xml.replace('>', '>' + forged, 1);
+    const info = parseSAMLResponse(Buffer.from(wrapped).toString('base64'), baseConfig);
+    // Either rejected, or (if it verifies) the identity is the REAL one, never the forged one.
+    expect(info?.nameId).not.toBe('attacker@evil.com');
+  });
+
+  it('rejects an assertion whose issuer does not match the configured IdP', () => {
+    const signed = buildSignedResponse('alice@example.com');
+    expect(parseSAMLResponse(signed, { ...baseConfig, idpEntityId: 'different-idp' })).toBeNull();
+  });
+
   it('accepts a non-expired assertion (NotOnOrAfter in the future)', () => {
     const signed = buildSignedResponse('alice@example.com', '2999-01-01T00:00:00Z');
     expect(parseSAMLResponse(signed, baseConfig)?.nameId).toBe('alice@example.com');

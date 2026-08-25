@@ -210,6 +210,9 @@ export function revalidatePath(path: string): void {
       if (keys.size === 0) tagIndex.delete(tag);
     }
   }
+  // Also drop any ISR-rendered HTML for this path so the next request re-renders.
+  // Imported lazily to avoid a circular import between fetch-cache and render/.
+  void import('./render/isr-cache').then((m) => m.invalidateIsr(path)).catch(() => {});
 }
 
 /**

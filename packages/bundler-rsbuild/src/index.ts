@@ -1,4 +1,4 @@
-import { join, dirname, basename, extname } from 'node:path';
+import { join, dirname, basename, extname, relative, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -195,9 +195,18 @@ export const rsbuildAdapter: BundlerAdapter = {
     const { createServer } = await import('node:http');
 
     const server = createServer(async (req, res) => {
-      const url = req.url ?? '/';
       const cwd = process.cwd();
-      const filePath = join(cwd, url.replace(/^\//, ''));
+      // Resolve within cwd and reject path traversal (`GET /../../secrets.ts`).
+      let filePath: string;
+      try {
+        filePath = join(cwd, decodeURIComponent((req.url ?? '/').split('?')[0]).replace(/^\/+/, ''));
+      } catch {
+        res.writeHead(400); res.end('Bad request'); return;
+      }
+      const rel = relative(cwd, filePath);
+      if (rel.startsWith('..') || isAbsolute(rel)) {
+        res.writeHead(403); res.end('Forbidden'); return;
+      }
 
       if (!existsSync(filePath)) {
         res.writeHead(404);

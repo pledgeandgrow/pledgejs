@@ -41,7 +41,11 @@ export function createEdgeHandler(options: EdgeServerOptions) {
 
     // Apply security headers to edge responses
     const isHttps = url.protocol === 'https:' || headers['x-forwarded-proto'] === 'https';
-    const finalHeaders = applySecurityHeaders({ ...result.headers }, config, isHttps);
+    const finalHeaders = new Headers(applySecurityHeaders({ ...result.headers }, config, isHttps));
+    // Append each Set-Cookie individually (a Headers object preserves multiple).
+    if (result.cookies) {
+      for (const cookie of result.cookies) finalHeaders.append('Set-Cookie', cookie);
+    }
 
     return new Response(result.body, {
       status: result.status,

@@ -4,8 +4,10 @@ packages:
   - "!packages/pledgepack"
   - "!packages/pledgepack-*"
 allowBuilds:
+  argon2: set this to true or false
   esbuild: true
   pledgepack: true
+  puppeteer: set this to true or false
 overrides:
   brace-expansion: ">=5.0.9"
   fast-uri: ">=4.1.2"

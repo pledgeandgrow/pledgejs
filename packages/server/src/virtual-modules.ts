@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
+import { join, relative, sep, isAbsolute } from 'node:path';
 import { readdirSync, statSync } from 'node:fs';
 import type { PledgeConfig, RendererAdapter, ClientScriptOptions } from 'pledgestack-shared';
 import { FILE_CONVENTIONS, getRendererRegistry } from 'pledgestack-shared';
@@ -45,8 +45,10 @@ export async function tryServePledgeVirtual(
     return serveFontCss(req, res, config, pathname);
   }
 
-  // Image optimization endpoint — serves optimized/resized images
-  if (pathname.startsWith('/__pledge__/image/')) {
+  // Image optimization endpoint — serves optimized/resized images. Accepts both
+  // the path form (/__pledge__/image/<path>) and the query form
+  // (/_pledge/image?src=<path>) emitted by the pledgestack-image package.
+  if (pathname.startsWith('/__pledge__/image/') || pathname === '/_pledge/image') {
     return serveOptimizedImage(req, res, config, pathname);
   }
 
@@ -96,6 +98,27 @@ async function serveFontCss(
  * Serves optimized images at /__pledge__/image/:path?w=&h=&format=
  * Resizes and converts images on the fly.
  */
+function contentTypeForExt(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case 'png': return 'image/png';
+    case 'jpg': case 'jpeg': return 'image/jpeg';
+    case 'webp': return 'image/webp';
+    case 'avif': return 'image/avif';
+    case 'gif': return 'image/gif';
+    case 'svg': return 'image/svg+xml';
+    default: return 'application/octet-stream';
+  }
+}
+
+/** Resolve the source image path within publicDir, rejecting traversal. */
+function resolveImageSource(config: PledgeConfig, imagePath: string): string | null {
+  const publicDir = join(config.rootDir, config.publicDir);
+  const full = join(publicDir, imagePath.replace(/^\/+/, ''));
+  const rel = relative(publicDir, full);
+  if (rel.startsWith('..') || isAbsolute(rel)) return null;
+  return full;
+}
+
 async function serveOptimizedImage(
   req: IncomingMessage,
   res: ServerResponse,
@@ -103,23 +126,64 @@ async function serveOptimizedImage(
   pathname: string,
 ): Promise<boolean> {
   try {
-    const imagePath = pathname.replace('/__pledge__/image/', '');
-    const publicPath = join(config.rootDir, config.publicDir, imagePath);
+    const url = new URL(req.url ?? '', 'http://localhost');
+    // Source: from the path (path form) or the `src` query param (query form).
+    const imagePath = pathname === '/_pledge/image'
+      ? (url.searchParams.get('src') ?? '')
+      : pathname.replace('/__pledge__/image/', '');
+    if (!imagePath) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      res.end('Missing image source');
+      return true;
+    }
+
+    const publicPath = resolveImageSource(config, imagePath);
     const { readFile } = await import('node:fs/promises');
     const { existsSync } = await import('node:fs');
-    if (!existsSync(publicPath)) {
+    if (!publicPath || !existsSync(publicPath)) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Image not found');
       return true;
     }
+
     const data = await readFile(publicPath);
-    const url = new URL(req.url ?? '', 'http://localhost');
-    const format = url.searchParams.get('format') ?? 'webp';
-    // For now, serve the original image — full optimization would use sharp
-    const ext = imagePath.split('.').pop()?.toLowerCase() ?? '';
-    const contentType = format === 'webp' ? 'image/webp' : format === 'avif' ? 'image/avif' : ext === 'png' ? 'image/png' : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'svg' ? 'image/svg+xml' : 'application/octet-stream';
+    const srcExt = imagePath.split('.').pop()?.toLowerCase() ?? '';
+    const width = url.searchParams.get('w') ? parseInt(url.searchParams.get('w')!, 10) : undefined;
+    const height = url.searchParams.get('h') ? parseInt(url.searchParams.get('h')!, 10) : undefined;
+    const format = url.searchParams.get('format') ?? undefined;
+    const quality = url.searchParams.get('q') ? parseInt(url.searchParams.get('q')!, 10) : undefined;
+
+    // Real resize/convert via sharp when it's installed and a transform was
+    // requested. When sharp isn't available (or nothing to do), serve the
+    // original bytes with the content-type of the ACTUAL file — never claiming a
+    // format we didn't convert to (the previous code mislabeled every response).
+    if ((width || height || format) && srcExt !== 'svg') {
+      try {
+        const sharpMod = 'sharp';
+        const sharp = (await import(sharpMod)).default as (input: Buffer) => {
+          resize: (opts: { width?: number; height?: number; fit: string }) => ReturnType<typeof sharp>;
+          toFormat: (fmt: string, opts?: { quality?: number }) => ReturnType<typeof sharp>;
+          toBuffer: () => Promise<Buffer>;
+        };
+        let pipeline = sharp(data);
+        if (width || height) pipeline = pipeline.resize({ width, height, fit: 'inside' });
+        const outFormat = format ?? srcExt;
+        pipeline = pipeline.toFormat(outFormat, quality ? { quality } : undefined);
+        const out = await pipeline.toBuffer();
+        res.writeHead(200, {
+          'Content-Type': contentTypeForExt(outFormat),
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Vary': 'Accept',
+        });
+        res.end(out);
+        return true;
+      } catch {
+        // sharp not installed — fall through to serving the original.
+      }
+    }
+
     res.writeHead(200, {
-      'Content-Type': contentType,
+      'Content-Type': contentTypeForExt(srcExt),
       'Cache-Control': 'public, max-age=31536000, immutable',
       'Vary': 'Accept',
     });
@@ -188,6 +252,10 @@ export function tryServeRouterModule(
   }
 
   const code = `// PledgeStack router (auto-generated)
+// Re-export the client runtime so the generated client script can import
+// everything it needs from '/__pledge_router' (previously RouterProvider/Link
+// were imported from here but never exported, breaking client hydration).
+export { RouterProvider, Link, resolveRouteElement, initPledgeHydration } from 'pledgestack-client';
 ${imports.join('\n')}
 
 export const routes = {

@@ -8,8 +8,40 @@
  * - OIDC userinfo endpoint support
  */
 
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { generateToken } from './index';
+
+/**
+ * Encrypt the PKCE code_verifier so it can travel inside the OAuth `state`
+ * (through the browser and IdP) without being recoverable by anyone who
+ * observes it. The `state` is signed but NOT otherwise encrypted, so embedding
+ * the raw verifier there defeated the point of PKCE. AES-256-GCM with a key
+ * derived from the app secret keeps it confidential and tamper-evident.
+ */
+function encryptVerifier(verifier: string, secret: string): string {
+  const key = scryptSync(secret, 'pledge-oauth-pkce', 32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([cipher.update(verifier, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, ct]).toString('base64url');
+}
+
+function decryptVerifier(blob: string, secret: string): string | null {
+  try {
+    const buf = Buffer.from(blob, 'base64url');
+    if (buf.length < 28) return null;
+    const key = scryptSync(secret, 'pledge-oauth-pkce', 32);
+    const iv = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const ct = buf.subarray(28);
+    const decipher = createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+}
 
 export interface OAuthProviderConfig {
   /** Provider name (e.g. 'google', 'github') */
@@ -91,7 +123,8 @@ export function createOAuthStateParam(
   const payload: OAuthState = {
     provider,
     redirect,
-    codeVerifier,
+    // Store the verifier ENCRYPTED, not in plaintext.
+    codeVerifier: encryptVerifier(codeVerifier, secret),
     nonce,
     timestamp: Date.now(),
   };
@@ -120,6 +153,10 @@ export function verifyOAuthStateParam(
   try {
     const data: OAuthState = JSON.parse(Buffer.from(encoded, 'base64url').toString());
     if (Date.now() - data.timestamp > maxAgeSeconds * 1000) return null;
+    // Decrypt the verifier back to plaintext for the token exchange.
+    const verifier = decryptVerifier(data.codeVerifier, secret);
+    if (verifier === null) return null;
+    data.codeVerifier = verifier;
     return data;
   } catch {
     return null;

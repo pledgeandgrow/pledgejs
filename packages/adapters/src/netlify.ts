@@ -44,6 +44,8 @@ export interface NetlifyResult {
   headers: Record<string, string>;
   body: string;
   isBase64Encoded?: boolean;
+  /** Multi-value headers — used to emit multiple Set-Cookie headers. */
+  multiValueHeaders?: Record<string, string[]>;
 }
 
 export function createNetlifyHandler(options: { config: PledgeConfig }) {
@@ -80,8 +82,15 @@ export function createNetlifyHandler(options: { config: PledgeConfig }) {
 
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === 'set-cookie') return; // via multiValueHeaders below
       headers[key] = value;
     });
+
+    // Emit multiple Set-Cookie headers via multiValueHeaders (a single flat
+    // header record would comma-join them into one broken cookie).
+    const cookies = typeof response.headers.getSetCookie === 'function'
+      ? response.headers.getSetCookie()
+      : [];
 
     // Base64-encode binary responses so Netlify doesn't corrupt them as UTF-8.
     const contentType = headers['content-type'];
@@ -100,6 +109,7 @@ export function createNetlifyHandler(options: { config: PledgeConfig }) {
       statusCode: response.status,
       headers,
       body: responseBody,
+      ...(cookies.length > 0 ? { multiValueHeaders: { 'Set-Cookie': cookies } } : {}),
       ...(isBase64Encoded ? { isBase64Encoded: true } : {}),
     };
   };

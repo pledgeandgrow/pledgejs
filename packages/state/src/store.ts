@@ -19,7 +19,12 @@ export function createStore<T>(options: StoreOptions<T>): Store<T> {
   return {
     getState: () => state,
     setState: (updater) => {
-      state = typeof updater === 'function' ? (updater as (prev: T) => T)(state) : updater;
+      const next = typeof updater === 'function' ? (updater as (prev: T) => T)(state) : updater;
+      // Don't notify subscribers when the value is unchanged — this avoids
+      // needless re-renders and useSyncExternalStore "getSnapshot should be
+      // cached" churn.
+      if (Object.is(next, state)) return;
+      state = next;
       listeners.forEach((l) => l());
     },
     subscribe: (listener) => {
