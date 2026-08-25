@@ -1,16 +1,17 @@
 /**
- * Streaming metadata — injects <title>/<meta> tags after the first flush
- * of HTML, without blocking TTFB.
+ * Streaming metadata — placeholder head tags plus a client-side injector that
+ * swaps in real metadata once an async `generateMetadata()` resolves.
  *
- * Goal #222: When `generateMetadata()` is async (e.g. fetches from a CMS),
- * we send the shell HTML immediately with placeholder tags, then inject
- * the real metadata via an inline <script> that replaces the placeholders
- * once the Promise resolves.
+ * NOTE: this is only useful for a genuinely progressive response, where the
+ * shell (with placeholder head) is flushed before `generateMetadata()`
+ * resolves. It is NOT used by the buffered `renderSSRStream` path, which resolves
+ * metadata up front and emits the real tags directly (no placeholder flash).
+ * Using it on a buffered response would always flash placeholder → real.
  *
  * This module provides:
  * - `createStreamingMetadata()` — starts metadata resolution, returns placeholder + injector
  * - `renderPlaceholderHead()` — renders placeholder tags for the initial shell
- * - `createMetadataInjector()` — creates the inline script that swaps placeholders
+ * - `createMetadataInjectorScript()` — creates the inline script that swaps placeholders
  */
 
 import type { HeadMetadata } from '../router/types';

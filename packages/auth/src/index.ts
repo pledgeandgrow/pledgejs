@@ -1,5 +1,13 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual, scrypt as scryptCb } from 'node:crypto';
+import { promisify } from 'node:util';
 import type { PledgeRequest } from 'pledgestack-shared';
+
+const scrypt = promisify(scryptCb) as (
+  password: string | Buffer,
+  salt: string | Buffer,
+  keylen: number,
+  options: { N: number; r: number; p: number; maxmem?: number },
+) => Promise<Buffer>;
 
 /**
  * Session manager — cookie-based session storage with HMAC-signed tokens.
@@ -119,22 +127,60 @@ export class SessionManager {
 }
 
 /**
- * Password hashing utilities using PBKDF2.
+ * Password hashing utilities using scrypt (memory-hard key derivation).
+ *
+ * A single unsalted-stretch HMAC was previously used here, which is not a
+ * password hash at all — stolen hashes could be brute-forced at billions of
+ * guesses/sec. scrypt with N=2^15 is memory-hard and CPU-expensive per guess.
+ *
+ * The stored format is self-describing so parameters can evolve without
+ * invalidating existing hashes: `scrypt$N$r$p$saltHex$hashHex`.
  */
-export function hashPassword(password: string, salt?: string): string {
-  const s = salt ?? randomBytes(16).toString('hex');
-  const hash = createHmac('sha256', s).update(password).digest('hex');
-  return `${s}:${hash}`;
+
+// N must be a power of two. 2^15 (32768) is a common interactive-login cost.
+const SCRYPT_N = 32768;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_KEYLEN = 64;
+// scrypt needs roughly 128 * N * r bytes; raise maxmem above the 32 MB default.
+const SCRYPT_MAXMEM = 128 * SCRYPT_N * SCRYPT_R * 2;
+
+export async function hashPassword(password: string, salt?: string): Promise<string> {
+  const saltHex = salt ?? randomBytes(16).toString('hex');
+  const derived = await scrypt(password, saltHex, SCRYPT_KEYLEN, {
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+    maxmem: SCRYPT_MAXMEM,
+  });
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${saltHex}$${derived.toString('hex')}`;
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
-  const [salt, hash] = stored.split(':');
-  if (!salt || !hash) return false;
-  const computed = createHmac('sha256', salt).update(password).digest('hex');
-  const compBuf = Buffer.from(computed);
-  const hashBuf = Buffer.from(hash);
-  if (compBuf.length !== hashBuf.length) return false;
-  return timingSafeEqual(compBuf, hashBuf);
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  const parts = stored.split('$');
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  const N = Number(parts[1]);
+  const r = Number(parts[2]);
+  const p = Number(parts[3]);
+  const saltHex = parts[4];
+  const hashHex = parts[5];
+  if (!Number.isInteger(N) || !Number.isInteger(r) || !Number.isInteger(p) || !saltHex || !hashHex) {
+    return false;
+  }
+  const expected = Buffer.from(hashHex, 'hex');
+  let derived: Buffer;
+  try {
+    derived = await scrypt(password, saltHex, expected.length, {
+      N,
+      r,
+      p,
+      maxmem: 128 * N * r * 2,
+    });
+  } catch {
+    return false;
+  }
+  if (derived.length !== expected.length) return false;
+  return timingSafeEqual(derived, expected);
 }
 
 /**

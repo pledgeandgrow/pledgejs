@@ -12,6 +12,7 @@ import {
   type PledgeManifest,
   type PledgeManifestEntry,
 } from 'pledgestack-shared';
+import { getPledgeRegistry } from './pledge';
 
 /**
  * Client-side pledge hydration runtime.
@@ -30,7 +31,12 @@ const hydratedPledges = new Set<string>();
 
 /**
  * Component registry — maps pledge IDs to component constructors.
- * Populated by the pledge() HOC and by dynamically imported modules.
+ * Populated by dynamically imported modules via registerPledgeComponent().
+ *
+ * The primary source of components is the pledge() HOC's own registry
+ * (getPledgeRegistry()), which is populated automatically whenever a pledged
+ * component module is evaluated on the client. This map is a secondary,
+ * explicit registration path. `resolvePledgeComponent` consults both.
  */
 const componentRegistry = new Map<string, ComponentType>();
 
@@ -39,6 +45,19 @@ const componentRegistry = new Map<string, ComponentType>();
  */
 export function registerPledgeComponent(id: string, Component: ComponentType): void {
   componentRegistry.set(id, Component);
+}
+
+/**
+ * Resolve the component for a pledge id from either registry. The pledge()
+ * HOC registers into getPledgeRegistry() at module-eval time (matching the
+ * server's id assignment order), so this is what actually connects a rendered
+ * pledge to its client component — previously hydration only consulted
+ * `componentRegistry`, which nothing populated, so no pledge ever hydrated.
+ */
+function resolvePledgeComponent(id: string): ComponentType | undefined {
+  const local = componentRegistry.get(id);
+  if (local) return local;
+  return getPledgeRegistry().get(id)?.Component as ComponentType | undefined;
 }
 
 /**
@@ -112,9 +131,9 @@ function hydratePledge(entry: PledgeManifestEntry): void {
   const element = document.querySelector(`[${PLEDGE_ID}="${entry.id}"]`);
   if (!(element instanceof HTMLElement)) return;
 
-  const Component = componentRegistry.get(entry.id);
+  const Component = resolvePledgeComponent(entry.id);
   if (!Component) {
-    // Component not yet registered — will be hydrated when registered
+    // Component not registered on the client (its module wasn't imported).
     return;
   }
 

@@ -56,20 +56,28 @@ function isGoogleFont(src: string): boolean {
  * Build a Google Fonts URL for the given family and options.
  */
 function buildGoogleFontsUrl(config: Required<Pick<FontConfig, 'family' | 'weights' | 'styles' | 'display' | 'subsets'>>): string {
-  const params = new URLSearchParams();
-  params.set('family', config.family);
-  for (const weight of config.weights) {
-    for (const style of config.styles) {
-      if (style === 'italic') {
-        params.append('ital', '1');
-        params.append('wght', String(weight));
-      } else {
-        params.append('wght', String(weight));
-      }
+  // Google Fonts CSS2 requires the axis-tuple syntax
+  // `family=Name:ital,wght@0,400;0,700;1,400` — NOT repeated `wght=`/`ital=`
+  // query params (which the API ignores, silently dropping weights/styles).
+  const familyName = config.family.trim().replace(/\s+/g, '+');
+  const weights = [...new Set(config.weights)].sort((a, b) => a - b);
+  const hasItalic = config.styles.includes('italic');
+  const italValues: number[] = [];
+  if (config.styles.includes('normal') || !hasItalic) italValues.push(0);
+  if (hasItalic) italValues.push(1);
+
+  const tuples: string[] = [];
+  for (const ital of italValues) {
+    for (const w of weights) {
+      tuples.push(hasItalic ? `${ital},${w}` : `${w}`);
     }
   }
-  params.set('display', config.display);
-  return `${GOOGLE_FONTS_BASE}?${params}`;
+
+  const axis = hasItalic ? 'ital,wght' : 'wght';
+  const familyParam = `${familyName}:${axis}@${tuples.join(';')}`;
+  // The `:`,`@`,`;`,`,` axis characters must remain literal, so the query is
+  // assembled directly rather than via URLSearchParams (which would encode them).
+  return `${GOOGLE_FONTS_BASE}?family=${familyParam}&display=${config.display}`;
 }
 
 /**

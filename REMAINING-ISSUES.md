@@ -1,9 +1,9 @@
 # Remaining Issues — August 2026
 
-Follow-up to [AUDIT-AND-FIXES.md](./AUDIT-AND-FIXES.md). That document covers what was
-already found and fixed (RSC streaming, Cloudflare/Lambda adapters, CSRF default, the
-broken workspace typecheck, etc.), committed in `fix: RSC streaming, Rust addon
-resolution, Cloudflare/Lambda adapters, CSRF default, real workspace typecheck` and
+Follow-up to the fixes committed in `fix: RSC streaming, Rust addon resolution,
+Cloudflare/Lambda adapters, CSRF default, real workspace typecheck` (RSC streaming,
+Cloudflare/Lambda adapters, CSRF default, the broken workspace typecheck, etc.). The
+current three-tier remediation is tracked in [NEXT-50-GOALS.md](./NEXT-50-GOALS.md), and
 `chore: bump dev-dependency overrides for 3 newly-disclosed high-severity advisories`.
 
 This document lists what a follow-up audit pass found in packages that first pass

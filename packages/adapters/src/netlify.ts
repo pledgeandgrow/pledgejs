@@ -50,7 +50,13 @@ export function createNetlifyHandler(options: { config: PledgeConfig }) {
   const handler = createEdgeHandler({ config: options.config });
 
   return async function netlifyHandler(event: NetlifyEvent): Promise<NetlifyResult> {
-    const url = new URL(event.path, 'https://netlify.app');
+    // Derive the real host from the request headers. Hardcoding 'netlify.app'
+    // made every same-origin POST fail CSRF validation (handler validates
+    // against req.url.origin) and pointed middleware redirects at the wrong
+    // host on any real Netlify site.
+    const host = event.headers['host'] ?? event.headers['Host'] ?? event.headers['x-forwarded-host'] ?? 'localhost';
+    const proto = event.headers['x-forwarded-proto'] ?? 'https';
+    const url = new URL(event.path, `${proto}://${host}`);
 
     if (event.queryStringParameters) {
       for (const [key, value] of Object.entries(event.queryStringParameters)) {
@@ -58,24 +64,43 @@ export function createNetlifyHandler(options: { config: PledgeConfig }) {
       }
     }
 
+    // Decode base64-encoded request bodies (file uploads, binary content).
+    const hasBody = event.body != null && event.httpMethod !== 'GET' && event.httpMethod !== 'HEAD';
+    const body = hasBody
+      ? (event.isBase64Encoded ? Buffer.from(event.body as string, 'base64') : (event.body as string))
+      : undefined;
+
     const request = new Request(url.toString(), {
       method: event.httpMethod,
       headers: event.headers,
-      body: event.body ?? undefined,
+      body,
     });
 
     const response = await handler(request);
-    const body = await response.text();
 
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       headers[key] = value;
     });
 
+    // Base64-encode binary responses so Netlify doesn't corrupt them as UTF-8.
+    const contentType = headers['content-type'];
+    const isText = !contentType
+      || /^text\/|application\/(json|xml|javascript)|image\/svg|\+json|\+xml|x-www-form-urlencoded/i.test(contentType);
+    let responseBody: string;
+    let isBase64Encoded = false;
+    if (isText) {
+      responseBody = await response.text();
+    } else {
+      responseBody = Buffer.from(await response.arrayBuffer()).toString('base64');
+      isBase64Encoded = true;
+    }
+
     return {
       statusCode: response.status,
       headers,
-      body,
+      body: responseBody,
+      ...(isBase64Encoded ? { isBase64Encoded: true } : {}),
     };
   };
 }

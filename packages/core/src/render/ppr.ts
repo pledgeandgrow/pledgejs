@@ -27,6 +27,8 @@ export interface PPRContext {
   modules: Map<string, PageModule | LayoutModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule | TemplateModule>;
   /** Prerendered static shell HTML (from build step) */
   staticShell?: string;
+  /** Request-time query parameters, passed to the page as `searchParams`. */
+  searchParams?: Record<string, string>;
   /** Whether this is the build-time prerender or request-time fill */
   isPrerender: boolean;
 }
@@ -145,9 +147,14 @@ export async function prerenderStaticShell(ctx: PPRContext): Promise<string> {
 }
 
 /**
- * Renders dynamic content to fill the holes in a prerendered shell.
- * Returns a ReadableStream that replaces the static placeholders with
- * live dynamic content.
+ * Renders the request-time content for a PPR route and streams it inside the
+ * prerendered shell's document envelope (reusing its <head> and closing
+ * scripts when a `staticShell` is supplied). Returns a ReadableStream.
+ *
+ * Note: this streams a freshly-rendered tree into the shell envelope rather
+ * than resuming a postponed React tree — true hole-level resume needs React's
+ * experimental prerender/resume APIs. The prerendered shell's head/metadata is
+ * reused; the body content is re-rendered at request time.
  */
 export async function renderDynamicHoles(ctx: PPRContext): Promise<ReadableStream<Uint8Array>> {
   const { match, tree, modules } = ctx;
@@ -157,10 +164,13 @@ export async function renderDynamicHoles(ctx: PPRContext): Promise<ReadableStrea
     throw new Error(`Page module not found: ${match.route.filePath}`);
   }
 
-  // Build the full element tree — at request time, dynamic content resolves
+  // Build the full element tree — at request time, dynamic content resolves.
+  // searchParams come from the request context; `match.pathname` never carries
+  // a query string (the matcher strips it), so the previous `split('?')[1]`
+  // was always undefined and dropped every query param.
   let element: ReactNode = createElement(pageModule.default, {
     params: match.params,
-    searchParams: Object.fromEntries(new URLSearchParams(match.pathname.split('?')[1] ?? '').entries()),
+    searchParams: ctx.searchParams ?? {},
   });
 
   if (match.route.errorFilePath) {
@@ -215,7 +225,12 @@ export async function renderDynamicHoles(ctx: PPRContext): Promise<ReadableStrea
     }
   }
 
-  const shellBefore = `<!DOCTYPE html>
+  // Reuse the prerendered static shell's document envelope when one was built,
+  // so the prerendered <head> (metadata, stylesheet links) and closing scripts
+  // are actually served and the dynamic content streams into the root. When no
+  // shell is available, fall back to a minimal envelope. (Previously the shell
+  // was ignored entirely and this hardcoded minimal wrapper was always used.)
+  let shellBefore = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -224,10 +239,22 @@ export async function renderDynamicHoles(ctx: PPRContext): Promise<ReadableStrea
 <body>
   <div id="__pledge_root__">`;
 
-  const shellAfter = `</div>
+  let shellAfter = `</div>
   <script type="module" src="/__pledge__/client.js"></script>
 </body>
 </html>`;
+
+  if (ctx.staticShell) {
+    const marker = ctx.staticShell.indexOf('id="__pledge_root__"');
+    if (marker !== -1) {
+      const openEnd = ctx.staticShell.indexOf('>', marker) + 1;
+      const closeIdx = ctx.staticShell.lastIndexOf('</div>');
+      if (openEnd > 0 && closeIdx > openEnd) {
+        shellBefore = ctx.staticShell.slice(0, openEnd);
+        shellAfter = ctx.staticShell.slice(closeIdx);
+      }
+    }
+  }
 
   return new Promise<ReadableStream<Uint8Array>>((resolve, reject) => {
     let shellReady = false;

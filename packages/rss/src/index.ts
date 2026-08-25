@@ -61,7 +61,11 @@ export function generateRSSFeed(options: FeedOptions): string {
     parts.push(`      <title>${escapeXml(item.title)}</title>`);
     if (item.description) parts.push(`      <description>${escapeXml(item.description)}</description>`);
     parts.push(`      <link>${escapeXml(item.link)}</link>`);
-    parts.push(`      <guid>${escapeXml(item.guid ?? item.link)}</guid>`);
+    // RSS 2.0: <guid> defaults to isPermaLink="true", so a non-URL custom guid
+    // (e.g. a UUID) must be marked isPermaLink="false" or readers treat it as a
+    // clickable permalink. When we fall back to the link itself, it IS a permalink.
+    const guidIsPermaLink = item.guid ? 'false' : 'true';
+    parts.push(`      <guid isPermaLink="${guidIsPermaLink}">${escapeXml(item.guid ?? item.link)}</guid>`);
     if (item.pubDate) parts.push(`      <pubDate>${formatDate(item.pubDate)}</pubDate>`);
     if (item.author) parts.push(`      <author>${escapeXml(item.author)}</author>`);
     if (item.categories) {
@@ -134,12 +138,15 @@ export function generateAtomFeed(options: FeedOptions): string {
     return date.toISOString();
   };
 
+  const feedUpdated = formatDate(options.lastBuildDate ?? new Date());
   const entries = options.items.map((item) => {
     const parts: string[] = ['  <entry>'];
     parts.push(`    <title>${escapeXml(item.title)}</title>`);
     parts.push(`    <link href="${escapeXml(item.link)}"/>`);
     parts.push(`    <id>${escapeXml(item.guid ?? item.link)}</id>`);
-    if (item.pubDate) parts.push(`    <updated>${formatDate(item.pubDate)}</updated>`);
+    // Atom (RFC 4287): <updated> is REQUIRED for every entry. Fall back to the
+    // feed's updated timestamp when an item has no pubDate.
+    parts.push(`    <updated>${item.pubDate ? formatDate(item.pubDate) : feedUpdated}</updated>`);
     if (item.description) parts.push(`    <summary>${escapeXml(item.description)}</summary>`);
     if (item.author) parts.push(`    <author><name>${escapeXml(item.author)}</name></author>`);
     if (item.categories) {
@@ -157,7 +164,8 @@ export function generateAtomFeed(options: FeedOptions): string {
   <subtitle>${escapeXml(options.description)}</subtitle>
   <link href="${escapeXml(options.link)}"/>
   <id>${escapeXml(options.link)}</id>
-  <updated>${formatDate(options.lastBuildDate ?? new Date())}</updated>
+  <updated>${feedUpdated}</updated>
+  <author><name>${escapeXml(options.managingEditor ?? options.title)}</name></author>
 ${entries}
 </feed>`;
 }

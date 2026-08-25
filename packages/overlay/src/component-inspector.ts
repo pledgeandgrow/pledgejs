@@ -71,7 +71,7 @@ export function ComponentInspector({ selected, onPropEdit, onNavigateSource, the
           color: '#fff',
         },
       }, selected.type),
-      selected.renderTime && createElement('span', {
+      selected.renderTime != null && createElement('span', {
         style: { marginLeft: '8px', color: '#6b7280', fontSize: '11px' },
       }, `${selected.renderTime.toFixed(1)}ms`),
     ),

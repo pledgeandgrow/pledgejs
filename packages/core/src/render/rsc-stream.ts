@@ -180,29 +180,26 @@ export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableSt
 
   return new Promise<ReadableStream<Uint8Array>>((resolve, reject) => {
     let shellReady = false;
-    let resolved = false;
-
-    // For backpressure-aware streaming, we collect chunks and stream them
-    // progressively rather than buffering everything until onAllReady.
-    const chunks: Buffer[] = [];
+    let closed = false;
+    const encoder = new TextEncoder();
     let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
-    let pendingData: Buffer[] = [];
-    let streamClosed = false;
+
+    // Create the stream up front so its controller exists before React starts
+    // producing output. React's chunks are then enqueued as they arrive (shell
+    // first, then each Suspense boundary as it resolves) — genuinely
+    // progressive, rather than buffering the whole render and emitting it in a
+    // single start() call at onAllReady (which was not streaming at all).
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(encoder.encode(shellBefore));
+      },
+    });
 
     const writable = new Writable({
       write(chunk: Buffer, _encoding, callback) {
-        if (streamController && !streamClosed) {
-          // Stream is active — enqueue directly with backpressure check
-          const desired = streamController.desiredSize;
-          if (desired !== null && desired <= 0) {
-            // Backpressure: buffer and wait
-            pendingData.push(chunk);
-          } else {
-            streamController.enqueue(new Uint8Array(chunk));
-          }
-        } else {
-          // Stream not yet created — buffer
-          chunks.push(chunk);
+        if (streamController && !closed) {
+          streamController.enqueue(new Uint8Array(chunk));
         }
         callback();
       },
@@ -211,38 +208,18 @@ export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableSt
     const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
       onShellReady() {
         shellReady = true;
+        // The shell is ready — hand the stream to the caller now (minimal TTFB)
+        // and start piping React's output into it.
+        resolve(stream);
         pipe(writable);
       },
       onAllReady() {
-        if (resolved) return;
-        resolved = true;
-
-        const encoder = new TextEncoder();
-
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-
-            // Send shell first
-            controller.enqueue(encoder.encode(shellBefore));
-
-            // Send buffered content
-            const content = Buffer.concat(chunks).toString('utf-8');
-            controller.enqueue(encoder.encode(content));
-
-            // Send any pending chunks from backpressure
-            for (const chunk of pendingData) {
-              controller.enqueue(new Uint8Array(chunk));
-            }
-            pendingData = [];
-
-            // Send closing shell
-            controller.enqueue(encoder.encode(shellAfter));
-            controller.close();
-            streamClosed = true;
-          },
-        });
-        resolve(stream);
+        if (closed) return;
+        closed = true;
+        if (streamController) {
+          streamController.enqueue(encoder.encode(shellAfter));
+          streamController.close();
+        }
       },
       onShellError(error) {
         reject(error);

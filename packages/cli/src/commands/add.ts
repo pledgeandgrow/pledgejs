@@ -96,10 +96,10 @@ export async function addCommand(crateSpec: string, _opts?: AddOptions): Promise
   await addCrate(projectRoot, name, versionSpec);
 
   // Run cargo update to refresh Cargo.lock
-  await runCargoUpdate(projectRoot, name);
+  const cargoResult = await runCargoUpdate(projectRoot, name);
 
-  console.log(`\x1b[32m✓\x1b[0m Added \x1b[1m${name}\x1b[0m ${versionSpec}`);
-  console.log(`  Cargo.lock updated. Commit it for reproducible builds.`);
+  console.log(`\x1b[32m✓\x1b[0m Added \x1b[1m${name}\x1b[0m ${versionSpec} to Cargo.toml`);
+  reportCargoLock(cargoResult);
 }
 
 export async function removeCommand(crateName: string): Promise<void> {
@@ -115,9 +115,10 @@ export async function removeCommand(crateName: string): Promise<void> {
   await removeCrate(projectRoot, crateName);
 
   // Update Cargo.lock
-  await runCargoUpdate(projectRoot);
+  const cargoResult = await runCargoUpdate(projectRoot);
 
-  console.log(`\x1b[32m✓\x1b[0m Removed \x1b[1m${crateName}\x1b[0m`);
+  console.log(`\x1b[32m✓\x1b[0m Removed \x1b[1m${crateName}\x1b[0m from Cargo.toml`);
+  reportCargoLock(cargoResult);
 }
 
 export async function listCommand(): Promise<void> {
@@ -153,13 +154,15 @@ export async function updateCommand(crateName?: string): Promise<void> {
   if (crateName) {
     // Update specific crate
     console.log(`Updating \x1b[1m${crateName}\x1b[0m...`);
-    await runCargoUpdate(projectRoot, crateName);
-    console.log(`\x1b[32m✓\x1b[0m Updated ${crateName}`);
+    const cargoResult = await runCargoUpdate(projectRoot, crateName);
+    if (cargoResult.ok) console.log(`\x1b[32m✓\x1b[0m Updated ${crateName}`);
+    else reportCargoLock(cargoResult);
   } else {
     // Update all crates
     console.log('Updating all Rust crates...');
-    await runCargoUpdate(projectRoot);
-    console.log(`\x1b[32m✓\x1b[0m All crates updated`);
+    const cargoResult = await runCargoUpdate(projectRoot);
+    if (cargoResult.ok) console.log(`\x1b[32m✓\x1b[0m All crates updated`);
+    else reportCargoLock(cargoResult);
   }
 
   // Show what changed
@@ -170,10 +173,18 @@ export async function updateCommand(crateName?: string): Promise<void> {
   }
 }
 
+/** Result of attempting `cargo update`. */
+interface CargoUpdateResult {
+  ok: boolean;
+  cargoMissing: boolean;
+}
+
 /**
- * Runs `cargo update` to refresh Cargo.lock.
+ * Runs `cargo update` to refresh Cargo.lock. Reports whether cargo actually
+ * ran, so callers don't claim "Cargo.lock updated" when cargo is missing or
+ * the update failed.
  */
-async function runCargoUpdate(projectRoot: string, crateName?: string): Promise<void> {
+async function runCargoUpdate(projectRoot: string, crateName?: string): Promise<CargoUpdateResult> {
   return new Promise((resolve) => {
     const args = ['update'];
     if (crateName) {
@@ -185,13 +196,19 @@ async function runCargoUpdate(projectRoot: string, crateName?: string): Promise<
       stdio: 'pipe',
     });
 
-    child.on('error', () => {
-      // cargo not available — skip
-      resolve();
-    });
-
-    child.on('close', () => {
-      resolve();
-    });
+    child.on('error', () => resolve({ ok: false, cargoMissing: true }));
+    child.on('close', (code) => resolve({ ok: code === 0, cargoMissing: false }));
   });
+}
+
+/** Print a message about the Cargo.lock state after a crate change. */
+function reportCargoLock(result: CargoUpdateResult): void {
+  if (result.ok) {
+    console.log(`  Cargo.lock updated. Commit it for reproducible builds.`);
+  } else if (result.cargoMissing) {
+    console.log(`\x1b[33m  ⚠ cargo not found — Cargo.toml was updated but Cargo.lock was NOT regenerated.\x1b[0m`);
+    console.log(`    Install the Rust toolchain (https://rustup.rs) and run \`cargo update\`.`);
+  } else {
+    console.log(`\x1b[33m  ⚠ \`cargo update\` failed — Cargo.lock may be out of date. Run \`cargo update\` manually.\x1b[0m`);
+  }
 }

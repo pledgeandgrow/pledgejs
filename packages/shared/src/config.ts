@@ -209,6 +209,10 @@ export interface PluginRouteContext {
   pathname: string;
   method: string;
   params: Record<string, string>;
+  /** Request headers (lower-cased keys), so hooks can identify the client. */
+  headers: Record<string, string>;
+  /** Best-available client IP, when the runtime can determine one. */
+  ip?: string;
   /** Set to short-circuit the request */
   response?: { status: number; body: string };
 }

@@ -51,16 +51,15 @@ export function createLazyLayout(
  * should be rendered — not (marketing)/layout.tsx.
  */
 export function getActiveLayouts(match: RouteMatch, tree: RouteTree): ResolvedRoute[] {
-  const allLayouts = getLayoutChain(match, tree);
-  // getLayoutChain already returns only the layouts on the path to the matched route,
-  // so we just return it. This function exists as a semantic wrapper and for future
-  // optimizations (e.g., skipping layouts that have no content).
-  return allLayouts.filter((layout) => {
-    // Skip layouts that are in route groups not on the current path
-    // Route groups like (marketing) should only render if the matched route
-    // is within that group's subtree
-    return layout.filePath !== match.route.filePath;
-  });
+  // Returns the layout chain for the matched route (root → matched leaf).
+  //
+  // NOTE: this module is not currently wired into any render path; the live
+  // render paths call getLayoutChain directly. The previous `filePath !==
+  // match.route.filePath` filter was a no-op (a layout and a page never share a
+  // filePath) and did NOT exclude sibling route-group layouts as its comment
+  // claimed — correct route-group-sibling exclusion requires tracking each
+  // route's owning group, which the resolved-route model does not yet carry.
+  return getLayoutChain(match, tree);
 }
 
 /**

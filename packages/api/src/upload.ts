@@ -60,7 +60,12 @@ export async function handleUpload(
 
     let filename = file.name;
     if (uniqueNames) {
-      const ext = file.name.split('.').pop() ?? '';
+      // The extension is derived from the untrusted upload filename, so it can
+      // contain slashes or `..` (e.g. "a.b/../../evil.png" → "b/../../evil.png").
+      // Restrict it to a short alphanumeric token so the generated filename can
+      // never escape uploadDir.
+      const rawExt = file.name.includes('.') ? file.name.split('.').pop() ?? '' : '';
+      const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '').slice(0, 16);
       const hash = createHash('sha256').update(`${file.name}-${Date.now()}`).digest('hex').slice(0, 16);
       filename = ext ? `${hash}.${ext}` : hash;
     } else {

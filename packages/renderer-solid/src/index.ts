@@ -119,11 +119,20 @@ function wrapHtml(
   metadata: HeadMetadata,
   headHtml?: string,
   viewport?: import('pledgestack-shared').Viewport,
+  routeData?: { params: Record<string, string>; searchParams: Record<string, string>; pattern: string },
 ): string {
   const headTags = headHtml ?? renderHeadTags(metadata, route);
   const viewportTags = renderViewportTags(viewport);
   const manifest: PledgeManifest = { pledges: [] };
   const manifestScript = `<script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>`;
+
+  // Emit the server's resolved route data (params, searchParams, matched
+  // pattern) so client hydration uses the SAME params the server rendered with,
+  // instead of hardcoded empty objects — which caused a hydration mismatch on
+  // every dynamic route. `<` is escaped to prevent breaking out of the script.
+  const routeJson = JSON.stringify(routeData ?? { params: route ? {} : {}, searchParams: {}, pattern: route.pattern })
+    .replace(/</g, '\\u003c');
+  const routeScript = `<script>window.__PLEDGE_ROUTE__=${routeJson}</script>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -136,6 +145,7 @@ function wrapHtml(
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
+  ${routeScript}
   <script type="module" src="/__pledge__/client.js"></script>
 </body>
 </html>`;
@@ -185,7 +195,11 @@ export class SolidRendererAdapter implements RendererAdapter {
 
     // Use async render for Suspense support
     const html = await renderer.renderToStringAsync(renderFn);
-    return wrapHtml(html, match.route, metadata, undefined, viewport);
+    return wrapHtml(html, match.route, metadata, undefined, viewport, {
+      params: match.params,
+      searchParams: ctx.searchParams ?? {},
+      pattern: match.route.pattern,
+    });
   }
 
   async renderToStream(ctx: RenderContext): Promise<string> {
@@ -246,11 +260,14 @@ const root = document.getElementById('__pledge_root__');
 if (root) {
   // Solid hydration — the SSR content is already in the DOM
   try {
+    const routeData = window.__PLEDGE_ROUTE__ || { params: {}, searchParams: {}, pattern: window.location.pathname };
     const { routes } = await import('/__pledge_router');
-    const pageRoute = routes[window.location.pathname];
+    // Look up by the matched pattern (from the server), falling back to the
+    // pathname; then hydrate with the SAME params the server used so the
+    // client render matches the SSR output.
+    const pageRoute = routes[routeData.pattern] || routes[window.location.pathname];
     if (pageRoute && pageRoute.component) {
-      // Solid's hydrate takes the component factory and the DOM root
-      hydrate(() => pageRoute.component({ params: {}, searchParams: {} }), root);
+      hydrate(() => pageRoute.component({ params: routeData.params, searchParams: routeData.searchParams }), root);
     }
   } catch (e) {
     console.error('[pledgestack] Solid hydration error:', e);

@@ -63,7 +63,14 @@ export async function testCommand(opts: TestOptions): Promise<void> {
 
     try {
       const { spawn } = await import('node:child_process');
-      const vitestChild = spawn('npx', ['vitest', 'run', '--reporter=verbose'], {
+      // `--passWithNoTests` makes Vitest exit 0 when there are no test files, so
+      // a non-zero exit now unambiguously means a REAL test failure. Previously
+      // every exit code 1 was treated as "no tests found", silently hiding
+      // actual failures. In watch mode, run the interactive watcher instead.
+      const vitestArgs = opts.watch
+        ? ['vitest', '--reporter=verbose', '--passWithNoTests']
+        : ['vitest', 'run', '--reporter=verbose', '--passWithNoTests'];
+      const vitestChild = spawn('npx', vitestArgs, {
         cwd: rootDir,
         stdio: 'inherit',
         shell: process.platform === 'win32',
@@ -71,12 +78,11 @@ export async function testCommand(opts: TestOptions): Promise<void> {
 
       const vitestExit = await new Promise<number>((resolve) => {
         vitestChild.on('close', (code) => resolve(code ?? 0));
-        vitestChild.on('error', () => resolve(1));
+        vitestChild.on('error', () => resolve(-1));
       });
 
-      // Vitest exits with code 1 when no test files are found — treat as non-failure
-      if (vitestExit === 1) {
-        console.log('  No Vitest test files found. (exit code 1 — treated as non-failure)');
+      if (vitestExit === -1) {
+        console.log('  Vitest not available. Install with: npm install -D vitest');
       } else {
         vitestFailed = vitestExit !== 0;
       }

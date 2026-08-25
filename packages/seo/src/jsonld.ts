@@ -54,7 +54,14 @@ export interface Person {
 
 export function generateJsonLd(schema: JsonLdSchema): string {
   const data = { '@context': 'https://schema.org', ...schema };
-  return `<script type="application/ld+json">\n${JSON.stringify(data, null, 2)}\n</script>`;
+  // Escape characters that could close the <script> tag or introduce HTML
+  // parsing ambiguity (</script>, <!--, and the closing tag prefix), so
+  // user-controlled schema fields can't break out of the JSON-LD block.
+  const json = JSON.stringify(data, null, 2)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
+  return `<script type="application/ld+json">\n${json}\n</script>`;
 }
 
 export function organizationSchema(org: Organization): JsonLdSchema {

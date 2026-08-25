@@ -1,5 +1,21 @@
 import type { PledgeRequest, PledgeResponse } from 'pledgestack-shared';
 
+/**
+ * Format a single CSV cell, defending against CSV/formula injection.
+ *
+ * The exported data is arbitrary user-collected content. A cell that begins
+ * with `=`, `+`, `-`, `@`, or a tab/CR would be interpreted as a formula when
+ * the export is opened in Excel/Sheets by an admin. We neutralize it by
+ * prefixing a single quote, then apply standard quote-escaping/quoting.
+ */
+function csvCell(value: unknown): string {
+  let s = String(value);
+  if (/^[=+\-@\t\r]/.test(s)) {
+    s = `'${s}`;
+  }
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 export interface UserDataRecord {
   /** Data source identifier (e.g. 'database', 'cache', 'logs') */
   source: string;
@@ -181,6 +197,6 @@ export class GDPRManager {
       new Date(r.collectedAt).toISOString(),
       JSON.stringify(r.data),
     ]);
-    return [headers, ...rows].map((row) => row.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    return [headers, ...rows].map((row) => row.map((c) => csvCell(c)).join(',')).join('\n');
   }
 }

@@ -60,14 +60,39 @@ const ALGORITHM_MAP: Record<JWTAlgorithm, string> = {
   RS256: 'RSA-SHA256',
   RS384: 'RSA-SHA384',
   RS512: 'RSA-SHA512',
-  ES256: 'ECDSA-SHA256',
-  ES384: 'ECDSA-SHA384',
-  ES512: 'ECDSA-SHA512',
+  ES256: 'sha256',
+  ES384: 'sha384',
+  ES512: 'sha512',
 };
+
+function isEcAlgorithm(alg: JWTAlgorithm): boolean {
+  return alg.startsWith('ES');
+}
+
+/**
+ * Build the key argument for sign()/verify(). For ECDSA (ES*) algorithms JWS
+ * requires the raw r||s (IEEE P1363) signature encoding, whereas Node's default
+ * is ASN.1/DER — so we must pass `dsaEncoding: 'ieee-p1363'`. Tokens produced
+ * with DER encoding are rejected by every conformant JWT library, and DER-decode
+ * of an incoming P1363 signature fails verification.
+ */
+function keyArg(key: string, alg: JWTAlgorithm): string | { key: string; dsaEncoding: 'ieee-p1363' } {
+  return isEcAlgorithm(alg) ? { key, dsaEncoding: 'ieee-p1363' } : key;
+}
 
 function base64url(input: Buffer | string): string {
   const buf = typeof input === 'string' ? Buffer.from(input) : input;
   return buf.toString('base64url');
+}
+
+/** Map a JWK EC curve name to its JWS algorithm identifier. */
+function ecCurveToAlg(crv: string | undefined): string {
+  switch (crv) {
+    case 'P-256': return 'ES256';
+    case 'P-384': return 'ES384';
+    case 'P-521': return 'ES512';
+    default: return 'ES256';
+  }
 }
 
 function base64urlDecode(input: string): Buffer {
@@ -105,7 +130,7 @@ export function signJWT(
   sign.update(signingInput);
   sign.end();
 
-  const signature = sign.sign(privateKey);
+  const signature = sign.sign(keyArg(privateKey, algorithm));
   const encodedSignature = base64url(signature);
 
   return `${signingInput}.${encodedSignature}`;
@@ -146,7 +171,12 @@ export function verifyJWT(
   verify.end();
 
   const signature = base64urlDecode(encodedSignature);
-  const isValid = verify.verify(publicKey, signature);
+  let isValid: boolean;
+  try {
+    isValid = verify.verify(keyArg(publicKey, header.alg), signature);
+  } catch {
+    return null;
+  }
   if (!isValid) return null;
 
   const now = Math.floor(Date.now() / 1000);
@@ -243,8 +273,15 @@ export class JWKSManager {
     const keys: any[] = [];
     for (const [kid, keyPair] of this.keys) {
       const pubKey = createPublicKey(keyPair.publicKey);
-      const der = pubKey.export({ type: 'spki', format: 'der' });
-      keys.push({ kid, kty: 'RSA', use: 'sig', alg: 'RS256', n: base64url(der.subarray(0, 32)), e: base64url(der.subarray(32, 36)) });
+      // Export the real JWK parameters. The previous implementation fabricated
+      // `n`/`e` by slicing fixed byte ranges out of the SPKI DER, which produced
+      // a nonsense key that no relying party could verify against, and always
+      // labelled EC keys as RSA/RS256.
+      const jwk = pubKey.export({ format: 'jwk' }) as {
+        kty?: string; n?: string; e?: string; x?: string; y?: string; crv?: string;
+      };
+      const alg = jwk.kty === 'EC' ? ecCurveToAlg(jwk.crv) : 'RS256';
+      keys.push({ kid, use: 'sig', alg, ...jwk });
     }
     return { keys };
   }

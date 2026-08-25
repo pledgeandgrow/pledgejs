@@ -257,14 +257,15 @@ function classifyComponents(element: ReactNode): ComponentClassification[] {
 }
 
 /**
- * Renders the element tree using a hybrid approach.
- * Static subtrees are rendered by Rust, dynamic parts by React.
+ * Renders the element tree with React's streaming SSR.
+ *
+ * NOTE: despite this module's name, the render is currently 100% React — the
+ * Rust static-subtree split (renderStaticParts / fillDynamicPlaceholders /
+ * replacePlaceholders below) is not invoked from here or anywhere else, and
+ * this module is not wired into the request pipeline. Treat "hybrid" as
+ * aspirational until that path is implemented and connected.
  */
 async function renderHybrid(element: ReactNode, _ctx: HybridSSRContext): Promise<string> {
-  // For now, use React's renderToPipeableStream for the full tree
-  // Rust rendering is used for individual static subtrees within the tree
-  // via the Rust DOM renderer's canRenderInRust check
-
   return new Promise((resolve, reject) => {
     let html = '';
     let shellReady = false;

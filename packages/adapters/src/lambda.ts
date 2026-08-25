@@ -68,6 +68,34 @@ function isV2Event(event: APIGatewayEvent): event is APIGatewayEventV2 {
   return 'rawPath' in event;
 }
 
+/** Content types that are text and can be returned as a plain string. */
+function isTextContentType(contentType: string | undefined): boolean {
+  if (!contentType) return true;
+  const ct = contentType.toLowerCase();
+  return (
+    ct.startsWith('text/') ||
+    ct.includes('application/json') ||
+    ct.includes('application/xml') ||
+    ct.includes('application/javascript') ||
+    ct.includes('image/svg') ||
+    ct.includes('+json') ||
+    ct.includes('+xml') ||
+    ct.includes('x-www-form-urlencoded')
+  );
+}
+
+/** Encode a Response body for API Gateway, base64-encoding binary content. */
+async function encodeLambdaBody(
+  response: Response,
+  contentType: string | undefined,
+): Promise<{ body: string; isBase64Encoded: boolean }> {
+  if (isTextContentType(contentType)) {
+    return { body: await response.text(), isBase64Encoded: false };
+  }
+  const buf = Buffer.from(await response.arrayBuffer());
+  return { body: buf.toString('base64'), isBase64Encoded: true };
+}
+
 export function createLambdaHandler(options: { config: PledgeConfig }) {
   const handler = createEdgeHandler({ config: options.config });
 
@@ -92,7 +120,17 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
       stage = event.requestContext?.stage ?? 'production';
     }
 
-    const path = stage === '$default' ? rawPath : `/${stage}${rawPath}`;
+    // Use the app-relative path for routing. The stage name is an API Gateway
+    // concern, not an app route — prepending it produced `/prod/about` (which
+    // never matches the app's `/about` route). For HTTP API v2 `rawPath`
+    // already contains the stage on a named stage, so strip it when present
+    // rather than prepend it again (the old code double-prefixed to
+    // `/prod/prod/about` and 404'd).
+    let path = rawPath;
+    if (stage && stage !== '$default') {
+      if (path === `/${stage}`) path = '/';
+      else if (path.startsWith(`/${stage}/`)) path = path.slice(stage.length + 1);
+    }
     const url = new URL(path, `https://${domain}`);
     if (queryString) url.search = queryString;
 
@@ -108,17 +146,21 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
     });
 
     const response = await handler(request);
-    const responseBody = await response.text();
 
     const headers: Record<string, string> = {};
     response.headers.forEach((value, key) => {
       headers[key] = value;
     });
 
+    // Binary responses (e.g. OG images) must be base64-encoded and flagged, or
+    // API Gateway mangles them by treating the bytes as UTF-8 text.
+    const { body: responseBody, isBase64Encoded } = await encodeLambdaBody(response, headers['content-type']);
+
     return {
       statusCode: response.status,
       headers,
       body: responseBody,
+      ...(isBase64Encoded ? { isBase64Encoded: true } : {}),
     };
   };
 }

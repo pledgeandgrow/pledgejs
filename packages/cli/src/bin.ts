@@ -8,6 +8,9 @@ const { values, positionals } = parseArgs({
     port: { type: 'string', short: 'p' },
     hostname: { type: 'string', short: 'H' },
     template: { type: 'string', short: 't' },
+    framework: { type: 'string', short: 'f' },
+    watch: { type: 'boolean', short: 'w' },
+    version: { type: 'boolean' },
     verbose: { type: 'boolean', short: 'v' },
     check: { type: 'boolean', short: 'c' },
     'rust-only': { type: 'boolean' },
@@ -35,6 +38,10 @@ const { values, positionals } = parseArgs({
 const command = positionals[0];
 
 async function main() {
+  if (values.version) {
+    await printVersion();
+    process.exit(0);
+  }
   if (values.help || !command) {
     printHelp();
     process.exit(0);
@@ -69,6 +76,15 @@ async function main() {
         console.error('Usage: pledge create <project-name>');
         process.exit(1);
       }
+      // `pledge create` scaffolds a React project. Non-React frameworks are
+      // scaffolded by the separate multi-framework tool; point users there
+      // rather than silently ignoring --framework (or crashing on the flag).
+      const framework = (values.framework as string | undefined)?.toLowerCase();
+      if (framework && framework !== 'react') {
+        console.error(`\`pledge create\` scaffolds React projects. For a ${framework} starter, run:`);
+        console.error(`  npm create pledge-app@latest ${projectName} -- --framework ${framework}`);
+        process.exit(1);
+      }
       await createCommand(projectName, {
         template: values.template as 'default' | 'blank' | 'blog' | 'dashboard' | undefined,
       });
@@ -100,6 +116,7 @@ async function main() {
         dir: positionals[1],
         rustOnly: values['rust-only'] as boolean | undefined,
         vitestOnly: values['vitest-only'] as boolean | undefined,
+        watch: values.watch as boolean | undefined,
       });
       break;
     }
@@ -300,8 +317,9 @@ async function main() {
         await generateDockerIgnore();
         console.log('  ✓ .dockerignore generated');
       } else if (optimized) {
-        await generateOptimizedDockerfile({ port: opts.port });
-        console.log('  ✓ Dockerfile generated (Rust-addon-optimized multi-stage build)');
+        const outFile = (values.output as string | undefined) ?? 'Dockerfile';
+        await generateOptimizedDockerfile({ port: opts.port }, outFile);
+        console.log(`  ✓ ${outFile} generated (Rust-addon-optimized multi-stage build)`);
       } else {
         await generateDockerfile({ port: opts.port, output: values.output as string | undefined });
         console.log('  ✓ Dockerfile generated');
@@ -312,6 +330,18 @@ async function main() {
       console.error(`Unknown command: ${command}`);
       printHelp();
       process.exit(1);
+  }
+}
+
+async function printVersion() {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const pkgPath = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'package.json');
+    const pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as { version?: string };
+    console.log(pkg.version ?? 'unknown');
+  } catch {
+    console.log('unknown');
   }
 }
 
@@ -357,8 +387,11 @@ function printHelp() {
     -p, --port <number>      Server port (default: 3000)
     -H, --hostname <string>  Server hostname (default: localhost)
     -t, --template <name>    Project template (default, blank, blog)
+    -f, --framework <name>   Project framework for create (react)
+    -w, --watch              Re-run tests on change (test only)
     -v, --verbose            Show detailed output
     -c, --check              Check formatting without modifying (fmt only)
+    --version                Print the pledge CLI version
     -h, --help               Show this help message
 
   Examples:

@@ -17,8 +17,44 @@ import { PluginRunner } from 'pledgestack-shared';
 import { tryServeSeoRoute } from './seo-routes';
 import { tryServeOgImage } from './og-image';
 import { generateETag, isETagMatch } from './etag';
-import { validateRedirect } from 'pledgestack-auth';
+import { validateRedirect, validateOrigin, isSameSiteRequest } from 'pledgestack-auth';
 import { corsMiddleware, DEFAULT_CORS_CONFIG, type CorsConfig } from './cors';
+
+/**
+ * Decide whether a state-changing request passes CSRF checks.
+ *
+ * CSRF is only exploitable against requests that carry ambient credentials
+ * (cookies); a request with no Cookie header cannot be a cross-site forgery of
+ * an authenticated action, so it is allowed through (this keeps tokenless
+ * server-to-server / API-key clients working). For cookie-bearing requests we
+ * require a positive same-origin signal:
+ *   - an explicit same-origin/same-site `Sec-Fetch-Site` header, or
+ *   - an `Origin` header that matches the site origin.
+ * If neither is present the request cannot be confirmed same-origin and is
+ * rejected (fail-closed) — previously a simply-omitted `Origin` header skipped
+ * the check entirely.
+ */
+function passesCsrf(headers: Record<string, string>, siteOrigin: string): boolean {
+  const hasCookies = !!(headers['cookie'] ?? headers['Cookie']);
+  if (!hasCookies) return true;
+  if (isSameSiteRequest(headers)) return true;
+  const origin = headers['origin'] ?? headers['Origin'];
+  if (origin) return validateOrigin(origin, [siteOrigin]);
+  return false;
+}
+
+/** Extract the best-available client identifier for rate limiting / lockout. */
+function clientIdentifier(headers: Record<string, string>): string {
+  // Only trust infrastructure-set forwarding headers. The previous fallback to
+  // `x-request-id` was attacker-controllable (and even randomly generated per
+  // request when absent), giving every request a fresh bucket / lockout counter
+  // and defeating both rate limiting and brute-force protection.
+  const xff = headers['x-forwarded-for']?.split(',')[0]?.trim();
+  if (xff) return xff;
+  const realIp = headers['x-real-ip']?.trim();
+  if (realIp) return realIp;
+  return 'unknown';
+}
 
 type AnyModule = PageModule | LayoutModule | RouteHandlerModule | MiddlewareModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule;
 
@@ -183,6 +219,19 @@ export function createRequestHandler(options: RequestHandlerOptions) {
     try {
       // Handle server action endpoint
       if (req.url.pathname === ACTION_ENDPOINT && req.method === 'POST') {
+        // Server actions are state-changing and cookie-authenticated, so they
+        // must pass the same CSRF check as any other mutating request. This
+        // branch returns early (before the general CSRF block below), so the
+        // check has to be applied here explicitly — otherwise any third-party
+        // page could POST a known action id with the victim's cookies.
+        if (config.securityHeaders !== false && !passesCsrf(req.headers, req.url.origin)) {
+          return {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ error: 'CSRF check failed' }),
+          };
+        }
+
         const actionId = req.headers['x-pledge-action-id'];
         if (!actionId) {
           return { status: 400, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Missing action ID' }) };
@@ -225,7 +274,15 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           ? createMatcher(middleware.matcher)(req.url.pathname)
           : true;
         if (shouldRun) {
-          const mwRequest = new Request(req.url, { method: req.method, headers: req.headers as HeadersInit });
+          // Include the body so middleware that inspects a POST/PUT/PATCH body
+          // sees it (constructing a Request with a body is invalid for GET/HEAD).
+          const canHaveBody = req.method !== 'GET' && req.method !== 'HEAD';
+          const mwRequest = new Request(req.url, {
+            method: req.method,
+            headers: req.headers as HeadersInit,
+            // Buffer is a valid body at runtime though the DOM lib types omit it.
+            ...(canHaveBody && req.body != null ? { body: req.body as unknown as BodyInit } : {}),
+          });
           const mwResult: MiddlewareResult = await middleware.default(mwRequest);
 
           if (mwResult.redirect) {
@@ -285,7 +342,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         const rateLimitConfig = typeof config.rateLimit === 'object' ? config.rateLimit : {};
         const maxTokens = rateLimitConfig.maxTokens ?? 100;
         const refillRate = rateLimitConfig.refillRate ?? 10;
-        const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() ?? pledgeReq.headers['x-request-id'] ?? 'unknown';
+        const ip = clientIdentifier(req.headers);
         const rateResult = checkRateLimit(ip, maxTokens, refillRate);
         if (!rateResult.allowed) {
           return {
@@ -302,39 +359,34 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       // Auto-apply brute force protection on auth endpoints (if enabled in config)
       if (config.bruteForceProtection && (req.url.pathname.includes('/login') || req.url.pathname.includes('/auth'))) {
         const { checkBruteForce } = await import('./safety-net');
-        const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() ?? pledgeReq.headers['x-request-id'] ?? 'unknown';
+        const ip = clientIdentifier(req.headers);
         const bfResult = checkBruteForce(ip);
         if (bfResult.lockedOut) {
           return {
             status: 429,
             headers: {
               'Content-Type': 'application/json',
-              'Retry-After': String(Math.ceil((bfResult.lockoutEndsAt ?? Date.now()) - Date.now()) / 1000),
+              // Retry-After in whole seconds. The parentheses were previously
+              // misplaced so the division fell outside Math.ceil, producing a
+              // fractional value like "899.123" that clients ignore.
+              'Retry-After': String(Math.ceil(((bfResult.lockoutEndsAt ?? Date.now()) - Date.now()) / 1000)),
             },
             body: JSON.stringify({ error: 'Too many login attempts. Try again later.' }),
           };
         }
       }
 
-      // CSRF protection for state-changing requests (not server actions, which have their own CSRF)
+      // CSRF protection for state-changing requests (server actions are handled
+      // by the same check in their own branch above).
       const isStateChanging = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method);
       const isServerAction = req.url.pathname === ACTION_ENDPOINT;
       if (isStateChanging && !isServerAction && config.securityHeaders !== false) {
-        const { validateOrigin, isSameSiteRequest } = await import('pledgestack-auth');
-        const origin = req.headers['origin'] ?? req.headers['Origin'];
-        // isSameSiteRequest only returns true on an explicit same-origin/
-        // same-site/none Sec-Fetch-Site value — a missing header (older
-        // browsers, non-fetch clients, or a request crafted to omit it)
-        // falls through to Origin validation below rather than being
-        // treated as trusted.
-        if (origin && !isSameSiteRequest(req.headers)) {
-          if (!validateOrigin(origin, [req.url.origin])) {
-            return {
-              status: 403,
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ error: 'CSRF check failed: origin mismatch' }),
-            };
-          }
+        if (!passesCsrf(req.headers, req.url.origin)) {
+          return {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ error: 'CSRF check failed: origin mismatch' }),
+          };
         }
       }
 
@@ -381,6 +433,26 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       pledgeReq.params = match.params;
       setRequestContext(pledgeReq);
 
+      // Run routeMatch plugin hooks (e.g. the rate-limiter plugin). A plugin
+      // may short-circuit the request by setting `response`. These hooks were
+      // previously never invoked by the pipeline, so plugins like
+      // rateLimitMiddleware had no effect at all.
+      const routeMatchResult = await context.pluginRunner.runRouteMatch({
+        config,
+        pathname: matchPathname,
+        method: req.method,
+        params: match.params,
+        headers: req.headers,
+        ip: clientIdentifier(req.headers),
+      });
+      if (routeMatchResult?.response) {
+        return {
+          status: routeMatchResult.response.status,
+          headers: { 'Content-Type': 'application/json' },
+          body: routeMatchResult.response.body,
+        };
+      }
+
       // API route
       if (match.route.mode === 'api') {
         const mod = context.modules.get(match.route.filePath) as RouteHandlerModule | undefined;
@@ -392,7 +464,15 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         const corsConfig: CorsConfig = config.cors ?? DEFAULT_CORS_CONFIG;
         const corsResult = corsMiddleware(req.method, req.headers, corsConfig);
         if (corsResult && req.method === 'OPTIONS') {
-          // Preflight request — return CORS headers directly
+          // Preflight request. A disallowed origin is rejected with 403 rather
+          // than answered with a 204 success.
+          if (corsResult.rejected) {
+            return {
+              status: 403,
+              headers: { 'Content-Type': 'text/plain' },
+              body: 'CORS origin not allowed',
+            };
+          }
           return {
             status: 204,
             headers: corsResult.headers,
@@ -499,6 +579,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
               tree: context.tree!,
               modules: context.modules as Map<string, PageModule | LayoutModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule | TemplateModule>,
               staticShell,
+              searchParams: pledgeReq.query,
               isPrerender: false,
             });
             return {

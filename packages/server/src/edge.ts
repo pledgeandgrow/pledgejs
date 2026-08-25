@@ -29,7 +29,15 @@ export function createEdgeHandler(options: EdgeServerOptions) {
       headers[key] = value;
     });
 
-    const result = await handler({ url, method, headers });
+    // Read the request body for methods that can carry one. Without this, every
+    // edge adapter delivered POST/PUT/PATCH with an empty body — server actions
+    // saw no args and API routes received a bodyless request.
+    let body: string | undefined;
+    if (method !== 'GET' && method !== 'HEAD') {
+      body = await request.text();
+    }
+
+    const result = await handler({ url, method, headers, body });
 
     // Apply security headers to edge responses
     const isHttps = url.protocol === 'https:' || headers['x-forwarded-proto'] === 'https';

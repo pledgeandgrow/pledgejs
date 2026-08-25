@@ -40,9 +40,16 @@ export function encodeFlight(payload: FlightPayload): string {
   const lines: string[] = [];
 
   for (const chunk of payload.chunks) {
-    const data = chunk.type === 'M' || chunk.type === 'L'
-      ? JSON.stringify({ moduleId: chunk.data })
-      : JSON.stringify(chunk.data);
+    let data: string;
+    if (chunk.type === 'M' || chunk.type === 'L') {
+      const moduleId = chunk.data as string;
+      // Carry the module→chunk-path mapping on the wire so decode can rebuild
+      // moduleMap. Previously only the moduleId was written, so the module map
+      // (and thus reference dedup) was lost on every round-trip.
+      data = JSON.stringify({ moduleId, chunkPath: payload.moduleMap[moduleId] });
+    } else {
+      data = JSON.stringify(chunk.data);
+    }
     lines.push(`${chunk.type}:${chunk.id}:${data}`);
   }
 
@@ -55,6 +62,7 @@ export function encodeFlight(payload: FlightPayload): string {
  */
 export function decodeFlight(encoded: string): FlightPayload {
   const chunks: FlightChunk[] = [];
+  const moduleMap: Record<string, string> = {};
   const lines = encoded.split('\n');
 
   for (const line of lines) {
@@ -70,8 +78,10 @@ export function decodeFlight(encoded: string): FlightPayload {
     let data: unknown;
     try {
       if (type === 'M' || type === 'L') {
-        const parsed = JSON.parse(dataStr) as { moduleId: string };
+        const parsed = JSON.parse(dataStr) as { moduleId: string; chunkPath?: string };
         data = parsed.moduleId;
+        // Reconstruct the module map from the M/L chunks.
+        if (parsed.chunkPath !== undefined) moduleMap[parsed.moduleId] = parsed.chunkPath;
       } else {
         data = JSON.parse(dataStr);
       }
@@ -82,7 +92,7 @@ export function decodeFlight(encoded: string): FlightPayload {
     chunks.push({ type, id, data });
   }
 
-  return { chunks, moduleMap: {} };
+  return { chunks, moduleMap };
 }
 
 /**

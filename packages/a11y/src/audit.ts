@@ -58,12 +58,21 @@ const DEFAULT_RULES: A11yRule[] = [
     severity: 'warning',
     check: (el) => {
       if (!/^H[1-6]$/.test(el.tagName)) return false;
-      const prev = el.previousElementSibling;
-      while (prev && !/^H[1-6]$/.test(prev.tagName)) {
-        const p = prev.previousElementSibling;
-        if (!p) break;
-      }
-      return false;
+      const level = Number(el.tagName[1]);
+
+      // Walk backward through the whole document (not just siblings) to find
+      // the nearest preceding heading, since the previous heading is often a
+      // sibling's descendant rather than a sibling itself.
+      const doc = el.ownerDocument;
+      const headings = Array.from(doc.querySelectorAll('h1, h2, h3, h4, h5, h6'));
+      const index = headings.indexOf(el);
+      if (index <= 0) return false; // first heading on the page — nothing to violate
+
+      const prevLevel = Number(headings[index - 1].tagName[1]);
+      // A heading level may only increase by one at a time (e.g. h2 -> h3 is
+      // fine, h2 -> h4 skips a level and is a violation). Decreasing levels
+      // (going back up, e.g. h3 -> h2) is always fine.
+      return level > prevLevel + 1;
     },
   },
   {

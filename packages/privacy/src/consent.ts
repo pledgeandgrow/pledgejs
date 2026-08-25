@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { PledgeRequest } from 'pledgestack-shared';
 
 export type ConsentCategory = 'necessary' | 'analytics' | 'marketing' | 'functional';
@@ -24,6 +25,12 @@ export interface ConsentConfig {
   maxAge?: number;
   /** Categories that cannot be revoked (default: ['necessary']) */
   immutableCategories?: ConsentCategory[];
+  /**
+   * Secret used to HMAC-sign the consent cookie so a client cannot forge or
+   * tamper with the stored consent. Strongly recommended; when omitted the
+   * cookie is stored unsigned (and a forged cookie would be accepted).
+   */
+  secret?: string;
 }
 
 const DEFAULT_COOKIE_NAME = '__pledge_consent';
@@ -36,32 +43,57 @@ const ALL_CATEGORIES: ConsentCategory[] = ['necessary', 'analytics', 'marketing'
 /**
  * Consent manager — GDPR/CCPA-compliant consent tracking with versioned policies.
  *
- * Stores consent in a signed cookie. Supports granular categories,
- * version bumping (re-request on policy change), and immutable categories.
+ * When a `secret` is configured the consent cookie is HMAC-signed and verified
+ * on read, so a client cannot forge or tamper with the recorded consent.
+ * Supports granular categories, version bumping (re-request on policy change),
+ * and immutable categories.
  */
 export class ConsentManager {
   private cookieName: string;
   private version: string;
   private maxAge: number;
   private immutable: Set<ConsentCategory>;
+  private secret?: string;
 
   constructor(config: ConsentConfig = {}) {
     this.cookieName = config.cookieName ?? DEFAULT_COOKIE_NAME;
     this.version = config.version ?? DEFAULT_VERSION;
     this.maxAge = config.maxAge ?? DEFAULT_MAX_AGE;
     this.immutable = new Set(config.immutableCategories ?? DEFAULT_IMMUTABLE);
+    this.secret = config.secret;
+  }
+
+  private sign(value: string): string {
+    return createHmac('sha256', this.secret!).update(value).digest('base64url');
   }
 
   /**
    * Read consent state from request cookies.
-   * Returns null if no consent has been given or version is outdated.
+   * Returns null if no consent has been given, the version is outdated, or the
+   * signature is missing/invalid (when a secret is configured).
    */
   getConsent(req: PledgeRequest): ConsentState | null {
     const raw = req.cookies[this.cookieName];
     if (!raw) return null;
 
+    let payload = raw;
+    if (this.secret) {
+      // Cookie format when signed: `<encoded>.<signature>`.
+      const dot = raw.lastIndexOf('.');
+      if (dot === -1) return null;
+      const encoded = raw.slice(0, dot);
+      const signature = raw.slice(dot + 1);
+      const expected = this.sign(encoded);
+      const sigBuf = Buffer.from(signature);
+      const expBuf = Buffer.from(expected);
+      if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+        return null;
+      }
+      payload = encoded;
+    }
+
     try {
-      const state = JSON.parse(decodeURIComponent(raw)) as ConsentState;
+      const state = JSON.parse(decodeURIComponent(payload)) as ConsentState;
       if (state.version !== this.version) return null;
       return state;
     } catch {
@@ -105,8 +137,9 @@ export class ConsentManager {
    */
   consentCookie(state: ConsentState): string {
     const encoded = encodeURIComponent(JSON.stringify(state));
+    const value = this.secret ? `${encoded}.${this.sign(encoded)}` : encoded;
     return [
-      `${this.cookieName}=${encoded}`,
+      `${this.cookieName}=${value}`,
       `Max-Age=${this.maxAge}`,
       'Path=/',
       'SameSite=Lax',

@@ -16,7 +16,7 @@
  * built-in flight client.
  */
 
-import { createElement, Suspense, type ReactNode } from 'react';
+import { createElement, Fragment, Suspense, type ReactNode } from 'react';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -241,10 +241,12 @@ function deserializeManual(
         }
 
         if (type === 4) {
-          // Fragment / array
+          // Fragment / array — use React.Fragment, not a <div>. Wrapping in a
+          // <div> injected an unexpected element that breaks layouts relying on
+          // a direct parent-child relationship (flex/grid children, table rows).
           const items = rest[0] as unknown[];
           if (Array.isArray(items)) {
-            return createElement('div', null, ...items.map(deserializeNode));
+            return createElement(Fragment, null, ...items.map(deserializeNode));
           }
           return null;
         }

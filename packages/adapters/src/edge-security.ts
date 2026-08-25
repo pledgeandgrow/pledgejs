@@ -113,6 +113,28 @@ export interface RateLimitResult {
  */
 const rateLimitBuckets = new Map<string, { count: number; resetAt: number }>();
 
+/** Cap on the number of tracked buckets, to bound memory on a unique-key flood. */
+const MAX_RATE_LIMIT_BUCKETS = 50000;
+
+/**
+ * Evict expired buckets; if still over the cap, drop the oldest entries.
+ * Without this, a distributed scan with unique IPs grows the map until the
+ * isolate runs out of memory.
+ */
+function evictRateLimitBuckets(now: number): void {
+  for (const [key, bucket] of rateLimitBuckets) {
+    if (bucket.resetAt < now) rateLimitBuckets.delete(key);
+  }
+  if (rateLimitBuckets.size <= MAX_RATE_LIMIT_BUCKETS) return;
+  const overflow = rateLimitBuckets.size - MAX_RATE_LIMIT_BUCKETS;
+  let removed = 0;
+  for (const key of rateLimitBuckets.keys()) {
+    if (removed >= overflow) break;
+    rateLimitBuckets.delete(key); // Map preserves insertion order → oldest first.
+    removed++;
+  }
+}
+
 export function checkEdgeRateLimit(
   identifier: string,
   config: EdgeRateLimitConfig,
@@ -122,6 +144,7 @@ export function checkEdgeRateLimit(
   const bucket = rateLimitBuckets.get(identifier);
 
   if (!bucket || bucket.resetAt < now) {
+    if (rateLimitBuckets.size >= MAX_RATE_LIMIT_BUCKETS) evictRateLimitBuckets(now);
     rateLimitBuckets.set(identifier, { count: 1, resetAt: now + windowMs });
     return { limited: false, limit: config.limit, remaining: config.limit - 1, resetAt: now + windowMs };
   }
@@ -175,6 +198,40 @@ export interface EdgeJwtConfig {
   audience?: string;
   /** Cache TTL for JWKS in seconds (default: 3600) */
   cacheTtl?: number;
+  /**
+   * Algorithms permitted for the token's `alg` header. Defaults to
+   * ['RS256', 'ES256']. Restricting this prevents algorithm-confusion attacks.
+   */
+  algorithms?: EdgeJwtAlgorithm[];
+}
+
+export type EdgeJwtAlgorithm = 'RS256' | 'RS384' | 'RS512' | 'ES256' | 'ES384' | 'ES512';
+
+/** Decode a base64url string to raw bytes (Web-Crypto/edge-safe). */
+function base64UrlToBytes(input: string): Uint8Array {
+  const b64 = input.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+}
+
+/** Decode a base64url string to a UTF-8 string. */
+function base64UrlToString(input: string): string {
+  return new TextDecoder().decode(base64UrlToBytes(input));
+}
+
+/** Map a JWS alg to its Web Crypto import + verify parameters. */
+function webCryptoAlgParams(alg: EdgeJwtAlgorithm):
+  | { importAlgo: RsaHashedImportParams | EcKeyImportParams; verifyAlgo: AlgorithmIdentifier | EcdsaParams }
+  | null {
+  switch (alg) {
+    case 'RS256': return { importAlgo: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, verifyAlgo: 'RSASSA-PKCS1-v1_5' };
+    case 'RS384': return { importAlgo: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-384' }, verifyAlgo: 'RSASSA-PKCS1-v1_5' };
+    case 'RS512': return { importAlgo: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-512' }, verifyAlgo: 'RSASSA-PKCS1-v1_5' };
+    case 'ES256': return { importAlgo: { name: 'ECDSA', namedCurve: 'P-256' }, verifyAlgo: { name: 'ECDSA', hash: 'SHA-256' } };
+    case 'ES384': return { importAlgo: { name: 'ECDSA', namedCurve: 'P-384' }, verifyAlgo: { name: 'ECDSA', hash: 'SHA-384' } };
+    case 'ES512': return { importAlgo: { name: 'ECDSA', namedCurve: 'P-521' }, verifyAlgo: { name: 'ECDSA', hash: 'SHA-512' } };
+    default: return null;
+  }
 }
 
 interface CachedJwks {
@@ -182,15 +239,19 @@ interface CachedJwks {
   expiresAt: number;
 }
 
-let jwksCache: CachedJwks | null = null;
+// Cache keyed by JWKS URI. A single global cache would serve one issuer's keys
+// for another issuer's tokens whenever a `kid` collides — so each distinct
+// jwksUri (i.e. each issuer) gets its own cache entry.
+const jwksCacheByUri = new Map<string, CachedJwks>();
 
 /**
  * Fetches and caches JWKS keys with automatic rotation.
  */
 export async function getJwks(config: EdgeJwtConfig): Promise<Record<string, JsonWebKey>> {
   const ttl = (config.cacheTtl ?? 3600) * 1000;
-  if (jwksCache && jwksCache.expiresAt > Date.now()) {
-    return jwksCache.keys;
+  const cached = jwksCacheByUri.get(config.jwksUri);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.keys;
   }
 
   const response = await fetch(config.jwksUri);
@@ -200,7 +261,7 @@ export async function getJwks(config: EdgeJwtConfig): Promise<Record<string, Jso
     keys[key.kid!] = key;
   }
 
-  jwksCache = { keys, expiresAt: Date.now() + ttl };
+  jwksCacheByUri.set(config.jwksUri, { keys, expiresAt: Date.now() + ttl });
   return keys;
 }
 
@@ -216,8 +277,20 @@ export async function verifyEdgeJwt(
     const parts = token.split('.');
     if (parts.length !== 3) return { valid: false, error: 'Invalid token format' };
 
-    const header = JSON.parse(atob(parts[0]));
-    const payload = JSON.parse(atob(parts[1]));
+    // Header and payload are base64URL — decode with URL-alphabet conversion,
+    // not bare atob() (which throws on any '-' or '_' in the segment).
+    const header = JSON.parse(base64UrlToString(parts[0]));
+    const payload = JSON.parse(base64UrlToString(parts[1]));
+
+    // Validate the algorithm against the allow-list before doing anything else
+    // (alg-confusion prevention). The verify algorithm is derived from the
+    // token's declared alg only after it passes this gate.
+    const allowed = config.algorithms ?? ['RS256', 'ES256'];
+    if (!allowed.includes(header.alg)) {
+      return { valid: false, error: `Algorithm ${header.alg} not allowed` };
+    }
+    const algParams = webCryptoAlgParams(header.alg);
+    if (!algParams) return { valid: false, error: 'Unsupported algorithm' };
 
     if (config.issuer && payload.iss !== config.issuer) {
       return { valid: false, error: 'Invalid issuer' };
@@ -236,14 +309,19 @@ export async function verifyEdgeJwt(
     const cryptoKey = await crypto.subtle.importKey(
       'jwk',
       key,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      algParams.importAlgo,
       false,
       ['verify'],
     );
 
     const data = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
-    const signature = Uint8Array.from(atob(parts[2].replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-    const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, signature, data);
+    const signature = base64UrlToBytes(parts[2]);
+    const valid = await crypto.subtle.verify(
+      algParams.verifyAlgo,
+      cryptoKey,
+      signature as unknown as BufferSource,
+      data as unknown as BufferSource,
+    );
 
     return valid
       ? { valid: true, payload }
@@ -353,8 +431,12 @@ export function checkGeoRestriction(req: Request, config: GeoRestrictionConfig):
 } {
   const country = getCountryCode(req);
   if (!country) {
-    // No country header — allow by default (non-edge environments)
-    return { allowed: true, country: null };
+    // No country header. Fail in the safe direction for each mode:
+    // - 'allow' (allowlist): we cannot confirm the request is from a permitted
+    //   country, so deny (fail closed). Otherwise stripping/spoofing away the
+    //   country header would bypass the allowlist entirely.
+    // - 'block' (blocklist): we cannot confirm it's a blocked country, so allow.
+    return { allowed: config.mode !== 'allow', country: null };
   }
 
   const inList = config.countries.includes(country);

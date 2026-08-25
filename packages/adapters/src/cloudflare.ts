@@ -1,7 +1,7 @@
 import { createEdgeHandler } from 'pledgestack-server';
 import type { PledgeConfig } from 'pledgestack-shared';
 import { createEdgeConfig, type EdgeBundleConfig } from './index';
-import { checkEdgeRateLimit, detectBot, checkGeoRestriction, edgeCspHeaders } from './edge-security';
+import { checkEdgeRateLimit, detectBot, checkGeoRestriction } from './edge-security';
 import { createKvAdapter, type KvAdapter } from 'pledgestack-core';
 
 export { createEdgeConfig, type EdgeBundleConfig };
@@ -55,11 +55,9 @@ export function createCloudflareAdapter(config: PledgeConfig) {
         }
       }
 
-      // Try static assets first (Cloudflare Pages)
-      if (env?.ASSETS) {
-        const assetResponse = await env.ASSETS.fetch(request);
-        if (assetResponse.status !== 404) return assetResponse;
-      }
+      // Edge security runs BEFORE static asset serving. Previously assets were
+      // served first, so any path handled by Cloudflare Pages assets bypassed
+      // rate limiting, bot detection, and geo restriction entirely.
 
       // Edge security: rate limiting
       if (config.rateLimit) {
@@ -106,14 +104,28 @@ export function createCloudflareAdapter(config: PledgeConfig) {
         }
       }
 
+      // Static assets (Cloudflare Pages) — after the security checks above.
+      if (env?.ASSETS) {
+        const assetResponse = await env.ASSETS.fetch(request);
+        if (assetResponse.status !== 404) return assetResponse;
+      }
+
       // Fall through to PledgeStack edge handler
       const response = await handler(request);
 
-      // Apply CSP headers
-      const csp = edgeCspHeaders({});
       const finalHeaders = new Headers(response.headers);
-      for (const [key, value] of Object.entries(csp.headers)) {
-        if (!finalHeaders.has(key)) finalHeaders.set(key, value);
+      // Apply CSP only when the app configured one. `config.csp` is a directive
+      // map (e.g. { 'script-src': "'self'" }); build the header from it directly.
+      // The previous code called edgeCspHeaders({}) — ignoring config.csp and
+      // emitting a per-request nonce that appears in no <script> tag, which
+      // caused the browser to block every inline script in the SSR HTML.
+      if (config.csp && Object.keys(config.csp).length > 0) {
+        const cspValue = Object.entries(config.csp)
+          .map(([directive, value]) => `${directive} ${value}`.trim())
+          .join('; ');
+        if (!finalHeaders.has('Content-Security-Policy')) {
+          finalHeaders.set('Content-Security-Policy', cspValue);
+        }
       }
 
       return new Response(response.body, {

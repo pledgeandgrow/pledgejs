@@ -6,7 +6,7 @@ import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
-import { createStreamingMetadata } from './streaming-metadata';
+import { renderHeadTags } from './head-tags';
 
 export interface StreamSSRContext {
   config: PledgeConfig;
@@ -74,14 +74,17 @@ export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
     throw new Error(`Page module not found: ${match.route.filePath}`);
   }
 
-  // #222: Streaming metadata — don't block TTFB on async generateMetadata()
-  const metadataPromise = resolveMetadataPromise(pageModule, match.params);
-  const streamingMeta = createStreamingMetadata(metadataPromise, match.route);
+  // This path buffers the full response into a string before returning, so
+  // there is no partial flush to protect: resolve the metadata up front and
+  // emit the real <title>/<meta> tags directly. The previous placeholder +
+  // client-side injector approach produced a guaranteed flash of placeholder
+  // metadata (and only makes sense for a truly progressive stream, which this
+  // buffered path is not — see renderRSCStream for the streaming path).
+  const metadata = await Promise.resolve(resolveMetadataPromise(pageModule, match.params));
   const headHtml = await resolveHead(match.route, modules);
   const viewport = await resolveViewport(pageModule);
 
-  // Use placeholder head tags for the initial shell
-  const headTags = headHtml ?? streamingMeta.placeholder;
+  const headTags = headHtml ?? renderHeadTags(metadata, match.route);
 
   // Pass params and searchParams as props (Next.js 15 style)
   const searchParamsRecord = ctx.searchParams ?? {};
@@ -161,14 +164,7 @@ export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
         });
         pipe(stream);
         stream.on('finish', () => {
-          // #222: Wait for metadata injector before finalizing HTML
-          streamingMeta.injector.then((injectorScript) => {
-            const wrapped = wrapStreamHtml(html, match.route, headTags, viewport, injectorScript);
-            resolve(wrapped);
-          }).catch(() => {
-            const wrapped = wrapStreamHtml(html, match.route, headTags, viewport);
-            resolve(wrapped);
-          });
+          resolve(wrapStreamHtml(html, match.route, headTags, viewport));
         });
       },
       onShellError(error) {
@@ -186,11 +182,7 @@ export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
       if (!shellReady) {
         try {
           const fallbackHtml = renderToString(createElement(() => element as ReactNode));
-          streamingMeta.injector.then((injectorScript) => {
-            resolve(wrapStreamHtml(fallbackHtml, match.route, headTags, viewport, injectorScript));
-          }).catch(() => {
-            resolve(wrapStreamHtml(fallbackHtml, match.route, headTags, viewport));
-          });
+          resolve(wrapStreamHtml(fallbackHtml, match.route, headTags, viewport));
         } catch (err) {
           reject(err);
         }

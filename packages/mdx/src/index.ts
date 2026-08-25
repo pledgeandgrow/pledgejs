@@ -20,15 +20,18 @@ import type { PledgePlugin } from 'pledgestack-shared';
  */
 
 export interface MDXPluginOptions {
-  /** File extensions to process (default: ['.mdx', '.md']) */
+  /** File extensions to process (default: ['.mdx', '.md']). Honored by isMDXFile. */
   extensions?: string[];
   /** Provider component for MDX context (optional) */
   provider?: string;
-  /** Whether to enable frontmatter extraction (default: true) */
+  /**
+   * Reserved for PledgePack's MDX transform: frontmatter extraction toggle and
+   * remark/rehype plugin lists. NOTE: the JS plugin does not apply these — MDX
+   * compilation happens inside PledgePack, and there is no forwarding channel
+   * for them yet, so setting them currently has no effect.
+   */
   frontmatter?: boolean;
-  /** Remark plugins (names of installed packages) */
   remarkPlugins?: string[];
-  /** Rehype plugins (names of installed packages) */
   rehypePlugins?: string[];
 }
 
@@ -116,8 +119,9 @@ export function extractFrontmatter(source: string): { frontmatter: Record<string
 }
 
 /**
- * Check if a file path is an MDX file.
+ * Check if a file path is an MDX file. Pass the configured `extensions` (from
+ * MDXPluginOptions) to honor a custom set; defaults to ['.mdx', '.md'].
  */
-export function isMDXFile(filePath: string): boolean {
-  return DEFAULT_EXTENSIONS.some((ext) => filePath.endsWith(ext));
+export function isMDXFile(filePath: string, extensions: string[] = DEFAULT_EXTENSIONS): boolean {
+  return extensions.some((ext) => filePath.endsWith(ext));
 }

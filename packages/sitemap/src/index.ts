@@ -1,11 +1,14 @@
-import type { PledgePlugin } from 'pledgestack-shared';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { PledgeConfig, PledgePlugin } from 'pledgestack-shared';
 import { escapeXml } from 'pledgestack-shared';
+import { scanAppDir, resolveRoutes } from 'pledgestack-core';
 
 /**
  * Sitemap generation plugin for PledgeStack.
  *
- * Automatically generates sitemap.xml from the route tree at build time.
- * Uses pledgepack's generateBundle hook to emit the file.
+ * Automatically generates sitemap.xml and robots.txt from the route tree
+ * at build time, via the plugin's `buildEnd` hook.
  *
  * Usage in pledge.config.ts:
  * ```typescript
@@ -43,13 +46,42 @@ export interface SitemapEntry {
   alternates?: Array<{ hreflang: string; href: string }>;
 }
 
-export function sitemapPlugin(_options: SitemapPluginOptions): PledgePlugin {
+export function sitemapPlugin(options: SitemapPluginOptions): PledgePlugin {
   return {
     name: 'pledgestack-sitemap',
 
-    buildEnd() {
-      // Sitemap is generated during build via pledgepack's generateBundle hook.
-      // This hook signals that the sitemap should be included in output.
+    async buildEnd(config: PledgeConfig) {
+      // Scan the route tree the same way the build command does, then emit
+      // sitemap.xml and robots.txt straight into the build output directory.
+      // This is what actually makes them exist on disk for static exports
+      // (output: 'export'), where there's no server to generate them at
+      // request time the way `tryServeSeoRoute` does for standalone builds.
+      const appDir = join(config.rootDir, config.appDir);
+      const files = await scanAppDir(appDir);
+      const resolved = resolveRoutes(files, config);
+
+      const pagePaths = resolved
+        .filter((route) => !route.isLayout && !route.isNotFound && route.mode !== 'api')
+        .map((route) => route.pattern);
+
+      const siteUrl = options.siteUrl.replace(/\/$/, '');
+      const entries = routesToSitemapEntries(pagePaths, siteUrl, {
+        changefreq: options.changefreq,
+        priority: options.priority,
+        exclude: options.exclude,
+        routes: options.routes,
+      });
+      const finalEntries =
+        options.lastmod === false ? entries.map(({ lastmod: _lastmod, ...rest }) => rest) : entries;
+
+      const outDir = join(config.rootDir, config.outDir);
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(outDir, 'sitemap.xml'), generateSitemapXML(finalEntries), 'utf-8');
+      await writeFile(
+        join(outDir, 'robots.txt'),
+        generateRobotsTxt({ sitemapUrl: `${siteUrl}/sitemap.xml` }),
+        'utf-8',
+      );
     },
 
     transformHtml(html) {

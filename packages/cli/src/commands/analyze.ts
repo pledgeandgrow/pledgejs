@@ -24,7 +24,18 @@ export async function analyzeCommand(
     loadBundleReport,
   } = await import('pledgestack-core');
 
-  const nativeDir = join(config.rootDir, 'packages', 'core', 'native');
+  // Resolve the native addon directory. In this monorepo it's under
+  // packages/core/native; in a real scaffolded project the compiled addons ship
+  // inside the installed pledgestack-core package. Try each and use the first
+  // that exists (the previous hardcoded monorepo path always reported 0 addons
+  // in user projects).
+  const { existsSync } = await import('node:fs');
+  const nativeCandidates = [
+    join(config.rootDir, 'packages', 'core', 'native'),
+    join(config.rootDir, 'node_modules', 'pledgestack-core', 'native'),
+    join(config.rootDir, 'node_modules', 'pledgestack', 'native'),
+  ];
+  const nativeDir = nativeCandidates.find((p) => existsSync(p)) ?? nativeCandidates[0];
   const reportPath = join(config.rootDir, '.pledge', 'bundle-report.json');
 
   // Load previous report for size comparison

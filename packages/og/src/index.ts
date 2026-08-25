@@ -51,9 +51,14 @@ export interface OGFont {
 /**
  * Response class for OG image generation.
  *
- * This returns a Response with Content-Type: image/png.
- * The actual rendering is done by PledgePack's OG image pipeline (Satori + resvg).
- * In dev mode, the rendering is delegated to the /__pledge/og endpoint.
+ * IMPORTANT: until PledgePack's OG pipeline (Satori + resvg) intercepts and
+ * renders it, the response BODY is the serialized JSX element tree — NOT PNG
+ * bytes — even though Content-Type is `image/png`. Interception is keyed on the
+ * `X-Pledge-OG: true` header (and `X-Pledge-OG-Rendered: false` below marks the
+ * un-rendered state); the renderer replaces the body with the PNG and clears
+ * that marker. If you consume an ImageResponse without that pipeline (e.g. a
+ * unit test or a non-PledgePack runtime), read the serialized body via
+ * `X-Pledge-OG-Rendered` rather than assuming PNG bytes.
  */
 export class ImageResponse extends Response {
   constructor(
@@ -80,6 +85,9 @@ export class ImageResponse extends Response {
       'Content-Type': 'image/png',
       'Cache-Control': `public, max-age=${cacheTtl}, s-maxage=${cacheTtl}, stale-while-revalidate=${cacheTtl * 7}`,
       'X-Pledge-OG': 'true',
+      // Marks the body as un-rendered serialized JSX; the render pipeline sets
+      // this to 'true' (and swaps in the PNG bytes) once it processes the response.
+      'X-Pledge-OG-Rendered': 'false',
       'X-Pledge-OG-Width': String(width),
       'X-Pledge-OG-Height': String(height),
       ...options.headers,

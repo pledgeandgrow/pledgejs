@@ -137,12 +137,21 @@ function getOutputPath(pattern: string, outputDir: string): string {
 
 /**
  * Converts a route pattern with params to an output file path.
- * e.g. '/blog/[slug]' with { slug: 'hello' } -> 'blog/hello.html'
+ * e.g. '/blog/:slug' with { slug: 'hello' } -> 'blog/hello.html'
+ *
+ * Route patterns use `:slug` (dynamic) and `*slug` (catch-all) — the form
+ * produced by pathToPattern — NOT the `[slug]` bracket source form. The
+ * previous implementation substituted `[slug]`, which never matched, so every
+ * param variant was written to a literal `:slug`/`*slug` filename (illegal on
+ * Windows and colliding across all values of the route).
  */
 function getOutputPathWithParams(pattern: string, params: Record<string, string>, outputDir: string): string {
   let path = pattern;
   for (const [key, value] of Object.entries(params)) {
-    path = path.replace(`[${key}]`, value);
+    path = path
+      .replace(`:${key}`, value)
+      .replace(`*${key}`, value)
+      .replace(`[${key}]`, value); // tolerate bracket form too
   }
   return getOutputPath(path, outputDir);
 }

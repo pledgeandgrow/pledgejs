@@ -8,7 +8,7 @@
 
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 type DetectedFramework = 'nextjs' | 'vite' | 'cra' | 'express' | 'unknown';
 
@@ -333,7 +333,10 @@ async function updateGitignore(rootDir: string): Promise<void> {
 }
 
 function relativePath(root: string, abs: string): string {
-  return abs.replace(root + '/', '').replace(/\\/g, '/');
+  // Use path.relative so this works on Windows too. The previous
+  // `abs.replace(root + '/', '')` never matched on Windows, where both paths
+  // use backslashes, so it printed full absolute paths in migration logs.
+  return relative(root, abs).replace(/\\/g, '/');
 }
 
 /**

@@ -81,10 +81,11 @@ CMD ["node", ".pledge/server.js"]
  * smaller and faster for apps that rely on the native SSR/compression/etc.
  * addons. Use `pledge docker --optimized`.
  */
-export async function generateOptimizedDockerfile(config: DockerBuildConfig = {}): Promise<string> {
+export async function generateOptimizedDockerfile(config: DockerBuildConfig = {}, output = 'Dockerfile'): Promise<string> {
   const { generateDockerfile: generateOptimized } = await import('pledgestack-core');
   const dockerfile = generateOptimized(config);
-  await writeFile('Dockerfile', dockerfile);
+  // Honor the requested output path instead of always overwriting 'Dockerfile'.
+  await writeFile(output, dockerfile);
   return dockerfile;
 }
 

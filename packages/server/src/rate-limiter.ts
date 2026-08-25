@@ -59,7 +59,10 @@ export function rateLimitMiddleware(options: RateLimitOptions = {}): PledgePlugi
         return;
       }
 
-      const key = keyFn({ headers: {}, ip: undefined });
+      // Derive the key from the real request context. Previously this was
+      // called with a hardcoded empty request, so every client resolved to
+      // 'unknown' and shared a single global bucket.
+      const key = keyFn({ headers: ctx.headers ?? {}, ip: ctx.ip });
       const result = checkRateLimit(key, maxTokens, refillRate);
 
       if (!result.allowed) {

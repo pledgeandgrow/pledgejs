@@ -28,6 +28,9 @@ export async function loadConfig(rootDir?: string): Promise<PledgeConfig> {
   for (const configPath of baseConfigPaths) {
     if (!existsSync(configPath)) continue;
 
+    // The file exists, so a load failure is a real error (syntax error, throwing
+    // module, missing import) — surface it instead of silently continuing to an
+    // empty default config, which masked config bugs until much later.
     try {
       if (configPath.endsWith('.ts')) {
         const { createJiti } = await import('jiti');
@@ -39,8 +42,8 @@ export async function loadConfig(rootDir?: string): Promise<PledgeConfig> {
         baseConfig = mod.default ?? mod;
       }
       break;
-    } catch {
-      continue;
+    } catch (err) {
+      throw new Error(`Failed to load config ${configPath}:\n  ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -103,8 +106,8 @@ async function loadEnvConfig(
         const mod = await import(envPath);
         return mod.default ?? mod;
       }
-    } catch {
-      continue;
+    } catch (err) {
+      throw new Error(`Failed to load environment config ${envPath}:\n  ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

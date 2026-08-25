@@ -15,7 +15,7 @@
 
 import type { PledgeConfig, PledgeResponse, ResolvedRoute } from 'pledgestack-shared';
 import type { PageModule } from 'pledgestack-core';
-import { renderOgImage } from 'pledgestack-core';
+import { renderOgImage, compilePattern } from 'pledgestack-core';
 import { renderSvgToImage, isNativeOgRendererAvailable } from 'pledgestack-core';
 import type { ModuleLoader } from './module-loader';
 
@@ -39,8 +39,21 @@ export async function tryServeOgImage(
   const suffix = isOgImage ? '/opengraph-image' : '/twitter-image';
   const parentPath = pathname.slice(0, -suffix.length) || '/';
 
-  // Find the route that matches the parent path
-  const route = routes.find((r) => r.pattern === parentPath);
+  // Match the parent path against route patterns, honoring dynamic segments.
+  // Exact string equality (the previous approach) never matched a dynamic
+  // route like `/blog/:slug`, so OG images for dynamic pages always 404'd.
+  let route: ResolvedRoute | undefined;
+  let params: Record<string, string> = {};
+  for (const r of routes) {
+    if (isOgImage ? !r.opengraphImageFilePath : !r.twitterImageFilePath) continue;
+    const { regex, paramNames } = compilePattern(r.pattern);
+    const m = regex.exec(parentPath);
+    if (m) {
+      route = r;
+      params = Object.fromEntries(paramNames.map((name, i) => [name, decodeURIComponent(m[i + 1] ?? '')]));
+      break;
+    }
+  }
   if (!route) return null;
 
   const filePath = isOgImage ? route.opengraphImageFilePath : route.twitterImageFilePath;
@@ -50,7 +63,7 @@ export async function tryServeOgImage(
     const mod = await moduleLoader.load(filePath) as PageModule | undefined;
     if (!mod || typeof mod.default !== 'function') return null;
 
-    const svg = renderOgImage(mod, {});
+    const svg = renderOgImage(mod, params);
 
     // Use native SVG-to-PNG renderer when available (resvg + tiny-skia)
     // Falls back to raw SVG when native addon is not compiled

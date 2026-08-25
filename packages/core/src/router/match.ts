@@ -144,6 +144,11 @@ export function matchRoute(pathname: string, routes: ResolvedRoute[]): RouteMatc
   let bestScore = -1;
 
   for (const route of routes) {
+    // Layouts are not independently routable — they wrap pages. Without this
+    // filter a request to a directory that has only a layout.tsx could match
+    // the layout as if it were a page and render broken output instead of 404.
+    if (route.isLayout) continue;
+
     const { regex, paramNames } = compilePattern(route.pattern);
     const match = regex.exec(pathname);
     if (!match) continue;
@@ -153,8 +158,7 @@ export function matchRoute(pathname: string, routes: ResolvedRoute[]): RouteMatc
       params[name] = decodeURIComponent(match[i + 1] ?? '');
     });
 
-    // Score: more static segments = higher specificity
-    const score = route.pattern.split('/').filter((s) => !s.startsWith(':') && !s.startsWith('*')).length;
+    const score = specificityScore(route.pattern);
 
     if (score > bestScore) {
       bestScore = score;
@@ -163,4 +167,22 @@ export function matchRoute(pathname: string, routes: ResolvedRoute[]): RouteMatc
   }
 
   return bestMatch;
+}
+
+/**
+ * Specificity score for a route pattern. Each segment contributes by kind so a
+ * more specific segment always outranks a less specific one at the same
+ * position: static (3) > dynamic `:slug` (2) > catch-all `*rest` (1). This makes
+ * `/blog/:slug` beat `/blog/*rest` deterministically, rather than tying on a
+ * static-segment-only count and depending on file-scan order.
+ */
+function specificityScore(pattern: string): number {
+  const segments = pattern.split('/').filter(Boolean);
+  let score = 0;
+  for (const seg of segments) {
+    if (seg.startsWith('*')) score += 1;
+    else if (seg.startsWith(':')) score += 2;
+    else score += 3;
+  }
+  return score;
 }

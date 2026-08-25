@@ -90,6 +90,13 @@ export function sanitizeMongoQuery(
       }
 
       if (SENSITIVE_OPERATORS.has(key)) {
+        // Sensitive query operators ($ne, $gt, $regex, $in, …) are the vector
+        // for NoSQL operator-injection auth bypasses such as
+        // `{ password: { $ne: null } }`. They are stripped by default and only
+        // kept when the caller explicitly opts in through `allowedOperators`.
+        if (!allowed) {
+          continue;
+        }
         result[key] = sanitizeValue(value, options, depth + 1);
         continue;
       }

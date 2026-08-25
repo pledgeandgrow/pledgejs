@@ -42,6 +42,8 @@ export interface RustPPRContext {
   isPrerender: boolean;
   /** Pre-rendered static shell (for request-time filling) */
   staticShell?: string;
+  /** Request-time query parameters, passed to the page as `searchParams`. */
+  searchParams?: Record<string, string>;
   /** Preload hints for critical resources */
   preloadHints?: PreloadHint[];
 }
@@ -321,10 +323,10 @@ export async function fillRustPPRHoles(
     throw new Error(`Page module not found: ${match.route.filePath}`);
   }
 
-  // Build full element tree with real params for dynamic rendering
-  const searchParamsRecord = Object.fromEntries(
-    new URLSearchParams(match.pathname.split('?')[1] ?? '').entries(),
-  );
+  // Build full element tree with real params for dynamic rendering.
+  // searchParams come from the request context — `match.pathname` never carries
+  // a query string, so the old `split('?')[1]` was always empty.
+  const searchParamsRecord = ctx.searchParams ?? {};
 
   let element: ReactNode = createElement(pageModule.default, {
     params: match.params,

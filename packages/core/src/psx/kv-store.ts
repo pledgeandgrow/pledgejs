@@ -10,7 +10,7 @@
  */
 
 import { createRequire } from 'node:module';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, rename } from 'node:fs/promises';
 
 const require = createRequire(import.meta.url);
 
@@ -60,14 +60,28 @@ async function jsLoad(): Promise<void> {
   }
 }
 
-/** Fallback: flush to disk */
+// Serialize concurrent flushes so a later write can't finish before an earlier
+// one and leave stale bytes, and so temp-file writes don't race.
+let flushChain: Promise<void> = Promise.resolve();
+
+/** Fallback: flush to disk atomically (temp file + rename). */
 async function jsFlush(): Promise<void> {
   if (!jsStorePath) return;
-  const obj: Record<string, number[]> = {};
-  for (const [key, value] of jsStore) {
-    obj[key] = Array.from(value);
-  }
-  await writeFile(jsStorePath, JSON.stringify(obj), 'utf-8');
+  const path = jsStorePath;
+  const run = async () => {
+    const obj: Record<string, number[]> = {};
+    for (const [key, value] of jsStore) {
+      obj[key] = Array.from(value);
+    }
+    // Write to a temp file then atomically rename over the target. A crash
+    // mid-write leaves the previous complete file intact rather than a
+    // half-written, corrupt store (the docstring promises crash-safety).
+    const tmp = `${path}.${process.pid}.tmp`;
+    await writeFile(tmp, JSON.stringify(obj), 'utf-8');
+    await rename(tmp, path);
+  };
+  flushChain = flushChain.then(run, run);
+  return flushChain;
 }
 
 /**

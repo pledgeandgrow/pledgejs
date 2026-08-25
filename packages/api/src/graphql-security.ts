@@ -221,7 +221,11 @@ function tokenizeQuery(query: string): string[] {
   return query
     .replace(/#.*/g, '')
     .replace(/"/g, '')
-    .split(/(\s+|[{}()!:,...])/)
+    // Match the `...` spread as a single token (alternation) — inside the
+    // character class it was just three literal dots, so fragment spreads
+    // (`...Frag`, `...on Type`) were split into three `.` tokens and never
+    // recognized, inflating the complexity/field counts.
+    .split(/(\.\.\.|\s+|[{}()!:,])/)
     .map((t) => t.trim())
     .filter((t) => t.length > 0);
 }

@@ -127,13 +127,28 @@ export function xml(body: string, init?: TypedResponseInit): PledgeResponse {
  * Binary response helper for file downloads, images, etc.
  */
 export function binary(body: string | ArrayBuffer | Uint8Array, contentType: ResponseContentType = 'application/octet-stream', init?: TypedResponseInit): PledgeResponse {
+  // Binary bytes must be preserved, not stringified. The previous code turned an
+  // ArrayBuffer into a comma-separated list of decimal byte values, and a
+  // Uint8Array into mangled UTF-8 — corrupting every PNG/PDF/binary response.
+  // Bytes are base64-encoded and flagged with isBase64 (PledgeResponse.body is
+  // string | stream, so raw bytes are carried as base64).
+  let responseBody: string;
+  let isBase64 = false;
+  if (typeof body === 'string') {
+    responseBody = body;
+  } else {
+    const bytes = body instanceof ArrayBuffer ? new Uint8Array(body) : body;
+    responseBody = Buffer.from(bytes).toString('base64');
+    isBase64 = true;
+  }
   return {
     status: init?.status ?? 200,
     headers: {
       'Content-Type': contentType,
       ...init?.headers,
     },
-    body: body instanceof ArrayBuffer ? new Uint8Array(body).toString() : body instanceof Uint8Array ? new TextDecoder().decode(body) : body,
+    body: responseBody,
+    ...(isBase64 ? { isBase64: true } : {}),
   };
 }
 

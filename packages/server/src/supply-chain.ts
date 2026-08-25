@@ -266,17 +266,17 @@ export function generateProvenance(
       digest: { sha256: artifactDigest },
     },
     buildType: options.buildType ?? 'https://slsa.dev/buildtypes/github-actions/v1',
-    builder: { id: options.builderId ?? 'https://github.com/pledgeandgrow/pledgestack/.github/workflows/release.yml' },
+    builder: { id: options.builderId ?? 'https://github.com/pledgeandgrow/pledgejs/.github/workflows/release.yml' },
     invocation: {
       configSource: {
-        uri: options.sourceUri ?? 'https://github.com/pledgeandgrow/pledgestack',
+        uri: options.sourceUri ?? 'https://github.com/pledgeandgrow/pledgejs',
         digest: { sha1: options.sourceDigest ?? 'HEAD' },
       },
       parameters: { packageName, timestamp: now },
     },
     buildConfig: {
       source: {
-        uri: options.sourceUri ?? 'https://github.com/pledgeandgrow/pledgestack',
+        uri: options.sourceUri ?? 'https://github.com/pledgeandgrow/pledgejs',
         digest: { sha1: options.sourceDigest ?? 'HEAD' },
       },
     },
@@ -335,7 +335,7 @@ export function generateSigstoreConfig(packageName: string, version: string): {
       package: packageName,
       version,
       signer: 'sigstore',
-      identity: 'https://github.com/pledgeandgrow/pledgestack/.github/workflows/release.yml@refs/heads/main',
+      identity: 'https://github.com/pledgeandgrow/pledgejs/.github/workflows/release.yml@refs/heads/main',
       issuer: 'https://token.actions.githubusercontent.com',
     },
     verifyCommand: `npm audit signatures ${packageName}@${version}`,

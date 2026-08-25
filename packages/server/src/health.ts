@@ -40,11 +40,20 @@ export function createHealthCheck(options: HealthCheckOptions = {}) {
       }
     }
 
-    const allHealthy = Object.values(results).every((v) => v);
-    const anyUnhealthy = Object.values(results).some((v) => !v);
+    // Tri-state: all pass → healthy; all fail → unhealthy; a mix → degraded.
+    // (Previously `anyUnhealthy` was the exact negation of `allHealthy`, so the
+    // `degraded` branch could never be reached.)
+    const values = Object.values(results);
+    const passed = values.filter((v) => v).length;
+    const status: HealthStatus['status'] =
+      values.length === 0 || passed === values.length
+        ? 'healthy'
+        : passed === 0
+          ? 'unhealthy'
+          : 'degraded';
 
     return {
-      status: allHealthy ? 'healthy' : anyUnhealthy ? 'unhealthy' : 'degraded',
+      status,
       timestamp: new Date().toISOString(),
       ...(includeUptime && { uptime: Math.floor((Date.now() - startTime) / 1000) }),
       ...(includeMemory && process.memoryUsage && {
@@ -77,10 +86,14 @@ export function attachHealthCheck(server: Server, options: HealthCheckOptions = 
 
   server.on('request', async (req, res) => {
     const url = req.url?.split('?')[0];
-    if (url === path) {
+    // Only handle GET/HEAD on the health path, and never write if another
+    // listener already responded — otherwise this second request listener
+    // would double-write and throw ERR_HTTP_HEADERS_SENT.
+    if (url === path && (req.method === 'GET' || req.method === 'HEAD') && !res.headersSent) {
       const result = await healthCheck.handler();
+      if (res.headersSent) return;
       res.writeHead(result.status, result.headers);
-      res.end(result.body);
+      res.end(req.method === 'HEAD' ? undefined : result.body);
     }
   });
 

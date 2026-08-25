@@ -126,7 +126,7 @@ dist/
 `,
   'README.md': (name: string) => `# ${name}
 
-Built with [PledgeStack](https://github.com/pledgeandgrow/pledgestack) — a full-stack React framework.
+Built with [PledgeStack](https://github.com/pledgeandgrow/pledgejs) — a full-stack React framework.
 
 ## Getting Started
 

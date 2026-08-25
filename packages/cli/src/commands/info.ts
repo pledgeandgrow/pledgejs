@@ -59,7 +59,7 @@ export async function infoCommand(options: InfoOptions = {}): Promise<void> {
       const deps = pkg.dependencies ?? {};
       const devDeps = pkg.devDependencies ?? {};
       const pledgeDeps = Object.entries({ ...deps, ...devDeps })
-        .filter(([k]) => k.startsWith('pledgestack-'));
+        .filter(([k]) => k === 'pledgestack' || k === 'pledgepack' || k.startsWith('pledgestack-') || k.startsWith('pledgepack-'));
       console.log(`\n  PledgeStack dependencies:`);
       for (const [name, version] of pledgeDeps) {
         console.log(`    ${name}: ${version}`);

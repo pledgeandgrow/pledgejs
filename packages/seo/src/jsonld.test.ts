@@ -20,6 +20,36 @@ describe('generateJsonLd', () => {
     expect(jsonld).toContain('"@type": "Organization"');
     expect(jsonld).toContain('"name": "Test"');
   });
+
+  it('escapes </script> in user-controlled data to prevent breaking out of the script tag', () => {
+    const jsonld = generateJsonLd({
+      '@type': 'Product',
+      name: '</script><script>alert(1)</script>',
+    });
+    expect(jsonld).not.toContain('</script><script>alert(1)</script>');
+    expect(jsonld).toContain('\\u003c/script\\u003e');
+  });
+
+  it('escapes HTML-significant characters (<, >, &) anywhere in the payload', () => {
+    const jsonld = generateJsonLd({
+      '@type': 'Product',
+      description: 'A & B <b>bold</b>',
+    });
+    expect(jsonld).not.toContain('<b>');
+    expect(jsonld).not.toContain(' & ');
+    expect(jsonld).toContain('\\u003cb\\u003e');
+    expect(jsonld).toContain('\\u0026');
+  });
+
+  it('still produces valid, parseable JSON for the escaped payload', () => {
+    const jsonld = generateJsonLd({
+      '@type': 'Product',
+      name: '</script><b>&amp;</b>',
+    });
+    const inner = jsonld.replace('<script type="application/ld+json">\n', '').replace('\n</script>', '');
+    expect(() => JSON.parse(inner)).not.toThrow();
+    expect(JSON.parse(inner).name).toBe('</script><b>&amp;</b>');
+  });
 });
 
 describe('organizationSchema', () => {

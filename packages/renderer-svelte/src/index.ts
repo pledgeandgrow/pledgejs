@@ -111,12 +111,20 @@ function wrapHtml(
   headHtml?: string,
   viewport?: import('pledgestack-shared').Viewport,
   css?: string,
+  routeData?: { params: Record<string, string>; searchParams: Record<string, string>; pattern: string },
 ): string {
   const headTags = headHtml ?? renderHeadTags(metadata, route);
   const viewportTags = renderViewportTags(viewport);
   const manifest: PledgeManifest = { pledges: [] };
   const manifestScript = `<script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>`;
   const styleTag = css ? `<style>${css}</style>` : '';
+
+  // Emit the server's resolved route data so client hydration uses the same
+  // params the server rendered with (prevents a hydration mismatch on dynamic
+  // routes, where the client previously hydrated with empty params).
+  const routeJson = JSON.stringify(routeData ?? { params: {}, searchParams: {}, pattern: route.pattern })
+    .replace(/</g, '\\u003c');
+  const routeScript = `<script>window.__PLEDGE_ROUTE__=${routeJson}</script>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -130,6 +138,7 @@ function wrapHtml(
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
+  ${routeScript}
   <script type="module" src="/__pledge__/client.js"></script>
 </body>
 </html>`;
@@ -178,7 +187,11 @@ export class SvelteRendererAdapter implements RendererAdapter {
 
     // Svelte render returns { html, head, css }
     const headHtml = result.head || renderHeadTags(metadata, match.route);
-    return wrapHtml(html, match.route, metadata, headHtml, viewport, css);
+    return wrapHtml(html, match.route, metadata, headHtml, viewport, css, {
+      params: match.params,
+      searchParams: ctx.searchParams ?? {},
+      pattern: match.route.pattern,
+    });
   }
 
   async renderToStream(ctx: RenderContext): Promise<string> {
@@ -237,13 +250,14 @@ const root = document.getElementById('__pledge_root__');
 if (root) {
   // Svelte hydration — the SSR content is already in the DOM
   try {
+    const routeData = window.__PLEDGE_ROUTE__ || { params: {}, searchParams: {}, pattern: window.location.pathname };
     const { routes } = await import('/__pledge_router');
-    const pageRoute = routes[window.location.pathname];
+    // Resolve by the server's matched pattern (falling back to pathname) and
+    // hydrate with the same params the server rendered with.
+    const pageRoute = routes[routeData.pattern] || routes[window.location.pathname];
     if (pageRoute && pageRoute.component) {
-      // Svelte 5 hydrate takes the compiled client component and target element
-      // The compiled client component is loaded from the router module
       const Component = pageRoute.component;
-      hydrate(Component, { target: root, props: { params: {}, searchParams: {} } });
+      hydrate(Component, { target: root, props: { params: routeData.params, searchParams: routeData.searchParams } });
     }
   } catch (e) {
     console.error('[pledgestack] Svelte hydration error:', e);

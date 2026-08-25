@@ -8,7 +8,7 @@
  * - OIDC userinfo endpoint support
  */
 
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { generateToken } from './index';
 
 export interface OAuthProviderConfig {
@@ -70,7 +70,10 @@ export interface PKCEChallenge {
  */
 export function generatePKCE(): PKCEChallenge {
   const codeVerifier = randomBytes(32).toString('base64url');
-  const codeChallenge = createHmac('sha256', codeVerifier).digest('base64url');
+  // PKCE S256 (RFC 7636 §4.2) is BASE64URL(SHA-256(ASCII(code_verifier))).
+  // This was previously an HMAC keyed by the verifier over an empty message,
+  // which no conformant IdP accepts — the code exchange always failed.
+  const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
   return { codeVerifier, codeChallenge, codeChallengeMethod: 'S256' };
 }
 

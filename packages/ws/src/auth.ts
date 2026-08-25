@@ -111,6 +111,9 @@ export function createAuthenticatedWSRoute(
 
       const rateLimiter = new RateLimiter(rateLimitBurst, rateLimitPerSecond);
       connections.set(ws.id, { userId, ws, rateLimiter });
+      // Associate the socket with its user id so getWSUserId(ws) works — the
+      // `connections` map is private to this closure and was never exposed.
+      wsUserIds.set(ws, userId);
 
       handler.onOpen?.(ws);
     },
@@ -132,15 +135,20 @@ export function createAuthenticatedWSRoute(
 
     onClose(ws: PledgeWebSocket, code: number, reason: string) {
       connections.delete(ws.id);
+      wsUserIds.delete(ws);
       handler.onClose?.(ws, code, reason);
     },
 
     onError(ws: PledgeWebSocket, error: Error) {
       connections.delete(ws.id);
+      wsUserIds.delete(ws);
       handler.onError?.(ws, error);
     },
   };
 }
+
+/** Associates each authenticated socket with its user id (see getWSUserId). */
+const wsUserIds = new WeakMap<PledgeWebSocket, string>();
 
 /**
  * Extract authentication token from WebSocket upgrade request.
@@ -162,7 +170,12 @@ export function extractWSToken(headers: Record<string, string>, query: Record<st
 
 /**
  * Get the authenticated user ID for a WebSocket connection.
+ *
+ * Reads the association established when the socket authenticated. An optional
+ * `connections` map (as held internally by createAuthenticatedWSRoute) may be
+ * passed to look up there instead.
  */
-export function getWSUserId(ws: PledgeWebSocket, connections: Map<string, AuthenticatedConnection>): string | null {
-  return connections.get(ws.id)?.userId ?? null;
+export function getWSUserId(ws: PledgeWebSocket, connections?: Map<string, AuthenticatedConnection>): string | null {
+  if (connections) return connections.get(ws.id)?.userId ?? null;
+  return wsUserIds.get(ws) ?? null;
 }

@@ -1,9 +1,16 @@
 /**
- * Cross-worker rate limiter — token bucket algorithm with shared memory.
+ * Rate limiter — token bucket algorithm.
  *
- * Uses the rust-rate-limiter NAPI addon for cross-worker shared state.
- * When the native addon is not compiled, falls back to a per-process
- * JS Map which works for single-process mode.
+ * When the rust-rate-limiter NAPI addon is compiled it provides cross-worker
+ * shared state. When it is NOT compiled, this falls back to a per-process JS
+ * Map.
+ *
+ * IMPORTANT: the JS fallback is PER-PROCESS, not cross-worker. In a clustered
+ * / multi-worker deployment each worker enforces its own independent bucket,
+ * so the effective limit is `maxTokens × workerCount`. For a hard global limit
+ * without the native addon, put the rate limiter behind a shared store
+ * (e.g. Redis) or run a single process. `isNativeRateLimiterAvailable()`
+ * reports which mode is active.
  */
 
 import { createRequire } from 'node:module';
@@ -46,11 +53,44 @@ interface JsBucket {
 }
 const jsBuckets = new Map<string, JsBucket>();
 
+/** Cap on tracked buckets so a unique-key flood cannot grow memory unbounded. */
+const MAX_JS_BUCKETS = 50000;
+let fallbackWarned = false;
+
+function warnFallbackOnce(): void {
+  if (fallbackWarned) return;
+  fallbackWarned = true;
+  if (process.env.NODE_ENV !== 'production') {
+    console.warn(
+      '[pledgestack] rate limiter is using the per-process JS fallback ' +
+      '(rust-rate-limiter addon not compiled). Limits are NOT shared across ' +
+      'workers; effective limit is maxTokens × workerCount.',
+    );
+  }
+}
+
+/** Evict a fully-refilled (idle) bucket, or the oldest, when over the cap. */
+function evictJsBuckets(maxTokens: number): void {
+  for (const [key, bucket] of jsBuckets) {
+    if (bucket.tokens >= maxTokens) jsBuckets.delete(key);
+  }
+  if (jsBuckets.size <= MAX_JS_BUCKETS) return;
+  const overflow = jsBuckets.size - MAX_JS_BUCKETS;
+  let removed = 0;
+  for (const key of jsBuckets.keys()) {
+    if (removed >= overflow) break;
+    jsBuckets.delete(key);
+    removed++;
+  }
+}
+
 function jsCheckRateLimit(key: string, maxTokens: number, refillRate: number): RateLimitResult {
+  warnFallbackOnce();
   const now = Date.now();
   let bucket = jsBuckets.get(key);
 
   if (!bucket) {
+    if (jsBuckets.size >= MAX_JS_BUCKETS) evictJsBuckets(maxTokens);
     bucket = { tokens: maxTokens, lastRefill: now };
     jsBuckets.set(key, bucket);
   }

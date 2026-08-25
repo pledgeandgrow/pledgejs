@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "pledgestack-core": "workspace:*",
     "pledgestack-shared": "workspace:*"
   },
   "devDependencies": {

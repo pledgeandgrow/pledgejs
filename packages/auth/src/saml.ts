@@ -8,7 +8,7 @@
  * - SAML response parsing and validation
  */
 
-import { createVerify, createPublicKey, randomBytes } from 'node:crypto';
+import { createHash, createVerify, createPublicKey, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export interface SAMLConfig {
   /** Entity ID for the service provider */
@@ -102,6 +102,11 @@ export function generateAuthnRequest(config: SAMLConfig, relayState?: string): S
 
 /**
  * Parse and validate a SAML response from the IdP.
+ *
+ * This enforces the security-critical checks that were previously missing:
+ * - the assertion signature is verified (unless `wantSignedAssertions === false`),
+ *   so `parseSAMLResponse` never returns identity from an unsigned/forged response;
+ * - the `NotOnOrAfter` condition is enforced, so expired assertions are rejected.
  */
 export function parseSAMLResponse(
   samlResponse: string,
@@ -116,6 +121,9 @@ export function parseSAMLResponse(
 
   if (!xml.includes('samlp:Response') && !xml.includes('saml:Assertion')) return null;
 
+  // Reject anything whose signature does not verify before trusting its claims.
+  if (!verifySAMLSignature(samlResponse, config)) return null;
+
   const nameId = extractValue(xml, 'NameID') ?? '';
   if (!nameId) return null;
 
@@ -124,23 +132,44 @@ export function parseSAMLResponse(
   const sessionIndex = extractAttribute(xml, 'SessionIndex');
   const notOnOrAfter = extractAttribute(xml, 'NotOnOrAfter');
 
+  // Enforce the assertion's validity window: an expired assertion is rejected.
+  const notOnOrAfterMs = notOnOrAfter ? Date.parse(notOnOrAfter) : undefined;
+  if (notOnOrAfterMs !== undefined && !Number.isNaN(notOnOrAfterMs) && Date.now() >= notOnOrAfterMs) {
+    return null;
+  }
+
   return {
     nameId,
     attributes,
     issuer,
     sessionIndex: sessionIndex ?? undefined,
-    notOnOrAfter: notOnOrAfter ? Date.parse(notOnOrAfter) : undefined,
+    notOnOrAfter: notOnOrAfterMs,
   };
 }
 
 /**
  * Verify the signature on a SAML response using the IdP certificate.
+ *
+ * SECURITY NOTE: robust SAML assertion verification requires XML canonicalization
+ * (C14N) and full XML-DSig reference/digest validation, which cannot be done
+ * safely with string matching. This helper is intentionally FAIL-CLOSED: it
+ * rejects anything it cannot positively verify. It is not a substitute for a
+ * vetted XML-DSig library (e.g. `xml-crypto`) in production — see the package
+ * README's SAML section.
+ *
+ * Fixes vs. the previous version:
+ * - `wantSignedAssertions` now defaults to true (`!== false`); an unset value no
+ *   longer causes unsigned responses to be accepted.
+ * - A missing signature, SignedInfo, DigestValue, or Assertion is rejected.
+ * - The SignedInfo's DigestValue is checked against a digest of the Assertion so
+ *   the signature is at least bound to an assertion body, not just to SignedInfo.
  */
 export function verifySAMLSignature(
   samlResponse: string,
   config: SAMLConfig,
 ): boolean {
-  if (!config.wantSignedAssertions) return true;
+  // Default true: only an explicit `false` opts out of signature enforcement.
+  if (config.wantSignedAssertions === false) return true;
 
   let xml: string;
   try {
@@ -149,22 +178,40 @@ export function verifySAMLSignature(
     return false;
   }
 
-  if (!xml.includes('ds:Signature') && !xml.includes('Signature')) return false;
+  if (!xml.includes('Signature')) return false;
 
   const signatureValue = extractValue(xml, 'SignatureValue');
-  const signedInfo = extractValue(xml, 'SignedInfo');
+  const signedInfo = extractRawElement(xml, 'SignedInfo');
+  const digestValue = extractValue(xml, 'DigestValue');
+  const assertion = extractRawElement(xml, 'Assertion');
 
-  if (!signatureValue || !signedInfo) return false;
+  if (!signatureValue || !signedInfo || !digestValue || !assertion) return false;
 
   try {
+    // 1. The signature must verify over the SignedInfo element.
     const publicKey = createPublicKey(config.idpCertificate);
     const verify = createVerify('RSA-SHA256');
     verify.update(signedInfo);
     verify.end();
-    return verify.verify(publicKey, Buffer.from(signatureValue, 'base64'));
+    const sigOk = verify.verify(publicKey, Buffer.from(signatureValue, 'base64'));
+    if (!sigOk) return false;
+
+    // 2. The DigestValue in SignedInfo must match a digest of the assertion,
+    //    binding the signature to the assertion body (defends against body
+    //    substitution where a valid SignedInfo is reused with a swapped
+    //    assertion). Both SHA-256 and SHA-1 references are accepted.
+    const expected = Buffer.from(digestValue, 'base64');
+    const sha256 = createHash('sha256').update(assertion).digest();
+    const sha1 = createHash('sha1').update(assertion).digest();
+    return timingEqual(expected, sha256) || timingEqual(expected, sha1);
   } catch {
     return false;
   }
+}
+
+function timingEqual(a: Buffer, b: Buffer): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 /**
@@ -200,15 +247,20 @@ export function generateLogoutRequest(
 }
 
 function extractValue(xml: string, tag: string): string | null {
-  const patterns = [
-    new RegExp(`<(?:saml:|samlp:)?${tag}[^>]*>([^<]+)</(?:saml:|samlp:)?${tag}>`, 'i'),
-    new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`, 'i'),
-  ];
-  for (const pattern of patterns) {
-    const match = xml.match(pattern);
-    if (match) return match[1].trim();
-  }
-  return null;
+  // Allow any namespace prefix (saml:, samlp:, ds: for XML-DSig, etc.) or none.
+  const pattern = new RegExp(`<(?:\\w+:)?${tag}[^>]*>([^<]+)</(?:\\w+:)?${tag}>`, 'i');
+  const match = xml.match(pattern);
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Extract a full element including its tag markup (used for digesting the
+ * Assertion and reading the SignedInfo bytes). Namespace-prefix agnostic.
+ */
+function extractRawElement(xml: string, tag: string): string | null {
+  const pattern = new RegExp(`<((?:\\w+:)?${tag})[\\s>][\\s\\S]*?</\\1>`, 'i');
+  const match = xml.match(pattern);
+  return match ? match[0] : null;
 }
 
 function extractAttribute(xml: string, attr: string): string | null {

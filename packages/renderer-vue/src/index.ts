@@ -174,25 +174,27 @@ export class VueRendererAdapter implements RendererAdapter {
     // Build Vue app with props
     const props = { params: match.params, searchParams: ctx.searchParams ?? {} };
 
-    // Get layout chain and wrap page in layouts (inside-out)
+    // Get layout chain and wrap page in layouts (inside-out).
     const layouts = getLayoutChain(match, tree);
-    let app = await createVueApp(pageModule.default, props);
+    const vue = await import('vue');
+    const layoutProps = { params: match.params, searchParams: ctx.searchParams ?? {} };
 
-    // Wrap in layouts — Vue layouts receive children via slots
+    // Build the nested render tree: the page is the innermost content, wrapped
+    // by each layout from innermost (last in the chain) to outermost (first).
+    // The previous implementation rebuilt the app from the page on every
+    // iteration, so all but one layout were silently dropped.
+    let renderChild: () => unknown = () => vue.h(pageModule.default as any, props);
     for (let i = layouts.length - 1; i >= 0; i--) {
       const layoutModule = asLayout(modules.get(layouts[i].filePath));
-      if (layoutModule) {
-        const vue = await import('vue');
-        // Create a wrapper app that renders the layout with the previous app as children
-        app = vue.createApp({
-          render() {
-            return vue.h(layoutModule.default as any, { params: match.params, searchParams: ctx.searchParams ?? {} }, {
-              default: () => vue.h(pageModule.default as any, props),
-            });
-          },
-        });
-      }
+      if (!layoutModule) continue;
+      const child = renderChild;
+      const layoutComp = layoutModule.default;
+      renderChild = () => vue.h(layoutComp as any, layoutProps, { default: child });
     }
+
+    const app = layouts.length > 0
+      ? vue.createApp({ render: () => renderChild() })
+      : await createVueApp(pageModule.default, props);
 
     // Render
     const html = await renderer.renderToString(app);

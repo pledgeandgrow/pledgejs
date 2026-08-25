@@ -25,6 +25,12 @@ export interface LintOptions {
 export async function lintCommand(opts: LintOptions): Promise<void> {
   const rootDir = opts.dir ?? process.cwd();
 
+  // `--fix` is accepted but auto-fixing isn't implemented yet. Say so explicitly
+  // rather than silently ignoring the flag (the previous behavior).
+  if (opts.fix) {
+    console.log('\x1b[33m  ⚠ --fix is not yet supported; showing suggestions only.\x1b[0m');
+  }
+
   const results = await lintDirectory(rootDir);
   const output = formatLintResults(results);
   console.log(output);

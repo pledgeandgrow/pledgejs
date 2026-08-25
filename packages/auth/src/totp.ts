@@ -34,16 +34,36 @@ const BACKUP_CODE_LENGTH = 8;
 const BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
 /**
+ * Base32-encode a buffer (RFC 4648, no padding).
+ */
+function base32Encode(buf: Buffer): string {
+  let bits = 0;
+  let value = 0;
+  let output = '';
+  for (let i = 0; i < buf.length; i++) {
+    value = (value << 8) | buf[i];
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_CHARS[(value >>> (bits - 5)) & 0x1f];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    output += BASE32_CHARS[(value << (5 - bits)) & 0x1f];
+  }
+  return output;
+}
+
+/**
  * Generate a random TOTP secret in base32 encoding.
+ *
+ * The previous implementation emitted only two base32 chars per random byte
+ * using overlapping bit slices without advancing the byte index, discarding
+ * most of the entropy from `randomBytes(length)`. This now base32-encodes the
+ * full random buffer so all `length * 8` bits of entropy are preserved.
  */
 export function generateTOTPSecret(length = 20): string {
-  const bytes = randomBytes(length);
-  let secret = '';
-  for (let i = 0; i < bytes.length; i++) {
-    secret += BASE32_CHARS[(bytes[i] >> 3) & 0x1f];
-    secret += BASE32_CHARS[((bytes[i] & 0x07) << 2) | ((bytes[i + 1] ?? 0) >> 6) & 0x03];
-  }
-  return secret.slice(0, Math.floor(length * 8 / 5));
+  return base32Encode(randomBytes(length));
 }
 
 /**

@@ -36,7 +36,16 @@ export function generateCorsHeaders(
 
   // Handle origin
   if (config.origins.includes('*')) {
-    headers['Access-Control-Allow-Origin'] = '*';
+    // `Access-Control-Allow-Origin: *` is invalid together with
+    // `Allow-Credentials: true` — browsers reject the pair and the request
+    // fails. When credentials are enabled we must reflect the specific request
+    // origin instead of the wildcard (and Vary on Origin for caches).
+    if (config.credentials && requestOrigin) {
+      headers['Access-Control-Allow-Origin'] = requestOrigin;
+      headers['Vary'] = 'Origin';
+    } else {
+      headers['Access-Control-Allow-Origin'] = '*';
+    }
   } else if (requestOrigin && config.origins.includes(requestOrigin)) {
     headers['Access-Control-Allow-Origin'] = requestOrigin;
     headers['Vary'] = 'Origin';
@@ -84,14 +93,16 @@ export function corsMiddleware(
   method: string,
   headers: Record<string, string>,
   config: CorsConfig,
-): { headers: Record<string, string> } | null {
+): { headers: Record<string, string>; rejected?: boolean } | null {
   const origin = headers['origin'] ?? headers['Origin'];
 
   if (isPreflightRequest(method, headers)) {
     const corsHeaders = generateCorsHeaders(origin, config);
     if (Object.keys(corsHeaders).length === 0) {
-      // Origin not allowed — return 403
-      return { headers: { 'Content-Type': 'text/plain' } };
+      // Origin not allowed — signal rejection so the caller can return 403.
+      // (Previously this returned a truthy headers object, which the handler
+      // turned into a 204 *success* for disallowed origins.)
+      return { headers: {}, rejected: true };
     }
     return { headers: corsHeaders };
   }

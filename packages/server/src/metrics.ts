@@ -48,27 +48,39 @@ export function createMetricsCollector(): MetricsCollector {
     export() {
       const lines: string[] = [];
 
+      // A metric key is `name{labels}`. Prometheus requires the `_sum`/`_count`
+      // suffix to attach to the metric NAME, before the label set — i.e.
+      // `name_sum{labels}`, never `name{labels}_sum` (which the whole scrape
+      // rejects). splitKey separates the two so suffixes are placed correctly.
+      const splitKey = (k: string): { name: string; labels: string } => {
+        const i = k.indexOf('{');
+        return i === -1 ? { name: k, labels: '' } : { name: k.slice(0, i), labels: k.slice(i) };
+      };
+
       for (const [k, v] of counters) {
-        lines.push(`# TYPE ${k.split('{')[0]} counter`);
+        lines.push(`# TYPE ${splitKey(k).name} counter`);
         lines.push(`${k} ${v}`);
       }
       for (const [k, v] of gauges) {
-        lines.push(`# TYPE ${k.split('{')[0]} gauge`);
+        lines.push(`# TYPE ${splitKey(k).name} gauge`);
         lines.push(`${k} ${v}`);
       }
       for (const [k, arr] of timings) {
         const sum = arr.reduce((a, b) => a + b, 0);
-        const avg = sum / arr.length;
-        lines.push(`# TYPE ${k.split('{')[0]} summary`);
-        lines.push(`${k}_sum ${sum}`);
-        lines.push(`${k}_count ${arr.length}`);
-        lines.push(`${k}_avg ${avg.toFixed(2)}`);
+        const { name, labels } = splitKey(k);
+        // A Prometheus summary exposes `_sum` and `_count`. `_avg` is not a
+        // valid summary component, so it is not emitted (compute avg from
+        // sum/count on the query side, or via the json() output).
+        lines.push(`# TYPE ${name} summary`);
+        lines.push(`${name}_sum${labels} ${sum}`);
+        lines.push(`${name}_count${labels} ${arr.length}`);
       }
       for (const [k, arr] of histograms) {
         const sum = arr.reduce((a, b) => a + b, 0);
-        lines.push(`# TYPE ${k.split('{')[0]} histogram`);
-        lines.push(`${k}_sum ${sum}`);
-        lines.push(`${k}_count ${arr.length}`);
+        const { name, labels } = splitKey(k);
+        lines.push(`# TYPE ${name} histogram`);
+        lines.push(`${name}_sum${labels} ${sum}`);
+        lines.push(`${name}_count${labels} ${arr.length}`);
       }
 
       return lines.join('\n');

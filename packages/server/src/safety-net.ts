@@ -96,7 +96,11 @@ export function detectBot(request: {
 
   confidence = Math.min(confidence, 1);
   const isBot = confidence >= 0.5;
-  const shouldChallenge = confidence >= 0.3 && confidence < 0.7;
+  // A request worth challenging is anything at or above the suspicion floor.
+  // The previous `< 0.7` upper bound meant the MOST confident bots (>= 0.7)
+  // reported shouldChallenge=false and slipped through the handler's
+  // `isBot && shouldChallenge` gate, i.e. detection was inverted at the top end.
+  const shouldChallenge = confidence >= 0.3;
 
   return { isBot, confidence, signals, shouldChallenge };
 }

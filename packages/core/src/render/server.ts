@@ -138,9 +138,13 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
   }
   const metadata = mergeMetadata(layoutMetadata, pageMetadata);
 
-  // Auto-inject OG/Twitter image URLs from opengraph-image.tsx / twitter-image.tsx
+  // Auto-inject OG/Twitter image URLs from opengraph-image.tsx / twitter-image.tsx.
+  // Use the concrete request pathname, not the route pattern — otherwise a
+  // dynamic route emits a literal `/blog/:slug/opengraph-image` URL that points
+  // at no real resource.
+  const ogBasePath = match.pathname === '/' ? '' : match.pathname.replace(/\/$/, '');
   if (match.route.opengraphImageFilePath) {
-    const ogImageUrl = `${match.route.pattern === '/' ? '' : match.route.pattern}/opengraph-image`;
+    const ogImageUrl = `${ogBasePath}/opengraph-image`;
     if (!metadata.openGraph) metadata.openGraph = {};
     if (!metadata.openGraph.images) metadata.openGraph.images = [];
     if (!metadata.openGraph.images.includes(ogImageUrl)) {
@@ -148,7 +152,7 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
     }
   }
   if (match.route.twitterImageFilePath) {
-    const twImageUrl = `${match.route.pattern === '/' ? '' : match.route.pattern}/twitter-image`;
+    const twImageUrl = `${ogBasePath}/twitter-image`;
     if (!metadata.twitter) metadata.twitter = {};
     if (!metadata.twitter.images) metadata.twitter.images = [];
     if (!metadata.twitter.images.includes(twImageUrl)) {
@@ -235,33 +239,40 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
   // Resolve head: head.tsx component or generateMetadata
   const headHtml = await resolveHead(match.route, modules, metadata);
 
-  // JIT template profiling — check if a compiled template exists for this route
-  const compiledTemplate = getCompiledTemplate(match.route.pattern);
-  if (compiledTemplate) {
-    // Use compiled template — bypasses React reconciliation for hot routes.
-    // The compiled template is an HTML string with {{placeholder}} markers
-    // that are replaced with route-specific data.
-    const filled = fillCompiledTemplate(compiledTemplate, {
-      params: match.params,
-      searchParams: ctx.searchParams ?? {},
-      metadata,
-    });
-    // Record this render for JIT profiling (keeps the template hot)
-    const templateHash = simpleHash(filled);
-    recordRender(match.route.pattern, templateHash);
-    return filled;
+  // JIT template cache — only safe for routes with no per-request variation.
+  // The cache is keyed by route pattern only and stores fully-rendered HTML
+  // (not a marker template), so using it for a route that varies by params or
+  // query would serve one request's HTML to every other request (a
+  // cross-request content leak). Restrict the cache to param- and query-free
+  // renders, where identical output is correct.
+  const isCacheable =
+    Object.keys(match.params).length === 0 &&
+    Object.keys(ctx.searchParams ?? {}).length === 0;
+
+  if (isCacheable) {
+    const compiledTemplate = getCompiledTemplate(match.route.pattern);
+    if (compiledTemplate) {
+      const filled = fillCompiledTemplate(compiledTemplate, {
+        params: match.params,
+        searchParams: ctx.searchParams ?? {},
+        metadata,
+      });
+      const templateHash = simpleHash(filled);
+      recordRender(match.route.pattern, templateHash);
+      return filled;
+    }
   }
 
   const html = renderToString(createElement(() => element as ReactNode));
   const fullHtml = wrapHtml(html, match.route, metadata, headHtml, viewport);
 
-  // Record this render for JIT profiling
-  const templateHash = simpleHash(fullHtml);
-  const profileResult = recordRender(match.route.pattern, templateHash);
-
-  // If the profiler says we should compile, store the template for future use
-  if (profileResult.shouldCompile) {
-    await storeCompiledTemplate(match.route.pattern, fullHtml);
+  // Only record/store for the profiler on cacheable (static) renders.
+  if (isCacheable) {
+    const templateHash = simpleHash(fullHtml);
+    const profileResult = recordRender(match.route.pattern, templateHash);
+    if (profileResult.shouldCompile) {
+      await storeCompiledTemplate(match.route.pattern, fullHtml);
+    }
   }
 
   return fullHtml;

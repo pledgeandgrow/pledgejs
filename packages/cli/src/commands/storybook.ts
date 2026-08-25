@@ -24,25 +24,21 @@ interface StorybookOptions {
  * Generates the .storybook/main.ts config.
  */
 function generateMainConfig(config: PledgeConfig): string {
-  return `import type { StorybookConfig } from './types';
+  // Pick the Storybook framework matching the project's UI framework, instead
+  // of hardcoding React — a Vue/Solid/Svelte project got a React-Vite config
+  // that couldn't load its components.
+  const framework = config.framework ?? 'react';
+  const frameworkPackage = ({
+    react: '@storybook/react-vite',
+    vue: '@storybook/vue3-vite',
+    svelte: '@storybook/svelte-vite',
+    solid: 'storybook-solidjs-vite',
+  } as Record<string, string>)[framework] ?? '@storybook/react-vite';
 
-const config: StorybookConfig = {
-  stories: [
-    '../${config.appDir}/**/*.stories.@(ts|tsx|mdx)',
-    '../${config.appDir}/**/*.@(ts|tsx)',
-  ],
-  addons: [
-    '@storybook/addon-essentials',
-    '@storybook/addon-interactions',
-  ],
-  framework: {
-    name: '@storybook/react-vite',
-    options: {},
-  },
-  docs: {
-    autodocs: 'tag',
-  },
-  typescript: {
+  const isReact = framework === 'react';
+  const storyExts = isReact ? 'ts|tsx|mdx' : `ts|${framework === 'svelte' ? 'svelte' : 'js'}|mdx`;
+  const typescriptBlock = isReact
+    ? `  typescript: {
     check: false,
     reactDocgen: 'react-docgen-typescript',
     reactDocgenTypescriptOptions: {
@@ -51,7 +47,30 @@ const config: StorybookConfig = {
         prop.parent ? !/node_modules/.test(prop.parent.fileName ?? '') : true,
     },
   },
-  staticDirs: ['../${config.publicDir}'],
+`
+    : `  typescript: {
+    check: false,
+  },
+`;
+
+  return `import type { StorybookConfig } from './types';
+
+const config: StorybookConfig = {
+  stories: [
+    '../${config.appDir}/**/*.stories.@(${storyExts})',
+  ],
+  addons: [
+    '@storybook/addon-essentials',
+    '@storybook/addon-interactions',
+  ],
+  framework: {
+    name: '${frameworkPackage}',
+    options: {},
+  },
+  docs: {
+    autodocs: 'tag',
+  },
+${typescriptBlock}  staticDirs: ['../${config.publicDir}'],
 };
 
 export default config;

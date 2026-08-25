@@ -61,7 +61,7 @@ npx pledge start
 | `pledge analyze` | Bundle analysis — per-module `.node` size breakdown |
 | `pledge bench` | Benchmark Rust addons vs JS fallbacks |
 | `pledge fmt` | Format Rust code (cargo fmt) |
-| `pledge docs` | Generate API reference (TypeDoc) |
+| `pledge docs` | Generate API reference from TypeScript source |
 | `pledge upgrade` | Upgrade PledgeStack with codemods |
 | `pledge why <module>` | Trace why a module is in the bundle |
 | `pledge docker [--optimized]` | Generate Dockerfile, .dockerignore, docker-compose.yml. `--optimized` produces a Rust-addon-aware multi-stage build instead of the plain single-stage default. |

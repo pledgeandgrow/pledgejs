@@ -27,13 +27,13 @@
   },
   "license": "MIT",
   "author": "PledgeStack Contributors",
-  "homepage": "https://github.com/pledgeandgrow/pledgestack#readme",
+  "homepage": "https://github.com/pledgeandgrow/pledgejs#readme",
   "bugs": {
-    "url": "https://github.com/pledgeandgrow/pledgestack/issues"
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/pledgeandgrow/pledgestack.git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
     "directory": "packages/auth"
   },
   "keywords": [
