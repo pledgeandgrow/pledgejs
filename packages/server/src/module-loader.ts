@@ -52,10 +52,11 @@ export function createModuleLoader(
           devServerPort: pledgepackPort,
           cargoConfig: config.cargo,
           rootDir: config.rootDir,
+          hostname: config.pledgepack?.devServer?.host,
         });
         return result.fileUrl;
       }
-      return transformFile(resolvedPath, true, pledgepackPort, config.cargo, config.rootDir);
+      return transformFile(resolvedPath, true, pledgepackPort, config.cargo, config.rootDir, config.pledgepack?.devServer?.host);
     }
 
     return pathToFileURL(resolvedPath).href;

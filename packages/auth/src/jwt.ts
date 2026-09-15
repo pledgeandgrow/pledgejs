@@ -48,6 +48,8 @@ export interface JWTVerifyOptions {
   audience?: string | string[];
   subject?: string;
   clockTolerance?: number;
+  /** Expected token type (`typ` claim). If set, tokens whose `typ` does not match are rejected. Prevents refresh/access token confusion. */
+  tokenType?: string;
 }
 
 export interface KeyPair {
@@ -188,13 +190,20 @@ export function verifyJWT(
   if (options.issuer && payload.iss !== options.issuer) return null;
   if (options.subject && payload.sub !== options.subject) return null;
   if (options.audience) {
-    const expectedAud = options.audience;
-    const tokenAud = payload.aud;
-    if (Array.isArray(tokenAud)) {
-      if (!tokenAud.includes(expectedAud as string)) return null;
-    } else if (tokenAud !== expectedAud) {
-      return null;
-    }
+    // Accept the token if ANY expected audience appears in the token's aud
+    // claim (which may itself be a string or an array). The previous code did
+    // `tokenAud.includes(expectedAud)` with an array argument, which never
+    // matched a string element — multi-audience verification always failed.
+    const expectedList = Array.isArray(options.audience) ? options.audience : [options.audience];
+    const tokenList = Array.isArray(payload.aud) ? payload.aud : payload.aud !== undefined ? [payload.aud] : [];
+    if (!expectedList.some((aud) => tokenList.includes(aud))) return null;
+  }
+
+  // Enforce token type to prevent refresh/access token confusion.
+  // A refresh token (typ: 'refresh', 7-day expiry) must not be accepted where
+  // an access token (typ: 'access', 15-min expiry) is expected.
+  if (options.tokenType !== undefined) {
+    if ((payload as { typ?: string }).typ !== options.tokenType) return null;
   }
 
   return payload;

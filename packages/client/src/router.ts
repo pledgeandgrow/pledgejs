@@ -71,7 +71,21 @@ interface NavigateOptions {
 
 const RouterContext = createContext<ClientRouterContextValue | null>(null);
 
+/**
+ * Prefetch cache. Bounded to avoid unbounded growth from a long-lived SPA
+ * session visiting many routes — without a cap, every distinct path the user
+ * ever navigates to stays in memory forever.
+ */
+const PREFETCH_CACHE_MAX = 100;
 const prefetchedPages = new Map<string, string>();
+
+function rememberPrefetch(path: string, html: string): void {
+  if (prefetchedPages.size >= PREFETCH_CACHE_MAX && !prefetchedPages.has(path)) {
+    const oldest = prefetchedPages.keys().next().value;
+    if (oldest !== undefined) prefetchedPages.delete(oldest);
+  }
+  prefetchedPages.set(path, html);
+}
 
 export function useRouter(): ClientRouterContextValue {
   const ctx = useContext(RouterContext);
@@ -163,23 +177,25 @@ function prefetchPage(href: string, priority: 'high' | 'low' | 'auto' = 'auto'):
   })
     .then((res) => res.text())
     .then((html) => {
-      prefetchedPages.set(path, html);
+      rememberPrefetch(path, html);
     })
     .catch(() => {});
 }
 
-async function fetchPageContent(path: string): Promise<string | null> {
+async function fetchPageContent(path: string, signal?: AbortSignal): Promise<string | null> {
   const cached = prefetchedPages.get(path);
   if (cached) {
     return extractRootContent(cached);
   }
 
   try {
-    const res = await fetch(path);
+    const res = await fetch(path, { signal });
     const html = await res.text();
-    prefetchedPages.set(path, html);
+    rememberPrefetch(path, html);
     return extractRootContent(html);
-  } catch {
+  } catch (err) {
+    // AbortError is expected when a newer navigation supersedes this one.
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
     return null;
   }
 }
@@ -227,6 +243,13 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     scrollPositions.current.set(pathname, currentScroll.current);
   }, [pathname]);
 
+  // Track the latest navigation so a slow in-flight fetch can't overwrite a
+  // newer navigation's result (race protection). The AbortController cancels
+  // the previous in-flight fetch when a new navigation starts, freeing
+  // bandwidth/CPU instead of letting the stale fetch run to completion (#34).
+  const navSeq = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   const navigate = useCallback(async (to: string, options: NavigateOptions = {}) => {
     const { scroll = true, replace = false } = options;
     const url = new URL(to, window.location.origin);
@@ -246,7 +269,16 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       window.history.pushState({}, '', to);
     }
 
-    const content = await fetchPageContent(url.pathname);
+    // Abort any in-flight navigation fetch before starting a new one.
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    const seq = ++navSeq.current;
+    const content = await fetchPageContent(url.pathname, controller.signal);
+
+    // A newer navigation started before this one resolved — discard.
+    if (seq !== navSeq.current) return;
 
     if (content) {
       swapRootContent(content);

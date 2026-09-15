@@ -111,12 +111,29 @@ export function createMetricsMiddleware(collector: MetricsCollector) {
       collector.increment('server.started');
     },
     requestStart(method: string, path: string) {
-      collector.increment('http.requests_total', { method, path });
+      collector.increment('http.requests_total', { method, path: normalizePath(path) });
       return Date.now();
     },
     requestEnd(method: string, path: string, status: number, startTime: number) {
-      collector.timing('http.request_duration_ms', Date.now() - startTime, { method, path, status: String(status) });
-      collector.increment('http.responses_total', { method, path, status: String(status) });
+      const normPath = normalizePath(path);
+      collector.timing('http.request_duration_ms', Date.now() - startTime, { method, path: normPath, status: String(status) });
+      collector.increment('http.responses_total', { method, path: normPath, status: String(status) });
     },
   };
+}
+
+/**
+ * Normalize a request path for use as a metrics label. Replaces dynamic
+ * segments (numeric IDs, UUIDs) with `:param` placeholders so that
+ * `/users/123` and `/users/456` collapse into a single `/users/:id` label.
+ * Without this, high-cardinality paths cause unbounded label growth (#39).
+ */
+export function normalizePath(path: string): string {
+  return path
+    // UUIDs: /users/550e8400-e29b-41d4-a716-446655440000 → /users/:id
+    .replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '/:id')
+    // Long hex strings (24-char Mongo ObjectIds, etc.): /assets/507f1f77bcf86cd799439011 → /assets/:id
+    .replace(/\/[0-9a-f]{16,}/gi, '/:id')
+    // Numeric IDs: /posts/123 → /posts/:id
+    .replace(/\/\d+/g, '/:id');
 }

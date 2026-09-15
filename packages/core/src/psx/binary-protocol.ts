@@ -132,19 +132,22 @@ export class BinaryDecoder {
         return null;
       case TYPE_BOOL:
         return this.buffer[this.offset++] === 1;
-      case TYPE_I32:
+      case TYPE_I32: {
         const i32 = this.view.getInt32(this.offset, true);
         this.offset += 4;
         return i32;
-      case TYPE_I64:
+      }
+      case TYPE_I64: {
         const lo = this.view.getUint32(this.offset, true);
         const hi = this.view.getInt32(this.offset + 4, true);
         this.offset += 8;
         return hi * 0x100000000 + lo;
-      case TYPE_F64:
+      }
+      case TYPE_F64: {
         const f64 = this.view.getFloat64(this.offset, true);
         this.offset += 8;
         return f64;
+      }
       case TYPE_STRING:
         return this.readString();
       case TYPE_ARRAY: {

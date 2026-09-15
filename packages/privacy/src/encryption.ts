@@ -31,18 +31,24 @@ export interface EncryptedPayload {
  * and any sensitive data that needs to be stored encrypted.
  */
 export class EncryptionManager {
+  private passphrase: string;
   private derivedKey: Buffer;
   private salt: Buffer;
 
   constructor(config: EncryptionConfig) {
+    this.passphrase = config.key;
     this.salt = config.salt
       ? Buffer.from(config.salt, 'base64')
       : randomBytes(SALT_LENGTH);
-    this.derivedKey = scryptSync(config.key, this.salt, KEY_LENGTH);
+    this.derivedKey = scryptSync(this.passphrase, this.salt, KEY_LENGTH);
   }
 
   /**
    * Encrypt a string.
+   * The salt used for key derivation is included in the payload so that
+   * decryption works across process restarts (a new EncryptionManager with
+   * the same passphrase but a different random salt would derive a different
+   * key and fail to decrypt).
    */
   encrypt(plaintext: string): EncryptedPayload {
     const iv = randomBytes(IV_LENGTH);
@@ -54,17 +60,30 @@ export class EncryptionManager {
       ciphertext: encrypted.toString('base64'),
       iv: iv.toString('base64'),
       tag: tag.toString('base64'),
+      // Persist the salt so decryption works across restarts / instances.
+      salt: this.salt.toString('base64'),
     };
   }
 
   /**
    * Decrypt a payload.
    * Throws if auth tag verification fails (tampered or wrong key).
+   * If the payload carries a salt, re-derives the key from that salt so data
+   * encrypted with a different random salt (e.g. before a process restart)
+   * can still be decrypted with the same passphrase.
    */
   decrypt(payload: EncryptedPayload): string {
+    let key = this.derivedKey;
+    if (payload.salt) {
+      const payloadSalt = Buffer.from(payload.salt, 'base64');
+      // Only re-derive if the salt differs from the one used at construction.
+      if (!payloadSalt.equals(this.salt)) {
+        key = scryptSync(this.passphrase, payloadSalt, KEY_LENGTH);
+      }
+    }
     const decipher = createDecipheriv(
       ALGORITHM,
-      this.derivedKey,
+      key,
       Buffer.from(payload.iv, 'base64'),
     );
     decipher.setAuthTag(Buffer.from(payload.tag, 'base64'));

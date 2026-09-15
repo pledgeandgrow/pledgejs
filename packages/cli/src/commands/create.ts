@@ -1,237 +1,73 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-
-interface CreateOptions {
-  template?: 'default' | 'blank' | 'blog' | 'dashboard';
-  typescript?: boolean;
-  tailwind?: boolean;
-  packageManager?: 'pnpm' | 'npm' | 'yarn';
-}
-
-const DEFAULT_TEMPLATE = {
-  'pledge.config.ts': `import { defineConfig } from 'pledgestack';
-
-export default defineConfig({
-  appDir: 'app',
-  publicDir: 'public',
-  outDir: '.pledge',
-  defaultRuntime: 'node',
-  rsc: true,
-  tailwind: true,
-});
-`,
-  'tsconfig.json': `{
-  "extends": "./node_modules/pledgestack/tsconfig-base.json",
-  "compilerOptions": {
-    "jsx": "react-jsx",
-    "strict": true,
-    "noEmit": true
-  },
-  "include": ["app/**/*", "pledge.config.ts"]
-}
-`,
-  'package.json': (name: string) => `{
-  "name": "${name}",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "pledge dev",
-    "build": "pledge build",
-    "start": "pledge start"
-  },
-  "dependencies": {
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  },
-  "devDependencies": {
-    "pledgestack": "latest",
-    "pledgepack": "latest",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
-  }
-}
-`,
-  'app/layout.tsx': `import type { ReactNode } from 'react';
-
-export default function RootLayout({ children }: { children: ReactNode }) {
-  return (
-    <html lang="en">
-      <body>
-        {children}
-      </body>
-    </html>
-  );
-}
-`,
-  'app/page.tsx': `export default function HomePage() {
-  return (
-    <main>
-      <h1>Welcome to PledgeStack</h1>
-      <p>Get started by editing <code>app/page.tsx</code></p>
-    </main>
-  );
-}
-`,
-  'app/head.tsx': `export default function Head() {
-  return (
-    <>
-      <meta charSet="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>My PledgeStack App</title>
-    </>
-  );
-}
-`,
-  'middleware.ts': `import { generateSecurityHeaders, generateCspHeader, DEFAULT_CSP } from 'pledgestack/auth';
-import type { MiddlewareResult } from 'pledgestack';
-
-const securityHeaders = generateSecurityHeaders({
-  hsts: process.env.NODE_ENV === 'production',
-});
-
-const cspHeader = generateCspHeader(DEFAULT_CSP);
-
-export function middleware(req: Request): MiddlewareResult {
-  const headers: Record<string, string> = {
-    ...securityHeaders,
-    'Content-Security-Policy': cspHeader,
-  };
-
-  // HTTPS redirect in production
-  if (process.env.NODE_ENV === 'production') {
-    const proto = req.headers.get('x-forwarded-proto');
-    if (proto === 'http') {
-      const url = new URL(req.url);
-      url.protocol = 'https:';
-      return { redirect: url.toString(), permanent: true } as MiddlewareResult;
-    }
-  }
-
-  return { next: true, headers };
-}
-
-export const config = {
-  matcher: ['/((?!_next/|favicon.ico|robots.txt).*)'],
-};
-`,
-  '.gitignore': `node_modules/
-.pledge/
-dist/
-.env*.local
-*.tsbuildinfo
-`,
-  'README.md': (name: string) => `# ${name}
-
-Built with [PledgeStack](https://github.com/pledgeandgrow/pledgejs) — a full-stack React framework.
-
-## Getting Started
-
-\`\`\`bash
-pnpm install
-pnpm dev
-\`\`\`
-
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-`,
-};
-
-const BLANK_TEMPLATE = {
-  ...DEFAULT_TEMPLATE,
-  'app/page.tsx': `export default function HomePage() {
-  return (
-    <main>
-      <h1>Blank PledgeStack App</h1>
-    </main>
-  );
-}
-`,
-};
-
-const BLOG_TEMPLATE = {
-  ...DEFAULT_TEMPLATE,
-  'app/page.tsx': `export default function HomePage() {
-  return (
-    <main>
-      <h1>My Blog</h1>
-      <ul>
-        <li><a href="/posts/hello-world">Hello World</a></li>
-      </ul>
-    </main>
-  );
-}
-`,
-  'app/posts/[slug]/page.tsx': `interface PageProps {
-  params: { slug: string };
-}
-
-export default function PostPage({ params }: PageProps) {
-  return (
-    <article>
-      <h1>{params.slug}</h1>
-      <p>This is a blog post.</p>
-    </article>
-  );
-}
-
-export function generateStaticParams() {
-  return [{ slug: 'hello-world' }];
-}
-`,
-};
+import { join, dirname } from 'node:path';
+import { createRequire } from 'node:module';
 
 /**
- * Creates a new PledgeStack project from a template.
+ * Creates a new PledgeStack project.
+ *
+ * Delegates to create-pledge-app, which is the canonical scaffolder.
+ * Templates live in packages/create-pledge-app/templates/ — including the
+ * 'pledge' template (full-stack React + Rust backend with server/ directory).
+ *
+ * This thin wrapper ensures `pledge create` and `create-pledge-app` produce
+ * identical output.
  */
 export async function createCommand(
   projectName: string,
-  options: CreateOptions = {},
+  options: { template?: string; framework?: string; install?: boolean } = {},
 ): Promise<void> {
-  const template = options.template ?? 'default';
-  const targetDir = join(process.cwd(), projectName);
+  const args: string[] = [projectName];
 
-  if (existsSync(targetDir)) {
-    console.error(`\n  Error: Directory "${projectName}" already exists.\n`);
-    process.exit(1);
+  if (options.template) {
+    args.push('--template', options.template);
   }
 
-  console.log(`\n  PledgeStack — Creating project "${projectName}"...\n`);
-
-  await mkdir(targetDir, { recursive: true });
-  await mkdir(join(targetDir, 'app'), { recursive: true });
-  await mkdir(join(targetDir, 'public'), { recursive: true });
-
-  const templateFiles = getTemplate(template);
-
-  for (const [filePath, content] of Object.entries(templateFiles)) {
-    const fullPath = join(targetDir, filePath);
-    const dir = join(fullPath, '..');
-    await mkdir(dir, { recursive: true });
-
-    const resolved = typeof content === 'function' ? content(projectName) : content;
-    await writeFile(fullPath, resolved, 'utf-8');
-    console.log(`  ✓ ${filePath}`);
+  if (options.framework) {
+    args.push('--framework', options.framework);
   }
 
-  const pm = options.packageManager ?? 'pnpm';
+  if (options.install !== undefined) {
+    args.push(options.install ? '--install' : '--no-install');
+  }
 
-  console.log(`\n  Project created in ./${projectName}`);
-  console.log(`\n  Next steps:`);
-  console.log(`    cd ${projectName}`);
-  console.log(`    ${pm} install`);
-  console.log(`    ${pm} dev\n`);
+  // Try to run create-pledge-app from node_modules
+  const createAppBin = tryResolveCreateApp();
+  if (createAppBin) {
+    const child = spawn('node', [createAppBin, ...args], {
+      stdio: 'inherit',
+      cwd: process.cwd(),
+    });
+
+    return new Promise((resolve, reject) => {
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`create-pledge-app exited with code ${code}`));
+      });
+      child.on('error', reject);
+    });
+  }
+
+  // Fallback: if create-pledge-app is not installed, show a helpful message
+  console.error('\n  create-pledge-app is not installed.');
+  console.error('  Install it with: pnpm add -g create-pledge-app');
+  console.error('  Or use: npx create-pledge-app\n');
+  process.exit(1);
 }
 
-function getTemplate(template: string): Record<string, string | ((name: string) => string)> {
-  switch (template) {
-    case 'blank':
-      return BLANK_TEMPLATE;
-    case 'blog':
-      return BLOG_TEMPLATE;
-    default:
-      return DEFAULT_TEMPLATE;
+function tryResolveCreateApp(): string | null {
+  try {
+    const req = createRequire(import.meta.url);
+    // Resolve to the bin entry of create-pledge-app
+    const pkgPath = req.resolve('create-pledge-app/package.json');
+    const pkgDir = dirname(pkgPath);
+    const binPath = join(pkgDir, 'dist', 'index.js');
+    if (existsSync(binPath)) return binPath;
+    // Try alternative bin locations
+    const altBinPath = join(pkgDir, 'bin', 'index.js');
+    if (existsSync(altBinPath)) return altBinPath;
+    return null;
+  } catch {
+    return null;
   }
 }

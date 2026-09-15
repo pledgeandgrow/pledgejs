@@ -6,6 +6,88 @@ import { createHash } from 'node:crypto';
 export const PLEDGEPACK_DEFAULT_PORT = 3001;
 
 /**
+ * A bounded LRU map. JS Map iteration follows insertion order, so we evict
+ * the oldest entries from the front when the size exceeds `maxEntries`.
+ *
+ * Used by transform caches across all bundler adapters and the server's
+ * transform pipeline. The dev-mode cache keys include `Date.now()` (one
+ * entry per transform), so without bounding, long dev sessions leak
+ * memory and disk files in `.pledge-cache/`.
+ */
+export class BoundedLRUMap<K, V> {
+  private map = new Map<K, V>();
+  readonly maxEntries: number;
+
+  constructor(maxEntries: number) {
+    this.maxEntries = maxEntries;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.map.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.map.delete(key);
+      this.map.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    }
+    this.map.set(key, value);
+    this.enforceLimit();
+  }
+
+  has(key: K): boolean {
+    return this.map.has(key);
+  }
+
+  delete(key: K): boolean {
+    return this.map.delete(key);
+  }
+
+  clear(): void {
+    this.map.clear();
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  keys(): IterableIterator<K> {
+    return this.map.keys();
+  }
+
+  values(): IterableIterator<V> {
+    return this.map.values();
+  }
+
+  entries(): IterableIterator<[K, V]> {
+    return this.map.entries();
+  }
+
+  [Symbol.iterator](): IterableIterator<[K, V]> {
+    return this.map[Symbol.iterator]();
+  }
+
+  private enforceLimit(): void {
+    if (this.map.size <= this.maxEntries) return;
+    const toEvict = this.map.size - this.maxEntries;
+    let count = 0;
+    for (const key of this.map.keys()) {
+      if (count >= toEvict) break;
+      this.map.delete(key);
+      count++;
+    }
+  }
+}
+
+/** Default cap for transform caches — 1000 entries is ~enough for a large project. */
+export const MAX_TRANSFORM_CACHE_ENTRIES = 1000;
+
+/**
  * Fetches the Oxc-transformed module from PledgePack's Rust dev server.
  *
  * PledgePack's dev server (axum) handles:
@@ -14,12 +96,25 @@ export const PLEDGEPACK_DEFAULT_PORT = 3001;
  *   - CSS transforms via Lightning CSS
  *   - CJS → ESM interop for node_modules
  *   - Import rewriting for bare specifiers
+ *
+ * @param sourcePath  Absolute path to the source file.
+ * @param port        Port the PledgePack dev server is listening on.
+ * @param rootDir     Project root (for computing the relative path). Defaults to cwd.
+ * @param hostname     Hostname the dev server was started with. Defaults to 'localhost'.
+ *                     Must match the `--host` value — if the server binds to 0.0.0.0 or
+ *                     a LAN IP, fetching via 'localhost' will fail.
  */
-export async function fetchFromPledgepack(sourcePath: string, port: number, rootDir?: string): Promise<string> {
+export async function fetchFromPledgepack(
+  sourcePath: string,
+  port: number,
+  rootDir?: string,
+  hostname?: string,
+): Promise<string> {
   const projectRoot = rootDir ?? process.cwd();
+  const host = hostname ?? 'localhost';
   const relPath = relative(projectRoot, sourcePath).replace(/\\/g, '/');
 
-  const url = `http://localhost:${port}/${relPath}`;
+  const url = `http://${host}:${port}/${relPath}`;
   const response = await fetch(url);
 
   if (!response.ok) {

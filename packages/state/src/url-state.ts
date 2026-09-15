@@ -34,6 +34,10 @@ export function useUrlState<T>(
       // a setState updater must be pure and can run twice under StrictMode /
       // concurrent rendering, which would push history twice.
       const next = typeof value === 'function' ? (value as (p: T) => T)(stateRef.current) : value;
+      // Skip redundant updates: if the value is unchanged, don't push a new
+      // history entry or dispatch a popstate event — that would create a
+      // no-op history entry and trigger a needless re-render cycle.
+      if (Object.is(next, stateRef.current)) return;
       if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
         params.set(key, JSON.stringify(next));

@@ -1,4 +1,4 @@
-export { createStore, useStore, type Store, type StoreOptions } from './store';
+export { createStore, useStore, applySelectorUpdate, type Store, type StoreOptions } from './store';
 export { useUrlState, type UrlStateOptions } from './url-state';
 export { useCrossTabState, type CrossTabOptions } from './cross-tab';
 export { useFormState, useFormStatus, type FormStateOptions } from './form';

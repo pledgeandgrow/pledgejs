@@ -1,5 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 
 function isLoopback(ip: string): boolean {
   return ip === '127.0.0.1' || ip === '::1' || ip.startsWith('127.');
@@ -117,13 +119,174 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+const MAX_REDIRECTS = 10;
+
 export function createSafeFetch(options: SsrfCheckOptions = {}): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    const check = await isSafeUrl(url, options);
-    if (!check.safe) {
-      throw new Error(`SSRF blocked: ${check.reason}`);
+    if (typeof input === 'object' && !(input instanceof URL) && 'url' in input) {
+      // Request object — merge its own method/headers/body with init (init wins).
+      const merged: RequestInit = {
+        method: init?.method ?? input.method,
+        headers: init?.headers ?? input.headers,
+        body: init?.body ?? (input.method !== 'GET' && input.method !== 'HEAD' ? await input.arrayBuffer() : undefined),
+        signal: init?.signal ?? input.signal,
+        redirect: init?.redirect ?? input.redirect,
+      };
+      return safeRequest(input.url, merged, options, 0);
     }
-    return fetch(input, init);
+    const url = typeof input === 'string' ? input : input.href;
+    return safeRequest(url, init, options, 0);
   };
+}
+
+/**
+ * Performs an HTTP(S) request with SSRF validation and DNS-rebinding (TOCTOU)
+ * pinning. Every redirect hop is re-validated — without that, an allowed URL
+ * could 302 to a private/metadata address and bypass the initial check.
+ *
+ * Pinning is done via the `lookup` socket option rather than URL rewriting:
+ * the hostname stays in the URL, so TLS SNI and certificate validation work
+ * normally (the previous IP-rewrite approach broke HTTPS cert validation).
+ */
+async function safeRequest(
+  url: string,
+  init: RequestInit | undefined,
+  options: SsrfCheckOptions,
+  redirectCount: number,
+): Promise<Response> {
+  const check = await isSafeUrl(url, options);
+  if (!check.safe) {
+    throw new Error(`SSRF blocked: ${check.reason}`);
+  }
+
+  const parsed = new URL(url);
+  const hostname = parsed.hostname;
+
+  // Pin the resolved IP to prevent DNS rebinding (TOCTOU): isSafeUrl resolved
+  // the hostname and validated the IP, but a naive request would re-resolve
+  // DNS — allowing a malicious DNS server to return a safe IP for the check
+  // and a private IP (e.g. 169.254.169.254) for the actual connection.
+  let resolvedIp: string | null = null;
+  if (!isIP(hostname)) {
+    try {
+      const addresses = await withTimeout(lookup(hostname, { all: true }), options.dnsTimeout ?? 5000);
+      // isSafeUrl already validated all addresses; use the first.
+      if (addresses.length > 0) resolvedIp = addresses[0].address;
+    } catch {
+      // If DNS fails here, isSafeUrl would have caught it. Fall through —
+      // Node will resolve normally.
+    }
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    const mod = parsed.protocol === 'https:' ? httpsRequest : httpRequest;
+    const headers: Record<string, string> = {};
+    if (init?.headers) {
+      const h = new Headers(init.headers);
+      h.forEach((value, key) => {
+        headers[key] = value;
+      });
+    }
+
+    const req = mod(
+      url,
+      {
+        method: init?.method ?? 'GET',
+        headers,
+        // Pin DNS: return the validated IP for the hostname. The hostname
+        // itself stays in the request, so TLS SNI and certificate
+        // validation still see the real domain — only the TCP connection
+        // goes to the pinned address.
+        lookup: resolvedIp
+          ? (
+              _host: string,
+              opts: { all?: boolean } | undefined,
+              cb: (err: Error | null, address: string | import('node:dns').LookupAddress[], family?: number) => void,
+            ) => {
+              const family = isIP(resolvedIp) === 6 ? 6 : 4;
+              // Node calls lookup with all:true for some connection paths
+              // (expecting [{address,family}]) and all:false for others
+              // (expecting (address, family)). Handle both.
+              if (opts?.all) cb(null, [{ address: resolvedIp, family }]);
+              else cb(null, resolvedIp, family);
+            }
+          : undefined,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', async () => {
+          const body = Buffer.concat(chunks);
+          const status = res.statusCode ?? 0;
+
+          // Handle redirects per fetch semantics: 'error' rejects, 'manual'
+          // returns the 3xx response, 'follow' (default) re-validates each hop.
+          if (status >= 300 && status < 400 && res.headers.location) {
+            if (init?.redirect === 'manual') {
+              // Fall through to return the 3xx response as-is.
+            } else if (init?.redirect === 'error') {
+              reject(new Error(`SSRF fetch encountered a redirect (${status})`));
+              return;
+            } else if (redirectCount >= MAX_REDIRECTS) {
+              reject(new Error('SSRF fetch exceeded maximum redirects'));
+              return;
+            } else {
+              try {
+                const redirectUrl = new URL(res.headers.location, url).href;
+                // Per fetch spec, 301/302/303 downgrade non-GET/HEAD to GET.
+                const downgrade = status === 301 || status === 302 || status === 303;
+                const method = init?.method ?? 'GET';
+                const redirectInit: RequestInit = {
+                  ...init,
+                  method: downgrade && method !== 'GET' && method !== 'HEAD' ? 'GET' : method,
+                  body: downgrade && method !== 'GET' && method !== 'HEAD' ? undefined : init?.body,
+                };
+                const next = await safeRequest(redirectUrl, redirectInit, options, redirectCount + 1);
+                resolve(next);
+              } catch (err) {
+                reject(err);
+              }
+              return;
+            }
+          }
+
+          const resHeaders = new Headers();
+          for (const [key, value] of Object.entries(res.headers)) {
+            if (value !== undefined) resHeaders.set(key, Array.isArray(value) ? value.join(', ') : String(value));
+          }
+
+          resolve(
+            new Response(body, {
+              status,
+              statusText: res.statusMessage,
+              headers: resHeaders,
+            }),
+          );
+        });
+      },
+    );
+
+    req.on('error', reject);
+
+    const writeBody = async () => {
+      const body = init?.body;
+      if (!body) return;
+      // Convert any BodyInit to bytes — req.write only accepts
+      // string | Buffer | Uint8Array, but BodyInit includes streams,
+      // FormData, Blob, ArrayBuffer, URLSearchParams, etc.
+      if (typeof body === 'string' || body instanceof Uint8Array) {
+        req.write(body);
+      } else {
+        const bytes = Buffer.from(await new Response(body as BodyInit).arrayBuffer());
+        req.write(bytes);
+      }
+    };
+
+    writeBody()
+      .then(() => req.end())
+      .catch((err) => {
+        req.destroy(err);
+        reject(err);
+      });
+  });
 }

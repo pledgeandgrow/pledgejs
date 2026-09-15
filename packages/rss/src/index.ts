@@ -83,6 +83,12 @@ export function generateRSSFeed(options: FeedOptions): string {
     }
     if (item.custom) {
       for (const [key, value] of Object.entries(item.custom)) {
+        // Validate the element name to prevent XML injection — a key like
+        // `foo></item><item><script>alert(1)</script><bar` would inject
+        // arbitrary XML. Only safe XML element names are allowed.
+        if (!/^[a-zA-Z_][a-zA-Z0-9_.-]*$/.test(key)) {
+          throw new Error(`Invalid RSS custom element name: ${key}`);
+        }
         parts.push(`      <${key}>${escapeXml(value)}</${key}>`);
       }
     }

@@ -1,3 +1,5 @@
+// @unconsumed — exported but not used in the request path. See REMAINING-ISSUES.md.
+
 /**
  * #276 — Lambda PSX Support.
  *

@@ -35,6 +35,15 @@ function loadNative(): NativeWsCompression | null {
 }
 
 /**
+ * Maximum decompressed payload size (16 MiB). A malicious peer could send a
+ * tiny compressed "zip bomb" that decompresses to gigabytes and OOMs the
+ * server. We reject decompressed output larger than this. The primary
+ * defense against WS memory exhaustion is the frame-size limit enforced at
+ * the WebSocket layer; this cap is a backstop for the compression path.
+ */
+const MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024;
+
+/**
  * Compresses a WebSocket message using permessage-deflate (zlib).
  *
  * @param data Message payload
@@ -51,14 +60,27 @@ export function wsCompress(data: Buffer, level?: number): Buffer {
 /**
  * Decompresses a WebSocket message.
  *
+ * Rejects decompressed output larger than `MAX_DECOMPRESSED_BYTES` to bound
+ * memory use against compressed "zip bombs". The primary defense against WS
+ * memory exhaustion is the frame-size limit at the WebSocket layer; this cap
+ * is a backstop for the compression path.
+ *
  * @param data Compressed payload
  */
 export function wsDecompress(data: Buffer): Buffer {
   const addon = loadNative();
   if (addon) {
-    return addon.wsDecompress(data);
+    const out = addon.wsDecompress(data);
+    if (out.length > MAX_DECOMPRESSED_BYTES) {
+      throw new Error(`Decompressed WebSocket payload exceeds ${MAX_DECOMPRESSED_BYTES} bytes`);
+    }
+    return out;
   }
-  return inflateSync(data);
+  const out = inflateSync(data);
+  if (out.length > MAX_DECOMPRESSED_BYTES) {
+    throw new Error(`Decompressed WebSocket payload exceeds ${MAX_DECOMPRESSED_BYTES} bytes`);
+  }
+  return out;
 }
 
 /**

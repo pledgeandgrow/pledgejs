@@ -29,7 +29,10 @@ describe('PSX Sccache', () => {
       expect(typeof result).toBe('boolean');
     });
 
-    it('generates cache key', () => {
+    // generateCacheKey spawns `rustc --version` via execSync, which is slow on
+    // Windows (subprocess spawn + PATH search). Give it headroom past the
+    // 5000ms default so this doesn't flake on cold CI runners.
+    it('generates cache key', { timeout: 30000 }, () => {
       const manager = new SccacheManager();
       const key = manager.generateCacheKey('/nonexistent');
       expect(key.key).toContain('psx-');

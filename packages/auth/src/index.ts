@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual, scrypt as scryptCb } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { PledgeRequest } from 'pledgestack-shared';
+import { InMemorySecurityStore, type SecurityKeyValueStore } from './security-store';
 
 const scrypt = promisify(scryptCb) as (
   password: string | Buffer,
@@ -108,6 +109,20 @@ export class SessionManager {
     return this.buildCookie('', 0);
   }
 
+  /**
+   * Regenerate the session on privilege change (login, role change, MFA enroll).
+   * Destroys the old token's validity by issuing a fresh token with new random
+   * material. The caller should set the returned Set-Cookie header.
+   * This defends against session fixation: a pre-auth cookie value becomes
+   * useless after login because the signed payload (and thus the signature)
+   * changes completely.
+   */
+  regenerateSession(oldToken: string | null, data: SessionData): string {
+    // Discard the old token entirely — we mint a new one with fresh expiresAt.
+    void oldToken;
+    return this.sessionCookie(data);
+  }
+
   private buildCookie(value: string, maxAge: number): string {
     const parts = [
       `${this.cookieName}=${value}`,
@@ -184,10 +199,174 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 /**
+ * Password strength validation result.
+ */
+export interface PasswordStrengthResult {
+  valid: boolean;
+  score: number; // 0-4
+  issues: string[];
+}
+
+/**
+ * Validate password strength before hashing.
+ * Enforces minimum length, character-class requirements, and rejects common
+ * passwords. This is a baseline policy — callers may layer on breach-dictionary
+ * checks (e.g. HIBP k-anonymity) for higher assurance.
+ */
+export function validatePasswordStrength(password: string): PasswordStrengthResult {
+  const issues: string[] = [];
+  if (password.length < 12) issues.push('Password must be at least 12 characters long');
+  if (password.length > 128) issues.push('Password must be at most 128 characters long');
+  if (!/[a-z]/.test(password)) issues.push('Password must contain a lowercase letter');
+  if (!/[A-Z]/.test(password)) issues.push('Password must contain an uppercase letter');
+  if (!/[0-9]/.test(password)) issues.push('Password must contain a digit');
+  if (!/[^a-zA-Z0-9]/.test(password)) issues.push('Password must contain a special character');
+
+  const common = ['password', '12345678', 'qwerty123', 'letmein', 'admin123'];
+  if (common.some((c) => password.toLowerCase().includes(c))) {
+    issues.push('Password contains a common pattern');
+  }
+
+  // Score: 4 minus issues (clamped to 0-4)
+  const score = Math.max(0, 4 - issues.length);
+  return { valid: issues.length === 0, score, issues };
+}
+
+/**
  * Generate a random token (for CSRF, OAuth state, etc.)
  */
 export function generateToken(length = 32): string {
   return randomBytes(length).toString('hex');
+}
+
+/**
+ * Email verification token generation and verification.
+ * Tokens are HMAC-signed and carry an expiry, so they can be sent via email
+ * links without a server-side store. The token encodes the email and expiry
+ * in a signed payload (base64url.signature).
+ */
+const EMAIL_VERIFICATION_TTL = 24 * 60 * 60; // 24 hours
+
+export function generateVerificationToken(email: string, secret: string, ttlSeconds = EMAIL_VERIFICATION_TTL): string {
+  const payload = { email, nonce: generateToken(16), ts: Date.now(), exp: Date.now() + ttlSeconds * 1000 };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', secret).update(encoded).digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+export function verifyEmailToken(token: string, secret: string): { email: string; nonce: string } | null {
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [encoded, signature] = parts;
+  const expected = createHmac('sha256', secret).update(encoded).digest('base64url');
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return null;
+  if (!timingSafeEqual(sigBuf, expBuf)) return null;
+  try {
+    const data = JSON.parse(Buffer.from(encoded, 'base64url').toString()) as { email: string; nonce: string; exp: number };
+    if (data.exp && data.exp < Date.now()) return null;
+    return { email: data.email, nonce: data.nonce };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Account lockout manager — tracks failed authentication attempts per
+ * identifier (username/email/IP) and locks the account after N failures
+ * with exponential backoff. In-memory by default; for multi-instance
+ * deployments, back this with a shared store (Redis, KV).
+ */
+export interface AccountLockoutConfig {
+  /** Max failed attempts before lockout (default: 5) */
+  maxAttempts?: number;
+  /** Base lockout duration in seconds (default: 60) */
+  baseLockoutSeconds?: number;
+  /** Max lockout duration in seconds (default: 3600 = 1 hour) */
+  maxLockoutSeconds?: number;
+  /**
+   * Shared store for multi-instance deployments. Default: a process-local
+   * InMemorySecurityStore — with it, limits are per-worker. Provide a
+   * Redis/KV-backed SecurityKeyValueStore for cluster-wide enforcement.
+   */
+  store?: SecurityKeyValueStore;
+}
+
+interface AttemptRecord {
+  failures: number;
+  lockedUntil: number;
+}
+
+export class AccountLockoutManager {
+  private store: SecurityKeyValueStore;
+  private maxAttempts: number;
+  private baseLockoutSeconds: number;
+  private maxLockoutSeconds: number;
+
+  constructor(config: AccountLockoutConfig = {}) {
+    this.store = config.store ?? new InMemorySecurityStore();
+    this.maxAttempts = config.maxAttempts ?? 5;
+    this.baseLockoutSeconds = config.baseLockoutSeconds ?? 60;
+    this.maxLockoutSeconds = config.maxLockoutSeconds ?? 3600;
+  }
+
+  private key(identifier: string): string {
+    return `lockout:${identifier}`;
+  }
+
+  private async getRecord(identifier: string): Promise<AttemptRecord> {
+    const raw = await this.store.get(this.key(identifier));
+    if (!raw) return { failures: 0, lockedUntil: 0 };
+    try {
+      const parsed = JSON.parse(raw) as AttemptRecord;
+      return {
+        failures: typeof parsed.failures === 'number' ? parsed.failures : 0,
+        lockedUntil: typeof parsed.lockedUntil === 'number' ? parsed.lockedUntil : 0,
+      };
+    } catch {
+      return { failures: 0, lockedUntil: 0 };
+    }
+  }
+
+  /** Record a failed attempt for the given identifier. Returns the new lockout state. */
+  async recordFailure(identifier: string): Promise<{ locked: boolean; lockedUntil: number }> {
+    const rec = await this.getRecord(identifier);
+    rec.failures += 1;
+    if (rec.failures >= this.maxAttempts) {
+      // Exponential backoff: base * 2^(failures - maxAttempts), capped
+      const backoff = Math.min(
+        this.baseLockoutSeconds * Math.pow(2, rec.failures - this.maxAttempts),
+        this.maxLockoutSeconds,
+      );
+      rec.lockedUntil = Date.now() + backoff * 1000;
+    }
+    await this.store.set(this.key(identifier), JSON.stringify(rec), this.maxLockoutSeconds * 1000);
+    return { locked: rec.failures >= this.maxAttempts, lockedUntil: rec.lockedUntil };
+  }
+
+  /** Record a successful authentication — clears the failure counter. */
+  async recordSuccess(identifier: string): Promise<void> {
+    await this.store.delete(this.key(identifier));
+  }
+
+  /** Check if the identifier is currently locked out. */
+  async isLocked(identifier: string): Promise<boolean> {
+    const rec = await this.getRecord(identifier);
+    if (rec.lockedUntil && rec.lockedUntil > Date.now()) return true;
+    // Lockout expired — reset
+    if (rec.lockedUntil && rec.lockedUntil <= Date.now()) {
+      await this.store.delete(this.key(identifier));
+      return false;
+    }
+    return false;
+  }
+
+  /** Get remaining attempts before lockout. */
+  async remainingAttempts(identifier: string): Promise<number> {
+    const rec = await this.getRecord(identifier);
+    return Math.max(0, this.maxAttempts - rec.failures);
+  }
 }
 
 /**
@@ -200,7 +379,7 @@ export function createOAuthState(redirect: string, secret: string): string {
   return `${encoded}.${signature}`;
 }
 
-export function verifyOAuthState(state: string, secret: string): { redirect: string; nonce: string } | null {
+export function verifyOAuthState(state: string, secret: string, maxAgeSeconds = 600): { redirect: string; nonce: string } | null {
   const parts = state.split('.');
   if (parts.length !== 2) return null;
   const [encoded, signature] = parts;
@@ -210,7 +389,11 @@ export function verifyOAuthState(state: string, secret: string): { redirect: str
   if (sigBuf.length !== expBuf.length) return null;
   if (!timingSafeEqual(sigBuf, expBuf)) return null;
   try {
-    return JSON.parse(Buffer.from(encoded, 'base64url').toString());
+    const data = JSON.parse(Buffer.from(encoded, 'base64url').toString()) as { redirect: string; nonce: string; ts: number };
+    // Enforce expiry to prevent replay attacks (the oauth.ts version does this;
+    // the index.ts helper previously did not).
+    if (data.ts && Date.now() - data.ts > maxAgeSeconds * 1000) return null;
+    return { redirect: data.redirect, nonce: data.nonce };
   } catch {
     return null;
   }
@@ -261,9 +444,10 @@ export { generateReferrerPolicy, generateReferrerPolicyHeaders, referrerPolicyMi
 export { generatePermissionPolicy, generatePermissionPolicyHeaders, generatePermissionPolicyValue, permissionPolicyMiddleware, getRestrictedFeatures, getDefaultDisabledPermissions, allowPermission, type PermissionPolicyConfig, type PermissionPolicyDirective } from './permissions-policy';
 export { generatePKCE, createOAuthStateParam, verifyOAuthStateParam, buildAuthorizeUrl, exchangeCodeForTokens, refreshAccessToken, fetchUserInfo, needsRefresh, ensureValidTokens, OAuthManager, type OAuthProviderConfig, type OAuthTokens, type OAuthUserInfo, type PKCEChallenge } from './oauth';
 export { signJWT, verifyJWT, decodeJWT, generateKeyPair, generateECKeyPair, JWKSManager, createTokenPair, type JWTAlgorithm, type JWTPayload, type JWTSignOptions, type JWTVerifyOptions, type KeyPair } from './jwt';
-export { generateTOTPSecret, generateTOTPCode, verifyTOTP, generateTOTPURI, enrollTOTP, generateBackupCodes, verifyBackupCode, consumeBackupCode, type TOTPConfig, type TOTPEnrollment } from './totp';
+export { generateTOTPSecret, generateTOTPCode, verifyTOTP, generateTOTPURI, enrollTOTP, generateBackupCodes, verifyBackupCode, consumeBackupCode, TotpReplayGuard, type TOTPConfig, type TOTPEnrollment } from './totp';
 export { generateChallenge, generateRegistrationOptions, generateAuthenticationOptions, verifyRegistrationResponse, verifyAuthenticationResponse, getConditionalUIOptions, isWebAuthnSupported, isConditionalUISupported, type WebAuthnConfig, type WebAuthnCredential } from './webauthn';
 export { RBACManager, createUsePermissions, COMMON_ROLES, type RoleDefinition, type RouteRoleConfig, type RBACContext, type RouteRoleMap } from './rbac';
 export { ABACEvaluator, conditions, createPolicy, allowRule, denyRule, type ABACContext, type ABACCondition, type ABACRule, type ABACPolicy } from './abac';
 export { ApiKeyManager, type ApiKeyScope, type ApiKeyRateLimit, type ManagedApiKeyRecord, type CreateApiKeyOptions, type ApiKeyValidationResult } from './api-key-management';
 export { generateSPMetadata, generateAuthnRequest, parseSAMLResponse, verifySAMLSignature, generateLogoutRequest, type SAMLConfig, type SAMLAuthnRequest, type SAMLUserInfo } from './saml';
+export { InMemorySecurityStore, createSecurityStore, type SecurityKeyValueStore } from './security-store';

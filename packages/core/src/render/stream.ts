@@ -42,6 +42,21 @@ class StreamErrorBoundary extends Component<{ fallback: ComponentType<{ error: E
 }
 
 /**
+ * Default error fallback used when a route segment has no error.tsx — keeps
+ * a render crash from propagating through every layout and killing the
+ * whole stream.
+ */
+function StreamDefaultErrorFallback({ error, reset }: { error: Error; reset: () => void }) {
+  return createElement(
+    'div',
+    { role: 'alert', style: { padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '0.5rem' } },
+    createElement('h2', { style: { margin: '0 0 0.5rem', fontSize: '1rem' } }, 'Something went wrong'),
+    createElement('p', { style: { margin: 0, color: '#6b7280' } }, error.message || 'An unexpected error occurred.'),
+    createElement('button', { onClick: reset, style: { marginTop: '0.5rem' } }, 'Try again'),
+  );
+}
+
+/**
  * Renders a route match to a streaming HTML response.
  * Uses renderToPipeableStream for Suspense boundary streaming.
  * Sends the shell HTML immediately, then streams deferred content as it resolves.
@@ -93,12 +108,17 @@ export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
     searchParams: searchParamsRecord,
   });
 
-  // Wrap with error boundary
-  if (match.route.errorFilePath) {
-    const errorModule = modules.get(match.route.errorFilePath) as ErrorModule | undefined;
-    if (errorModule) {
-      element = createElement(StreamErrorBoundary, { fallback: errorModule.default }, element);
-    }
+  // Wrap with error boundary — route's error.tsx when present, else the
+  // built-in default so a page crash can't kill the whole stream.
+  {
+    const errorModule = match.route.errorFilePath
+      ? (modules.get(match.route.errorFilePath) as ErrorModule | undefined)
+      : undefined;
+    element = createElement(
+      StreamErrorBoundary,
+      { fallback: errorModule?.default ?? StreamDefaultErrorFallback },
+      element,
+    );
   }
 
   // Wrap with Suspense boundary for streaming
@@ -152,6 +172,14 @@ export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
   return new Promise((resolve, reject) => {
     let html = '';
     let shellReady = false;
+    let settled = false;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(fallbackTimer);
+      fn();
+    };
 
     const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
       onShellReady() {
@@ -164,27 +192,32 @@ export async function renderSSRStream(ctx: StreamSSRContext): Promise<string> {
         });
         pipe(stream);
         stream.on('finish', () => {
-          resolve(wrapStreamHtml(html, match.route, headTags, viewport));
+          settle(() => resolve(wrapStreamHtml(html, match.route, headTags, viewport)));
+        });
+        stream.on('error', (err) => {
+          settle(() => reject(err));
         });
       },
       onShellError(error) {
-        reject(error);
+        settle(() => reject(error));
       },
       onError(error) {
         if (!shellReady) {
-          reject(error);
+          settle(() => reject(error));
         }
       },
     });
 
-    // Fallback: if streaming doesn't work, use renderToString
-    setTimeout(() => {
+    // Fallback: if the shell never becomes ready within 5s, fall back to
+    // renderToString so the request cannot hang indefinitely. Cleared on
+    // settlement to avoid a dangling timer keeping the event loop alive.
+    const fallbackTimer = setTimeout(() => {
       if (!shellReady) {
         try {
           const fallbackHtml = renderToString(createElement(() => element as ReactNode));
-          resolve(wrapStreamHtml(fallbackHtml, match.route, headTags, viewport));
+          settle(() => resolve(wrapStreamHtml(fallbackHtml, match.route, headTags, viewport)));
         } catch (err) {
-          reject(err);
+          settle(() => reject(err));
         }
       }
     }, 5000);

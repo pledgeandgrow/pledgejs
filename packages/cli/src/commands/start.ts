@@ -1,5 +1,6 @@
-import { startNodeServer } from 'pledgestack-server';
+import { startNodeServer, loadEnv } from 'pledgestack-server';
 import { resolveBundlerAdapter } from '../bundler-resolver';
+import { assertEnv } from 'pledgestack-shared';
 
 /**
  * Starts the production server.
@@ -25,6 +26,20 @@ export async function startCommand(options: { port?: number; hostname?: string }
 
   const port = options.port ?? 3000;
   const hostname = options.hostname ?? 'localhost';
+
+  loadEnv(config.rootDir, 'production');
+
+  // Validate required env vars before starting — fail fast with a clear error
+  // instead of crashing at the first request that needs a missing var (#49).
+  if (config.envSchema) {
+    try {
+      assertEnv(config.envSchema);
+    } catch (err) {
+      console.error('\n  ✖ Environment validation failed:\n');
+      console.error(`    ${err}\n`);
+      process.exit(1);
+    }
+  }
 
   console.log('\n  PledgeStack — Starting production server...\n');
 

@@ -12,24 +12,32 @@ describe('Serverless Cold Start Optimization (#279)', () => {
   });
 
   describe('module loading', () => {
-    it('loads modules on demand', () => {
+    it('loads modules on demand', async () => {
       let loaded = false;
       optimizer.registerLoader('mod1', () => { loaded = true; return { fn: () => 42 }; });
-      const mod = optimizer.get('mod1');
+      const mod = await optimizer.get('mod1');
       expect(loaded).toBe(true);
       expect((mod as { fn: () => number }).fn()).toBe(42);
     });
 
-    it('caches loaded modules', () => {
+    it('caches loaded modules', async () => {
       let loadCount = 0;
       optimizer.registerLoader('mod1', () => { loadCount++; return {}; });
-      optimizer.get('mod1');
-      optimizer.get('mod1');
+      await optimizer.get('mod1');
+      await optimizer.get('mod1');
       expect(loadCount).toBe(1);
     });
 
-    it('throws for unregistered module', () => {
-      expect(() => optimizer.get('unknown')).toThrow('No loader registered');
+    it('throws for unregistered module', async () => {
+      await expect(optimizer.get('unknown')).rejects.toThrow('No loader registered');
+    });
+
+    it('supports async loaders', async () => {
+      optimizer.registerLoader('mod1', async () => {
+        return { value: 99 };
+      });
+      const mod = await optimizer.get('mod1');
+      expect((mod as { value: number }).value).toBe(99);
     });
   });
 
@@ -68,25 +76,33 @@ describe('Serverless Cold Start Optimization (#279)', () => {
   });
 
   describe('metrics', () => {
-    it('tracks load metrics', () => {
+    it('tracks load metrics', async () => {
       optimizer.registerLoader('mod1', () => ({ value: 42 }));
-      optimizer.get('mod1');
+      await optimizer.get('mod1');
       const metrics = optimizer.getMetrics();
       expect(metrics.addonLoadCount).toBe(1);
       expect(metrics.moduleLoadTimes.length).toBe(1);
     });
 
-    it('tracks cache hits', () => {
+    it('tracks cache hits', async () => {
       optimizer.registerLoader('mod1', () => ({ value: 42 }));
-      optimizer.get('mod1');
-      optimizer.get('mod1');
+      await optimizer.get('mod1');
+      await optimizer.get('mod1');
       const metrics = optimizer.getMetrics();
       expect(metrics.cacheHitCount).toBe(1);
     });
 
-    it('generates report', () => {
+    it('marks modules as cached on second access', async () => {
       optimizer.registerLoader('mod1', () => ({ value: 42 }));
-      optimizer.get('mod1');
+      await optimizer.get('mod1');
+      await optimizer.get('mod1');
+      const metrics = optimizer.getMetrics();
+      expect(metrics.moduleLoadTimes[0].cached).toBe(true);
+    });
+
+    it('generates report', async () => {
+      optimizer.registerLoader('mod1', () => ({ value: 42 }));
+      await optimizer.get('mod1');
       const report = optimizer.generateReport();
       expect(report).toContain('Cold Start Report');
       expect(report).toContain('mod1');
@@ -94,12 +110,12 @@ describe('Serverless Cold Start Optimization (#279)', () => {
   });
 
   describe('clearCache', () => {
-    it('clears cache forcing reload', () => {
+    it('clears cache forcing reload', async () => {
       let loadCount = 0;
       optimizer.registerLoader('mod1', () => { loadCount++; return {}; });
-      optimizer.get('mod1');
+      await optimizer.get('mod1');
       optimizer.clearCache();
-      optimizer.get('mod1');
+      await optimizer.get('mod1');
       expect(loadCount).toBe(2);
     });
   });

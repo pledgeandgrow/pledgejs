@@ -91,12 +91,17 @@ export async function renderHybridSSR(ctx: HybridSSRContext): Promise<HybridSSRR
     searchParams: searchParamsRecord,
   });
 
-  // Wrap with error boundary
-  if (match.route.errorFilePath) {
-    const errorModule = modules.get(match.route.errorFilePath) as ErrorModule | undefined;
-    if (errorModule) {
-      element = createElement(HybridErrorBoundary, { fallback: errorModule.default }, element);
-    }
+  // Wrap with error boundary — route's error.tsx when present, else the
+  // built-in default so a page crash can't kill the whole render.
+  {
+    const errorModule = match.route.errorFilePath
+      ? (modules.get(match.route.errorFilePath) as ErrorModule | undefined)
+      : undefined;
+    element = createElement(
+      HybridErrorBoundary,
+      { fallback: errorModule?.default ?? HybridDefaultErrorFallback },
+      element,
+    );
   }
 
   // Wrap with Suspense
@@ -269,6 +274,14 @@ async function renderHybrid(element: ReactNode, _ctx: HybridSSRContext): Promise
   return new Promise((resolve, reject) => {
     let html = '';
     let shellReady = false;
+    let settled = false;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      fn();
+    };
 
     const writable = new Writable({
       write(chunk: Buffer, _encoding: string, callback: () => void) {
@@ -277,22 +290,33 @@ async function renderHybrid(element: ReactNode, _ctx: HybridSSRContext): Promise
       },
     });
 
+    writable.on('error', (err) => settle(() => reject(err)));
+
     const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
       onShellReady() {
         shellReady = true;
         pipe(writable);
       },
       onAllReady() {
-        resolve(html);
+        settle(() => resolve(html));
       },
       onShellError(error) {
-        reject(error);
+        settle(() => reject(error));
       },
       onError(error) {
-        if (!shellReady) reject(error);
+        // Surface post-shell errors too: previously only pre-shell errors
+        // rejected, so a failure after the shell streamed could leave the
+        // promise pending forever.
+        if (!shellReady) settle(() => reject(error));
+        else settle(() => reject(error));
       },
     });
     void pipe;
+
+    // Hard timeout so a stuck render cannot hang the request indefinitely.
+    const timeout = setTimeout(() => {
+      settle(() => reject(new Error('Hybrid SSR render timed out')));
+    }, 10000);
   });
 }
 
@@ -319,6 +343,20 @@ class HybridErrorBoundary extends Component<
     }
     return this.props.children as ReactNode;
   }
+}
+
+/**
+ * Default error fallback used when a route segment has no error.tsx — keeps
+ * a render crash from propagating through every layout.
+ */
+function HybridDefaultErrorFallback({ error, reset }: { error: Error; reset: () => void }) {
+  return createElement(
+    'div',
+    { role: 'alert', style: { padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '0.5rem' } },
+    createElement('h2', { style: { margin: '0 0 0.5rem', fontSize: '1rem' } }, 'Something went wrong'),
+    createElement('p', { style: { margin: 0, color: '#6b7280' } }, error.message || 'An unexpected error occurred.'),
+    createElement('button', { onClick: reset, style: { marginTop: '0.5rem' } }, 'Try again'),
+  );
 }
 
 /**

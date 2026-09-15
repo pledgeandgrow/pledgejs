@@ -265,6 +265,7 @@ export class PsxAuditLogger {
     functionName: string,
     module: string,
   ): T {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- capture for closure
     const logger = this;
 
     const wrapped = async function (...args: never[]): Promise<unknown> {

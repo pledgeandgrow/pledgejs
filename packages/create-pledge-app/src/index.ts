@@ -31,7 +31,7 @@ async function resolveLatestVersions(): Promise<{ pledgestack: string; pledgepac
   };
 }
 
-const TEMPLATES = ['default', 'blog', 'api', 'saas', 'portfolio', 'dashboard', 'ecommerce'] as const;
+const TEMPLATES = ['pledge', 'default', 'blog', 'api', 'saas', 'portfolio', 'dashboard', 'ecommerce'] as const;
 type Template = (typeof TEMPLATES)[number];
 
 const FRAMEWORKS = ['react', 'vue', 'solid', 'svelte'] as const;
@@ -129,6 +129,7 @@ export async function createApp(): Promise<void> {
           return [{ title: `Default — Starter app with a single page (${framework})`, value: 'default' }];
         }
         return [
+          { title: 'Pledge — Full-stack React + Rust backend (server/ directory, .psx support)', value: 'pledge' },
           { title: 'Default — Starter app with a single page', value: 'default' },
           { title: 'Blog — Blog with static generation and dynamic routes', value: 'blog' },
           { title: 'API — REST API with CRUD routes', value: 'api' },
@@ -216,7 +217,7 @@ async function scaffold(options: CreateOptions): Promise<void> {
 
   writeFileSync(
     join(targetDir, 'pnpm-workspace.yaml'),
-    "allowBuilds:\n  pledgepack: true\n  esbuild: true\nminimumReleaseAgeExclude:\n  - pledgepack\n  - pledgestack-core\n  - pledgestack-shared\n  - pledgestack-server\n  - pledgestack-cli\n",
+    "allowBuilds:\n  pledgepack: true\n  esbuild: true\n",
   );
 
   if (installDeps) {

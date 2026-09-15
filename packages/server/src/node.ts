@@ -80,8 +80,18 @@ export function startNodeServer(options: NodeServerOptions) {
         return;
       }
 
-      // Metrics endpoint
+      // Metrics endpoint — require authentication via bearer token to prevent
+      // information disclosure of route structure and traffic patterns.
       if (url.pathname === '/metrics') {
+        const metricsToken = process.env.PLEDGE_METRICS_TOKEN;
+        if (metricsToken) {
+          const auth = req.headers['authorization'];
+          if (auth !== `Bearer ${metricsToken}`) {
+            res.writeHead(401, { 'Content-Type': 'text/plain' });
+            res.end('Unauthorized');
+            return;
+          }
+        }
         const metrics = JSON.stringify(metricsCollector.export(), null, 2);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(metrics);
@@ -104,10 +114,20 @@ export function startNodeServer(options: NodeServerOptions) {
       // UTF-8 decoding (the handler accepts string | Buffer). GET/HEAD never
       // have a body. (Previously only POST/PUT/PATCH were read, and always
       // UTF-8-stringified, dropping DELETE bodies and mangling uploads.)
+      // Enforce a max body size to prevent memory exhaustion from oversized
+      // POSTs (default 1MB, configurable via PLEDGE_MAX_BODY_SIZE in bytes).
+      const MAX_BODY_SIZE = parseInt(process.env.PLEDGE_MAX_BODY_SIZE ?? '1048576', 10);
       let body: Buffer | null = null;
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         const chunks: Buffer[] = [];
+        let totalSize = 0;
         for await (const chunk of req) {
+          totalSize += (chunk as Buffer).length;
+          if (totalSize > MAX_BODY_SIZE) {
+            res.writeHead(413, { 'Content-Type': 'text/plain' });
+            res.end('Request body too large');
+            return;
+          }
           chunks.push(chunk as Buffer);
         }
         body = chunks.length > 0 ? Buffer.concat(chunks) : null;
@@ -154,12 +174,21 @@ export function startNodeServer(options: NodeServerOptions) {
       if (responseBody !== null) {
         res.end(responseBody);
       } else if (response.body && typeof response.body !== 'string') {
-        // ReadableStream body — pipe it through.
+        // ReadableStream body — pipe it through with backpressure handling.
         const reader = response.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(value);
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            // Respect backpressure: if res.write returns false, wait for drain.
+            if (!res.write(value)) {
+              await new Promise<void>((resolve) => res.once('drain', () => resolve()));
+            }
+          }
+        } catch (streamErr) {
+          // Client disconnect or write error — cancel the reader to avoid leaks.
+          try { await reader.cancel(); } catch { /* already closed */ }
+          console.error('[pledgestack] Stream pipe error:', streamErr);
         }
         res.end();
       } else {
@@ -190,7 +219,7 @@ export function startNodeServer(options: NodeServerOptions) {
     <div class="status">500</div>
     <h1 class="title">Internal Server Error</h1>
     <p class="message">Something went wrong on the server.</p>
-    ${isDev ? `<pre style="text-align:left;background:#1a1a1a;padding:1rem;border-radius:8px;overflow:auto;font-size:0.85rem;color:#ff6b6b;">${String(err).replace(/</g, '&lt;')}</pre>` : ''}
+    ${isDev ? `<pre style="text-align:left;background:#1a1a1a;padding:1rem;border-radius:8px;overflow:auto;font-size:0.85rem;color:#ff6b6b;">${String(err).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}</pre>` : ''}
     <p><a href="/">Go home</a></p>
   </div>
 </body>
@@ -216,8 +245,28 @@ export function startNodeServer(options: NodeServerOptions) {
     // App WebSocket routes (ws://host/ws/*)
     if (upgradeUrl.startsWith('/ws/')) {
       // WebSocket route handling is done via the pledgestack-ws plugin
-      // The actual WebSocket server is created by the plugin's configureServer hook
-      // If no WS plugin is configured, close the connection
+      // The actual WebSocket server is created by the plugin's configureServer hook.
+      // Validate Origin header to prevent CSRF-WS attacks — any origin should
+      // not be able to initiate a WebSocket connection.
+      const origin = req.headers['origin'];
+      if (origin) {
+        try {
+          const originUrl = new URL(origin);
+          const host = req.headers['host'];
+          // Reject cross-origin WebSocket upgrades unless explicitly allowed.
+          if (host && originUrl.host !== host) {
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            socket.destroy();
+            return;
+          }
+        } catch {
+          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      }
+      // If no WS plugin is configured, close the connection gracefully.
+      socket.write('HTTP/1.1 501 Not Implemented\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -276,14 +325,25 @@ function proxyRequest(req: IncomingMessage, res: ServerResponse, target: string)
   const proxyReq = httpRequest(target + req.url, {
     method: req.method,
     headers: req.headers,
+    timeout: 30000, // 30s timeout — prevents indefinite hang if bundler is stuck
   }, (proxyRes) => {
     res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
     proxyRes.pipe(res);
   });
   proxyReq.on('error', (err) => {
     console.error('[pledgestack] Proxy error:', err);
-    res.writeHead(502, { 'Content-Type': 'text/plain' });
-    res.end('Bad Gateway — bundler dev server unavailable');
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain' });
+      res.end('Bad Gateway — bundler dev server unavailable');
+    }
+  });
+  proxyReq.on('timeout', () => {
+    console.error('[pledgestack] Proxy timeout — bundler dev server not responding');
+    proxyReq.destroy();
+    if (!res.headersSent) {
+      res.writeHead(504, { 'Content-Type': 'text/plain' });
+      res.end('Gateway Timeout — bundler dev server not responding');
+    }
   });
   req.pipe(proxyReq);
 }

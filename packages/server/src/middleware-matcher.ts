@@ -73,8 +73,11 @@ function compilePattern(pattern: MatcherPattern): RegExp {
   regex = regex.replace(/[.+^${}()|[\]\\]/g, '\\$&');
 
   // Replace placeholders with actual regex patterns
+  // eslint-disable-next-line no-control-regex -- \x00 is a deliberate sentinel placeholder
   regex = regex.replace(/\x00PARAM\x00/g, '[^/]+')
+    // eslint-disable-next-line no-control-regex -- \x00 is a deliberate sentinel placeholder
     .replace(/\x00STAR\x00/g, '.*')
+    // eslint-disable-next-line no-control-regex -- \x00 is a deliberate sentinel placeholder
     .replace(/\x00OPT\x00/g, '[^/]?');
 
   return new RegExp(`^${regex}$`);

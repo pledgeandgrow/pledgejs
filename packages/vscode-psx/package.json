@@ -110,16 +110,19 @@
                 "type": "string",
                 "description": "Path to the .psx or .ps file to debug"
               },
+              "runtimeProgram": {
+                "type": "string",
+                "description": "JS entry to run under the Node inspector (defaults to .pledge/server.js or dist/index.js)"
+              },
+              "runtimeArgs": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Arguments passed to the runtime program"
+              },
               "stopAtEntry": {
                 "type": "boolean",
-                "description": "Stop at entry point",
+                "description": "Stop at the entry point",
                 "default": false
-              },
-              "backend": {
-                "type": "string",
-                "enum": ["lldb", "gdb"],
-                "description": "Debugger backend",
-                "default": "lldb"
               }
             }
           }
@@ -130,8 +133,7 @@
             "request": "launch",
             "name": "Debug PSX",
             "program": "${file}",
-            "stopAtEntry": false,
-            "backend": "lldb"
+            "stopAtEntry": false
           }
         ]
       }

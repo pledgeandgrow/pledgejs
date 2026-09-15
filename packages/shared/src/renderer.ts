@@ -20,7 +20,7 @@ import type { ResolvedRoute, Viewport, RouteMatch, MiddlewareResult } from './ty
 /**
  * Framework types supported by PledgeStack.
  */
-export type Framework = 'react' | 'vue' | 'solid' | 'svelte';
+export type Framework = 'react' | 'vue' | 'solid' | 'svelte' | 'pledge';
 
 /**
  * Generic module types — framework-agnostic representations of route modules.

@@ -10,7 +10,7 @@ import {
   ensureRootCargoToml,
   serializeSourceMap,
 } from 'pledgestack-core';
-import { generateRustFallback } from 'pledgestack-shared';
+import { generateRustFallback, BoundedLRUMap, MAX_TRANSFORM_CACHE_ENTRIES } from 'pledgestack-shared';
 import type {
   BundlerAdapter,
   BuildResult,
@@ -21,7 +21,7 @@ import type {
 } from 'pledgestack-shared';
 import type { PledgeConfig } from 'pledgestack-shared';
 
-const TRANSFORM_CACHE = new Map<string, string>();
+const TRANSFORM_CACHE = new BoundedLRUMap<string, string>(MAX_TRANSFORM_CACHE_ENTRIES);
 
 /**
  * Vite bundler adapter for PledgeStack.
@@ -61,12 +61,17 @@ export const viteAdapter: BundlerAdapter = {
             input: collectServerEntries(config),
             output: {
               format: 'esm',
-              entryFileNames: '[name].js',
+              // Content-hash server entries so they can be safely long-term
+              // cached and so deployments can atomically swap.
+              entryFileNames: '[name].[hash].js',
+              chunkFileNames: 'chunks/[name].[hash].js',
             },
           },
           target: 'es2022',
           minify: 'esbuild',
-          sourcemap: false,
+          // Enable source maps for production debugging — previously disabled,
+          // making production stack traces un-actionable.
+          sourcemap: true,
         },
         resolve: {
           alias: buildAliasMap(config),
@@ -93,7 +98,7 @@ export const viteAdapter: BundlerAdapter = {
             },
             target: 'es2022',
             minify: 'esbuild',
-            sourcemap: false,
+            sourcemap: true,
           },
           resolve: {
             alias: buildAliasMap(config),

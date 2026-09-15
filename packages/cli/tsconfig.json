@@ -34,6 +34,8 @@
     { "path": "../bundler-rollup" },
     { "path": "../bundler-turbopack" },
     { "path": "../bundler-rsbuild" },
-    { "path": "../bundler-webpack" }
+    { "path": "../bundler-webpack" },
+    { "path": "../deploy" },
+    { "path": "../content" }
   ]
 }

@@ -30,6 +30,14 @@ import { getPledgeRegistry } from './pledge';
 const hydratedPledges = new Set<string>();
 
 /**
+ * Active media-query listeners installed for pending `media`-strategy
+ * pledges. Tracked so they can be torn down on route change — otherwise a
+ * listener installed for a pledge that never matches (e.g. the user navigates
+ * away before the viewport matches the query) leaks forever.
+ */
+const activeMediaListeners: Array<{ mql: MediaQueryList; handler: () => void }> = [];
+
+/**
  * Component registry — maps pledge IDs to component constructors.
  * Populated by dynamically imported modules via registerPledgeComponent().
  *
@@ -204,9 +212,12 @@ function hydratePledge(entry: PledgeManifestEntry): void {
           if (mql.matches) {
             doHydrate();
             mql.removeEventListener('change', handler);
+            const idx = activeMediaListeners.findIndex((l) => l.mql === mql && l.handler === handler);
+            if (idx >= 0) activeMediaListeners.splice(idx, 1);
           }
         };
         mql.addEventListener('change', handler);
+        activeMediaListeners.push({ mql, handler });
       }
       break;
     }
@@ -223,8 +234,15 @@ function hydratePledge(entry: PledgeManifestEntry): void {
 /**
  * Re-hydrates all pledges on the page.
  * Called after page transitions to hydrate new content.
+ *
+ * Tears down any pending media-query listeners from the previous page so they
+ * do not leak across route changes.
  */
 export function rehydratePledges(): void {
+  for (const { mql, handler } of activeMediaListeners) {
+    mql.removeEventListener('change', handler);
+  }
+  activeMediaListeners.length = 0;
   hydratedPledges.clear();
   scanDomForPledges();
 }

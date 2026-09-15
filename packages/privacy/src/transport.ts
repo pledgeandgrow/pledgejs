@@ -13,7 +13,9 @@ export interface TransportSecurityConfig {
   enforceHTTPS?: boolean;
   /** Minimum TLS version (default: 'TLSv1.2') */
   minTLSVersion?: 'TLSv1.2' | 'TLSv1.3';
-  /** Trust proxy headers (X-Forwarded-Proto) (default: true) */
+  /** Trust proxy headers (X-Forwarded-Proto) (default: false — must be
+   * explicitly enabled only behind a trusted reverse proxy, otherwise an
+   * attacker can spoof the header to bypass HTTPS enforcement) */
   trustProxy?: boolean;
 }
 
@@ -38,7 +40,7 @@ export function createTransportSecurityMiddleware(config: TransportSecurityConfi
   const hstsIncludeSubdomains = config.hstsIncludeSubdomains ?? true;
   const hstsPreload = config.hstsPreload ?? false;
   const enforceHTTPS = config.enforceHTTPS ?? true;
-  const trustProxy = config.trustProxy ?? true;
+  const trustProxy = config.trustProxy ?? false;
 
   return async (req: Request): Promise<MiddlewareResult> => {
     const url = new URL(req.url);
@@ -109,7 +111,7 @@ export function getHSTSHeader(config: TransportSecurityConfig = {}): string {
  */
 export function meetsTLSMinimum(req: PledgeRequest, minVersion: 'TLSv1.2' | 'TLSv1.3' = 'TLSv1.2'): boolean {
   const tlsVersion = req.headers['x-forwarded-tls-version'] ?? req.headers['tls-version'];
-  if (!tlsVersion) return true; // Can't determine — allow
+  if (!tlsVersion) return true; // No LB header — cannot determine, allow (caller should document this)
 
   const order = ['TLSv1', 'TLSv1.1', 'TLSv1.2', 'TLSv1.3'];
   const reqIdx = order.indexOf(tlsVersion);

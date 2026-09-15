@@ -152,17 +152,25 @@ const wsUserIds = new WeakMap<PledgeWebSocket, string>();
 
 /**
  * Extract authentication token from WebSocket upgrade request.
- * Checks Authorization header, then query parameter.
+ * Accepts tokens from the Authorization header (Bearer) or the `Sec-WebSocket-Protocol`
+ * subprotocol (e.g. `bearer.<token>`). Query-parameter tokens are intentionally
+ * NOT accepted — they leak into server logs, browser history, and `Referer`
+ * headers (#44). The `_query` parameter is kept in the signature for API
+ * compatibility with existing callers but is intentionally unused.
  */
-export function extractWSToken(headers: Record<string, string>, query: Record<string, string>): string | null {
+export function extractWSToken(headers: Record<string, string>, _query: Record<string, string>): string | null {
   const authHeader = headers['authorization'] ?? headers['Authorization'];
   if (authHeader?.startsWith('Bearer ')) {
     return authHeader.slice(7);
   }
 
-  const queryToken = query['token'] ?? query['access_token'];
-  if (queryToken) {
-    return queryToken;
+  // Subprotocol: clients can negotiate `Sec-WebSocket-Protocol: bearer.<token>`.
+  // This is the WebSocket-standard way to pass credentials without exposing
+  // them in URLs. The `query` parameter is accepted for API compatibility but
+  // intentionally ignored.
+  const subprotocol = headers['sec-websocket-protocol'];
+  if (subprotocol?.startsWith('bearer.')) {
+    return subprotocol.slice(7);
   }
 
   return null;

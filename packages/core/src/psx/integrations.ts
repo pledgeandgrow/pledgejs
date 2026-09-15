@@ -81,6 +81,9 @@ export interface SqlxQueryResult<T = unknown> {
  *
  * This JS wrapper provides the connection pool management and
  * type-safe query interface for use in TypeScript.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class SqlxPool {
   private config: SqlxConfig;
@@ -148,6 +151,12 @@ export class SqlxPool {
   }
 }
 
+/**
+ * Transaction handle for {@link SqlxPool}.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
+ */
 export class SqlxTransaction {
   constructor(private tx: unknown) {}
 
@@ -166,6 +175,26 @@ export interface SeaOrmConfig {
   maxConnections?: number;
   /** Whether to enable entity model generation */
   generateEntities?: boolean;
+  /**
+   * Pluggable JS driver — lets the class work without the native addon when
+   * the user supplies a real backend (e.g. a wrapper around `pg`,
+   * `mysql2`, `better-sqlite3`, or Prisma). Without a driver or the native
+   * addon, operations throw a clear error.
+   */
+  driver?: SeaOrmDriver;
+}
+
+/**
+ * User-supplied database driver — the JS path for SeaOrmDatabase when the
+ * native sea-orm addon isn't compiled.
+ */
+export interface SeaOrmDriver {
+  connect(config: SeaOrmConfig): Promise<unknown> | unknown;
+  generateEntities?(conn: unknown, outputDir: string): Promise<SeaOrmEntity[]>;
+  find?<T>(conn: unknown, entity: string, criteria: Record<string, unknown>): Promise<T[]>;
+  insert?<T>(conn: unknown, entity: string, data: Partial<T>): Promise<T>;
+  update?<T>(conn: unknown, entity: string, id: string | number, data: Partial<T>): Promise<T>;
+  delete?(conn: unknown, entity: string, id: string | number): Promise<boolean>;
 }
 
 export interface SeaOrmEntity {
@@ -176,72 +205,92 @@ export interface SeaOrmEntity {
 /**
  * Sea-ORM integration — entity model generation and async CRUD.
  * Users define entities in .ps files and use them in API routes.
+ *
+ * Two backends, tried in order:
+ * 1. A user-supplied `driver` in `SeaOrmConfig` (works in pure JS).
+ * 2. The compiled `sea-orm.node` native addon.
+ * If neither is available, operations throw a clear actionable error.
  */
 export class SeaOrmDatabase {
   private config: SeaOrmConfig;
   private connection: unknown = null;
+  private addon: Record<string, unknown> | null = null;
 
   constructor(config: SeaOrmConfig) {
     this.config = config;
   }
 
   async connect(): Promise<void> {
+    if (this.config.driver) {
+      this.connection = await this.config.driver.connect(this.config);
+      return;
+    }
     try {
-      const addon = require('../../native/sea-orm.node') as { connect: (config: SeaOrmConfig) => Promise<unknown> };
-      this.connection = await addon.connect(this.config);
+      this.addon = require('../../native/sea-orm.node') as Record<string, unknown>;
+      this.connection = await (this.addon.connect as (c: SeaOrmConfig) => Promise<unknown>)(this.config);
     } catch {
-      throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
+      throw new Error(
+        'Sea-ORM: no driver configured and native addon not found. ' +
+        'Provide a `driver` in SeaOrmConfig (e.g. a pg/better-sqlite3 wrapper) or run `pledge add sea-orm`.',
+      );
     }
   }
 
   /** Generates entity models from the database schema */
   async generateEntities(outputDir: string): Promise<SeaOrmEntity[]> {
-    try {
-      const addon = require('../../native/sea-orm.node') as { generateEntities: (conn: unknown, dir: string) => Promise<SeaOrmEntity[]> };
-      return addon.generateEntities(this.connection, outputDir);
-    } catch {
-      throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
-    }
+    if (this.config.driver?.generateEntities) return this.config.driver.generateEntities(this.connection, outputDir);
+    const addon = this.getAddon();
+    if (!addon) throw this.noBackend('generateEntities');
+    return (addon.generateEntities as (c: unknown, d: string) => Promise<SeaOrmEntity[]>)(this.connection, outputDir);
   }
 
   /** Finds entities by criteria */
   async find<T>(entity: string, criteria: Record<string, unknown>): Promise<T[]> {
-    try {
-      const addon = require('../../native/sea-orm.node') as { find: (conn: unknown, entity: string, criteria: Record<string, unknown>) => Promise<T[]> };
-      return addon.find(this.connection, entity, criteria);
-    } catch {
-      throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
-    }
+    if (this.config.driver?.find) return this.config.driver.find<T>(this.connection, entity, criteria);
+    const addon = this.getAddon();
+    if (!addon) throw this.noBackend('find');
+    return (addon.find as (c: unknown, e: string, c2: Record<string, unknown>) => Promise<T[]>)(this.connection, entity, criteria);
   }
 
   /** Inserts a new entity */
   async insert<T>(entity: string, data: Partial<T>): Promise<T> {
-    try {
-      const addon = require('../../native/sea-orm.node') as { insert: (conn: unknown, entity: string, data: unknown) => Promise<T> };
-      return addon.insert(this.connection, entity, data);
-    } catch {
-      throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
-    }
+    if (this.config.driver?.insert) return this.config.driver.insert<T>(this.connection, entity, data);
+    const addon = this.getAddon();
+    if (!addon) throw this.noBackend('insert');
+    return (addon.insert as (c: unknown, e: string, d: unknown) => Promise<T>)(this.connection, entity, data);
   }
 
   /** Updates an entity by ID */
   async update<T>(entity: string, id: string | number, data: Partial<T>): Promise<T> {
-    try {
-      const addon = require('../../native/sea-orm.node') as { update: (conn: unknown, entity: string, id: string | number, data: unknown) => Promise<T> };
-      return addon.update(this.connection, entity, id, data);
-    } catch {
-      throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
-    }
+    if (this.config.driver?.update) return this.config.driver.update<T>(this.connection, entity, id, data);
+    const addon = this.getAddon();
+    if (!addon) throw this.noBackend('update');
+    return (addon.update as (c: unknown, e: string, i: string | number, d: unknown) => Promise<T>)(this.connection, entity, id, data);
   }
 
   /** Deletes an entity by ID */
   async delete(entity: string, id: string | number): Promise<boolean> {
+    if (this.config.driver?.delete) return this.config.driver.delete(this.connection, entity, id);
+    const addon = this.getAddon();
+    if (!addon) throw this.noBackend('delete');
+    return (addon.delete as (c: unknown, e: string, i: string | number) => Promise<boolean>)(this.connection, entity, id);
+  }
+
+  private getAddon(): Record<string, unknown> | null {
+    if (this.addon) return this.addon;
     try {
-      const addon = require('../../native/sea-orm.node') as { delete: (conn: unknown, entity: string, id: string | number) => Promise<boolean> };
-      return addon.delete(this.connection, entity, id);
+      this.addon = require('../../native/sea-orm.node') as Record<string, unknown>;
+      return this.addon;
     } catch {
-      throw new Error('Sea-ORM native addon not found. Run `pledge add sea-orm` to install.');
+      return null;
     }
+  }
+
+  private noBackend(op: string): Error {
+    return new Error(
+      `Sea-ORM: cannot ${op} — no driver configured and native addon not found. ` +
+      'Provide a `driver` in SeaOrmConfig or run `pledge add sea-orm`.',
+    );
   }
 }
 
@@ -263,6 +312,9 @@ export interface RedisConfig {
 
 /**
  * Redis integration with connection pooling, pub/sub, and cache-aside.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class RedisClient {
   private config: RedisConfig;
@@ -383,6 +435,9 @@ export interface JwtPayload {
 
 /**
  * Rust auth helpers — Argon2 hashing, JWT signing/verification.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class RustAuth {
   private config: AuthConfig;
@@ -476,6 +531,9 @@ export interface ImageProcessOptions {
 
 /**
  * Rust image processing — resize, crop, format conversion.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class ImageProcessor {
   /** Process an image with the given options */
@@ -536,6 +594,9 @@ export interface PdfTemplate {
 
 /**
  * Rust PDF generation — HTML→PDF, invoice templates.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class PdfGenerator {
   /** Generate PDF from HTML */
@@ -607,6 +668,9 @@ export interface Job<T = unknown> {
 
 /**
  * Rust background jobs — apalis-based job queues.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class JobQueue<T = unknown> {
   private config: JobQueueConfig;
@@ -727,6 +791,9 @@ function parseCronToInterval(schedule: string): number {
 
 /**
  * Rust cron scheduler — tokio-cron-scheduler.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class CronScheduler {
   private scheduler: unknown = null;
@@ -827,6 +894,9 @@ export interface EmailMessage {
 
 /**
  * Rust email sending — lettre-based SMTP.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class EmailSender {
   private config: EmailConfig;
@@ -910,6 +980,9 @@ export interface HttpResponse<T = unknown> {
 
 /**
  * Rust HTTP client — reqwest-based outbound HTTP.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class RustHttpClient {
   private config: HttpClientConfig;
@@ -973,6 +1046,9 @@ export interface WebSocketConnection {
 
 /**
  * Rust WebSocket server — tokio-tungstenite.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class WebSocketServer {
   private connections: Map<string, WebSocketConnection> = new Map();
@@ -1044,6 +1120,9 @@ export class WebSocketServer {
 
 /**
  * Rust file processing — Excel parsing/generation, CSV processing.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class FileProcessor {
   /** Parse an Excel file */
@@ -1106,6 +1185,9 @@ export interface TracingConfig {
 
 /**
  * Rust observability — tracing and OpenTelemetry spans.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class RustTracing {
   private _config: TracingConfig;
@@ -1182,6 +1264,9 @@ export interface CryptoConfig {
 
 /**
  * Rust crypto helpers — AES-GCM encryption, SHA-256 hashing, secure random.
+ *
+ * @stub JS fallback only — no Rust crate implementation exists yet.
+ * @todo Implement native Rust crate + NAPI binding for production use.
  */
 export class RustCrypto {
   private config: CryptoConfig;
@@ -1275,6 +1360,24 @@ export interface MlModelConfig {
   device?: 'cpu' | 'cuda';
   /** Batch size */
   batchSize?: number;
+  /**
+   * Pluggable JS inference executor — lets the class work without the native
+   * addon when the user supplies a real JS backend (e.g. onnxruntime-node or
+   * @tensorflow/tfjs-node). Without an executor or the native addon, load
+   * throws a clear error.
+   */
+  executor?: MlExecutor;
+}
+
+/**
+ * User-supplied inference executor — the JS path for MlModel when the
+ * native ml addon isn't compiled.
+ */
+export interface MlExecutor {
+  load(config: MlModelConfig): Promise<unknown> | unknown;
+  infer(model: unknown, input: number[] | number[][]): Promise<MlInferenceResult> | MlInferenceResult;
+  inferBatch?(model: unknown, inputs: (number[] | number[][] )[]): Promise<MlInferenceResult[]>;
+  unload?(model: unknown): Promise<void> | void;
 }
 
 export interface MlInferenceResult {
@@ -1290,42 +1393,75 @@ export interface MlInferenceResult {
 
 /**
  * Rust ML inference — candle-core or ort for on-device ML.
+ *
+ * Two backends, tried in order:
+ * 1. A user-supplied `executor` in `MlModelConfig` (works in pure JS, e.g.
+ *    wrapping onnxruntime-node or @tensorflow/tfjs-node).
+ * 2. The compiled `ml.node` native addon.
+ * If neither is available, load throws a clear actionable error.
  */
 export class MlModel {
   private config: MlModelConfig;
   private model: unknown = null;
+  private addon: Record<string, unknown> | null = null;
 
   constructor(config: MlModelConfig) {
     this.config = { backend: 'candle', device: 'cpu', batchSize: 1, ...config };
   }
 
   async load(): Promise<void> {
+    if (this.config.executor) {
+      this.model = await this.config.executor.load(this.config);
+      return;
+    }
     try {
-      const addon = require('../../native/ml.node') as { loadModel: (config: MlModelConfig) => Promise<unknown> };
-      this.model = await addon.loadModel(this.config);
+      this.addon = require('../../native/ml.node') as Record<string, unknown>;
+      this.model = await (this.addon.loadModel as (c: MlModelConfig) => Promise<unknown>)(this.config);
     } catch {
-      throw new Error(`ML native addon not found. Run \`pledge add ${this.config.backend === 'candle' ? 'candle-core' : 'ort'}\` to install.`);
+      throw new Error(
+        `ML: no executor configured and native addon not found. Provide an \`executor\` in MlModelConfig ` +
+        `(e.g. an onnxruntime-node wrapper) or run \`pledge add ${this.config.backend === 'candle' ? 'candle-core' : 'ort'}\`.`,
+      );
     }
   }
 
   async infer(input: number[] | number[][]): Promise<MlInferenceResult> {
     if (!this.model) await this.load();
-    const addon = require('../../native/ml.node') as { infer: (model: unknown, input: unknown) => Promise<MlInferenceResult> };
-    return addon.infer(this.model, input);
+    if (this.config.executor) return this.config.executor.infer(this.model, input);
+    const addon = this.getAddon();
+    if (!addon) throw new Error('ML: native addon no longer available');
+    return (addon.infer as (m: unknown, i: unknown) => Promise<MlInferenceResult>)(this.model, input);
   }
 
   /** Run batch inference */
   async inferBatch(inputs: (number[] | number[][] )[]): Promise<MlInferenceResult[]> {
     if (!this.model) await this.load();
-    const addon = require('../../native/ml.node') as { inferBatch: (model: unknown, inputs: unknown[]) => Promise<MlInferenceResult[]> };
-    return addon.inferBatch(this.model, inputs);
+    if (this.config.executor?.inferBatch) return this.config.executor.inferBatch(this.model, inputs);
+    if (this.config.executor) return Promise.all(inputs.map((i) => this.config.executor!.infer(this.model, i)));
+    const addon = this.getAddon();
+    if (!addon) throw new Error('ML: native addon no longer available');
+    return (addon.inferBatch as (m: unknown, i: unknown[]) => Promise<MlInferenceResult[]>)(this.model, inputs);
   }
 
   async unload(): Promise<void> {
     if (this.model) {
-      const addon = require('../../native/ml.node') as { unloadModel: (model: unknown) => Promise<void> };
-      await addon.unloadModel(this.model);
+      if (this.config.executor?.unload) {
+        await this.config.executor.unload(this.model);
+      } else {
+        const addon = this.getAddon();
+        if (addon) await (addon.unloadModel as (m: unknown) => Promise<void>)(this.model);
+      }
       this.model = null;
+    }
+  }
+
+  private getAddon(): Record<string, unknown> | null {
+    if (this.addon) return this.addon;
+    try {
+      this.addon = require('../../native/ml.node') as Record<string, unknown>;
+      return this.addon;
+    } catch {
+      return null;
     }
   }
 }

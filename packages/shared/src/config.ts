@@ -34,6 +34,19 @@ export interface PledgeConfig {
   plugins?: PledgePlugin[];
   /** PledgePack build/bundler configuration */
   pledgepack?: PledgePackConfig;
+  /**
+   * MDX pipeline options — populated by the pledgestack-mdx plugin's
+   * configResolved hook from MDXPluginOptions, giving PledgePack's MDX
+   * transform (and the JS fallback pipeline) a channel to receive them.
+   */
+  mdx?: {
+    /** Extract frontmatter before compiling (default: true) */
+    frontmatter?: boolean;
+    /** remark plugin names/paths for PledgePack's MDX transform */
+    remarkPlugins?: string[];
+    /** rehype plugin names/paths for PledgePack's MDX transform */
+    rehypePlugins?: string[];
+  };
   /** Cargo/Rust compilation configuration (#213) */
   cargo?: CargoConfig;
   /** TypeScript path aliases (#231) — maps alias prefix to directory */
@@ -44,6 +57,8 @@ export interface PledgeConfig {
   siteUrl?: string;
   /** Security headers configuration — when true, auto-applies default security headers to all responses (default: true) */
   securityHeaders?: boolean;
+  /** CSRF protection — when true, enforces same-origin checks on state-changing requests (default: true). Decoupled from securityHeaders. */
+  csrf?: boolean;
   /** Partial Prerendering — prerender static shell at build time, stream dynamic holes at request time (default: false) */
   ppr?: boolean;
   /** Bot detection — auto-detect and challenge bots (default: false) */
@@ -65,6 +80,13 @@ export interface PledgeConfig {
    * built-in default policy when omitted.
    */
   csp?: Record<string, string>;
+  /**
+   * Environment variable validation schema. When set, `pledge build` and
+   * `pledge start` validate required env vars before proceeding, failing
+   * fast with a clear error instead of crashing at runtime when a missing
+   * `DATABASE_URL` (or similar) is first accessed (#49).
+   */
+  envSchema?: Record<string, EnvVarSchema>;
 }
 
 /** CORS configuration — mirrors `CorsConfig` in pledgestack-server's cors.ts. */
@@ -123,7 +145,7 @@ export interface CdnConfig {
  */
 export interface PledgePackConfig {
   /** Target framework for transforms (default: 'react') */
-  framework?: 'react';
+  framework?: 'react' | 'pledge';
   /** Generate source maps in production (default: false) */
   sourceMaps?: boolean;
   /** Environment variable prefix for client-side exposure (default: 'PUBLIC_') */
@@ -499,4 +521,56 @@ export function validateConfig(config: PledgeConfig): string[] {
   }
 
   return errors;
+}
+
+/**
+ * Validates required environment variables at startup. Throws with a clear
+ * message listing all missing/invalid variables so a misconfigured deploy
+ * fails fast at boot rather than producing cryptic runtime errors.
+ *
+ * @param schema Map of env var name → { required, validator }
+ * @param env The environment to read from (default: process.env)
+ */
+export interface EnvVarSchema {
+  required?: boolean;
+  /** Returns an error message string if invalid, undefined if valid. */
+  validator?: (value: string) => string | undefined;
+}
+
+export function validateEnv(
+  schema: Record<string, EnvVarSchema>,
+  env: Record<string, string | undefined> = typeof process !== 'undefined' ? process.env : {},
+): string[] {
+  const errors: string[] = [];
+  for (const [name, spec] of Object.entries(schema)) {
+    const value = env[name];
+    if (value === undefined || value === '') {
+      if (spec.required) {
+        errors.push(`Missing required environment variable: ${name}`);
+      }
+      continue;
+    }
+    if (spec.validator) {
+      const err = spec.validator(value);
+      if (err) errors.push(`${name}: ${err}`);
+    }
+  }
+  return errors;
+}
+
+/**
+ * Asserts that all required env vars are present and valid. Throws an
+ * aggregated error if any validation fails — call at the top of server start.
+ */
+export function assertEnv(
+  schema: Record<string, EnvVarSchema>,
+  env?: Record<string, string | undefined>,
+): void {
+  const errors = validateEnv(schema, env);
+  if (errors.length > 0) {
+    throw new Error(
+      `Environment validation failed:\n  - ${errors.join('\n  - ')}\n` +
+        'Set the missing variables in your environment or .env file.',
+    );
+  }
 }

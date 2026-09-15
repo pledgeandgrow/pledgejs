@@ -102,6 +102,7 @@ export function sanitizeSqlInput(input: string): string {
     .replace(/'/g, "''")
     .replace(/"/g, '""')
     .replace(/\\/g, '\\\\')
+    // eslint-disable-next-line no-control-regex -- strip null bytes from SQL input
     .replace(/\x00/g, '')
     .replace(/\n/g, ' ')
     .replace(/\r/g, ' ');

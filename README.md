@@ -5,7 +5,7 @@
 
 A full-stack **multi-framework** web framework with file-based routing, SSR/SSG/ISR, React Server Components, API routes, middleware, edge runtime support, and Rust native addons for rendering, compression, search, rate limiting, and more. Supports **React, Vue, Solid, and Svelte** via pluggable renderer adapters. Uses PledgePack (Rust+Zig bundler) to build user apps.
 
-> **105 test files · 896 tests · 39 packages** — all passing. `pnpm typecheck` runs a real `tsc -b`/`tsc --noEmit` sweep across every package (see `scripts/typecheck-workspace.mjs`).
+> **112 test files · 1023 tests · 39 packages** — 2 failing in new MDX/server-fn tests, 5 skipped. `pnpm typecheck` runs a real `tsc --noEmit -p` sweep across every package (see `scripts/typecheck-workspace.mjs`).
 
 ## Requirements
 
@@ -220,7 +220,7 @@ SQLx, Redis, Auth (Argon2/JWT), Image processing, PDF generation, Background job
 
 ### Testing
 
-105 test files across the monorepo using Vitest (896 tests, all passing):
+112 test files across the monorepo using Vitest (1023 tests, 2 failing in new MDX/server-fn tests, 5 skipped):
 
 - **PSX Integration tests** — Fallback behavior for all 15 Rust wrappers
 - **Render tests** — `rust-html`, `rust-ssr`, `rust-rsc`, `rust-dom-renderer`, `rust-html-transformer`, `rust-hydration`, `rust-ssr-profiler`, PPR, JIT templates

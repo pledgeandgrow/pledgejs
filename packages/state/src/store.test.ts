@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createStore } from './store';
+import { createStore, applySelectorUpdate } from './store';
 
 describe('createStore', () => {
   it('initializes with initial state', () => {
@@ -73,5 +73,41 @@ describe('createStore dedup (#state)', () => {
     expect(listener).not.toHaveBeenCalled();
     store.setState({ count: 1 }); // new value → notify
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('applySelectorUpdate (useStore setValue core)', () => {
+  it('merges the update onto the whole state for the identity selector', () => {
+    const prev = { count: 0, name: 'a' };
+    const next = applySelectorUpdate(prev, (s) => s, { count: 5 }, true);
+    expect(next).toEqual({ count: 5, name: 'a' });
+  });
+
+  it('writes back through a non-identity property selector instead of corrupting the whole state', () => {
+    const prev = { user: { name: 'a', age: 1 }, count: 0 };
+    const next = applySelectorUpdate(prev, (s) => s.user, { name: 'b' }, false);
+    expect(next).toEqual({ user: { name: 'b', age: 1 }, count: 0 });
+  });
+
+  it('merges a partial object update into the selected slice, preserving sibling keys', () => {
+    const prev = { user: { name: 'a', age: 1 }, count: 0 };
+    const next = applySelectorUpdate(
+      prev,
+      (s) => s.user,
+      (u) => ({ name: 'b' }),
+      false,
+    );
+    expect(next).toEqual({ user: { name: 'b', age: 1 }, count: 0 });
+  });
+
+  it('replaces the slice with a primitive update', () => {
+    const prev = { count: 0, name: 'a' };
+    const next = applySelectorUpdate(prev, (s) => s.count, 5, false);
+    expect(next).toEqual({ count: 5, name: 'a' });
+  });
+
+  it('throws when the selector path cannot be determined', () => {
+    const prev = { a: 1, b: 2 };
+    expect(() => applySelectorUpdate(prev, (s) => s.a + s.b, 3, false)).toThrow();
   });
 });

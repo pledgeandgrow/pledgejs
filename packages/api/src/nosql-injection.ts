@@ -59,7 +59,7 @@ export function sanitizeMongoQuery(
   query: unknown,
   options: SanitizeOptions = {},
   depth = 0,
-): MongoQuery | null {
+): MongoQuery | MongoValue[] | null {
   if (depth > (options.maxDepth ?? DEFAULT_MAX_DEPTH)) {
     throw new Error(`Query depth exceeds maximum of ${options.maxDepth ?? DEFAULT_MAX_DEPTH}`);
   }
@@ -67,9 +67,12 @@ export function sanitizeMongoQuery(
   if (query === null || query === undefined) return null;
   if (typeof query !== 'object') return null;
   if (Array.isArray(query)) {
+    // Array input produces an array of sanitized values — return MongoValue[]
+    // honestly rather than casting an array to MongoQuery, which broke
+    // callers expecting object semantics.
     return query
       .map((item) => sanitizeMongoQuery(item, options, depth + 1))
-      .filter((v) => v !== null) as unknown as MongoQuery;
+      .filter((v): v is NonNullable<typeof v> => v !== null);
   }
 
   const result: MongoQuery = {};
@@ -186,6 +189,6 @@ export function sanitizeProjection(projection: unknown): Record<string, 0 | 1> {
 /**
  * Create a safe query sanitizer with configured options.
  */
-export function createQuerySanitizer(options: SanitizeOptions = {}): (query: unknown) => MongoQuery | null {
+export function createQuerySanitizer(options: SanitizeOptions = {}): (query: unknown) => MongoQuery | MongoValue[] | null {
   return (query: unknown) => sanitizeMongoQuery(query, options);
 }

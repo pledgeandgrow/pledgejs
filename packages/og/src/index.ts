@@ -83,6 +83,11 @@ export class ImageResponse extends Response {
 
     const headers: Record<string, string> = {
       'Content-Type': 'image/png',
+      // Prevent content-sniffing: the body is serialized JSON (not PNG) until
+      // PledgePack's renderer swaps it. Without nosniff, browsers may
+      // content-sniff the JSON as HTML, enabling XSS if user-controlled data
+      // is in the element tree.
+      'X-Content-Type-Options': 'nosniff',
       'Cache-Control': `public, max-age=${cacheTtl}, s-maxage=${cacheTtl}, stale-while-revalidate=${cacheTtl * 7}`,
       'X-Pledge-OG': 'true',
       // Marks the body as un-rendered serialized JSX; the render pipeline sets
@@ -104,29 +109,35 @@ export class ImageResponse extends Response {
 
 /**
  * Serialize a React-like element tree into a plain object for rendering.
+ * Depth-capped to prevent stack overflow on deeply nested trees.
  */
-function serializeElement(element: unknown): unknown {
+const MAX_ELEMENT_DEPTH = 100;
+
+function serializeElement(element: unknown, depth = 0): unknown {
+  if (depth > MAX_ELEMENT_DEPTH) {
+    return '[max depth exceeded]';
+  }
   if (element === null || element === undefined || typeof element === 'string' || typeof element === 'number') {
     return element;
   }
   if (Array.isArray(element)) {
-    return element.map(serializeElement);
+    return element.map((e) => serializeElement(e, depth + 1));
   }
   if (typeof element === 'object' && element !== null) {
     const el = element as { type?: unknown; props?: Record<string, unknown> };
     return {
       type: typeof el.type === 'string' ? el.type : 'div',
-      props: serializeProps(el.props ?? {}),
+      props: serializeProps(el.props ?? {}, depth + 1),
     };
   }
   return String(element);
 }
 
-function serializeProps(props: Record<string, unknown>): Record<string, unknown> {
+function serializeProps(props: Record<string, unknown>, depth = 0): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(props)) {
     if (key === 'children') {
-      result.children = serializeElement(value);
+      result.children = serializeElement(value, depth);
     } else if (typeof value === 'string' || typeof value === 'number') {
       result[key] = value;
     } else if (typeof value === 'object' && value !== null) {

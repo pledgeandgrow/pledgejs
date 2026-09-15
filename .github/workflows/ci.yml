@@ -31,6 +31,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build verification
+        run: pnpm build:packages
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -55,7 +61,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run tests
-        run: npx vitest run
+        run: npx vitest run --coverage
 
   rust-checks:
     name: Rust Checks
@@ -88,3 +94,7 @@ jobs:
       - name: Build native addons
         working-directory: packages/core/native
         run: cargo build --verbose
+
+      - name: Run Rust tests
+        working-directory: packages/core/native
+        run: cargo test --verbose

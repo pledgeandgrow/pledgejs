@@ -46,6 +46,15 @@ function loadNative(): NativeKvStore | null {
 const jsStore = new Map<string, Buffer>();
 let jsStorePath: string | null = null;
 
+/** Cap on in-memory JS fallback entries to bound memory in the absence of
+ * the native store. Without a cap, a long-running process accumulating ISR
+ * / fetch-cache entries grows without bound. */
+const JS_STORE_MAX_ENTRIES = 5000;
+/** Max value size kept in the JS fallback (4 MiB). Larger values are still
+ * stored but skipped from the JSON snapshot to avoid serializing huge
+ * buffers on every flush. */
+const JS_VALUE_SNAPSHOT_MAX = 4 * 1024 * 1024;
+
 /** Fallback: load from disk */
 async function jsLoad(): Promise<void> {
   if (!jsStorePath) return;
@@ -64,6 +73,13 @@ async function jsLoad(): Promise<void> {
 // one and leave stale bytes, and so temp-file writes don't race.
 let flushChain: Promise<void> = Promise.resolve();
 
+// Debounce disk writes: many rapid kvSet/kvDelete calls (e.g. an ISR rebuild
+// touching many keys) previously hit the filesystem once per call. Coalescing
+// them into a single flush reduces I/O and avoids interleaved temp-file
+// renames. The timer itself tracks the pending state.
+const FLUSH_DEBOUNCE_MS = 50;
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
 /** Fallback: flush to disk atomically (temp file + rename). */
 async function jsFlush(): Promise<void> {
   if (!jsStorePath) return;
@@ -71,6 +87,8 @@ async function jsFlush(): Promise<void> {
   const run = async () => {
     const obj: Record<string, number[]> = {};
     for (const [key, value] of jsStore) {
+      // Skip oversized values from the snapshot to keep serialization bounded.
+      if (value.length > JS_VALUE_SNAPSHOT_MAX) continue;
       obj[key] = Array.from(value);
     }
     // Write to a temp file then atomically rename over the target. A crash
@@ -82,6 +100,18 @@ async function jsFlush(): Promise<void> {
   };
   flushChain = flushChain.then(run, run);
   return flushChain;
+}
+
+/**
+ * Schedules a debounced flush. Multiple rapid mutations coalesce into a
+ * single disk write after `FLUSH_DEBOUNCE_MS` of quiescence.
+ */
+function scheduleFlush(): void {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    void jsFlush();
+  }, FLUSH_DEBOUNCE_MS);
 }
 
 /**
@@ -116,8 +146,12 @@ export async function kvSet(key: string, value: Buffer): Promise<void> {
   if (addon) {
     return addon.kvSet(key, value);
   }
+  if (!jsStore.has(key) && jsStore.size >= JS_STORE_MAX_ENTRIES) {
+    const oldest = jsStore.keys().next().value;
+    if (oldest !== undefined) jsStore.delete(oldest);
+  }
   jsStore.set(key, value);
-  await jsFlush();
+  scheduleFlush();
 }
 
 /**
@@ -129,7 +163,7 @@ export async function kvDelete(key: string): Promise<void> {
     return addon.kvDelete(key);
   }
   jsStore.delete(key);
-  await jsFlush();
+  scheduleFlush();
 }
 
 /**

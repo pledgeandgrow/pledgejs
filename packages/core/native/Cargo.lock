@@ -516,6 +516,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-bench"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "napi-derive",
+ "serde_json",
+]
+
+[[package]]
 name = "rust-compression"
 version = "0.1.0"
 dependencies = [

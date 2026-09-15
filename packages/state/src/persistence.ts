@@ -13,6 +13,9 @@ export interface PersistenceOptions<T> {
   deserialize?: (raw: string) => T;
   /** Hydrate from storage on mount (default: true) */
   hydrate?: boolean;
+  /** Called when a persistence write fails (e.g. quota exceeded) so the UI
+   * can surface the error instead of silently dropping the user's data. */
+  onPersistError?: (error: unknown) => void;
 }
 
 export function usePersistentState<T>(options: PersistenceOptions<T>): [T, (value: T | ((prev: T) => T)) => void, () => void] {
@@ -23,6 +26,7 @@ export function usePersistentState<T>(options: PersistenceOptions<T>): [T, (valu
     serialize = JSON.stringify,
     deserialize = JSON.parse,
     hydrate = true,
+    onPersistError,
   } = options;
 
   const storageRef = useRef<Storage | null>(null);
@@ -41,6 +45,8 @@ export function usePersistentState<T>(options: PersistenceOptions<T>): [T, (valu
   deserializeRef.current = deserialize;
   const stateRef = useRef(state);
   stateRef.current = state;
+  const onPersistErrorRef = useRef(onPersistError);
+  onPersistErrorRef.current = onPersistError;
 
   useEffect(() => {
     if (!hydrate || typeof window === 'undefined') return;
@@ -63,8 +69,10 @@ export function usePersistentState<T>(options: PersistenceOptions<T>): [T, (valu
       if (typeof window !== 'undefined' && storageRef.current) {
         try {
           storageRef.current.setItem(key, serializeRef.current(next));
-        } catch {
-          /* ignore */
+        } catch (err) {
+          // Surface quota / serialization errors (e.g. QuotaExceededError)
+          // so the UI can inform the user instead of silently dropping data.
+          onPersistErrorRef.current?.(err);
         }
       }
       setState(next);

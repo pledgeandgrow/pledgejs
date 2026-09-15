@@ -10,7 +10,7 @@ import {
   ensureRootCargoToml,
   serializeSourceMap,
 } from 'pledgestack-core';
-import { generateRustFallback } from 'pledgestack-shared';
+import { generateRustFallback, BoundedLRUMap, MAX_TRANSFORM_CACHE_ENTRIES } from 'pledgestack-shared';
 import type {
   BundlerAdapter,
   BuildResult,
@@ -21,7 +21,7 @@ import type {
 } from 'pledgestack-shared';
 import type { PledgeConfig } from 'pledgestack-shared';
 
-const TRANSFORM_CACHE = new Map<string, string>();
+const TRANSFORM_CACHE = new BoundedLRUMap<string, string>(MAX_TRANSFORM_CACHE_ENTRIES);
 
 /**
  * Webpack bundler adapter for PledgeStack.
@@ -76,7 +76,7 @@ export const webpackAdapter: BundlerAdapter = {
           target: 'node',
           output: {
             path: outDir,
-            filename: '[name].js',
+            filename: '[name].[contenthash:8].js',
             module: true,
             library: { type: 'module' },
           },
@@ -107,7 +107,16 @@ export const webpackAdapter: BundlerAdapter = {
             'pledgestack-shared': 'pledgestack-shared',
             'pledgestack-server': 'pledgestack-server',
           },
-          optimization: { minimize: false },
+          // Enable production minification and source maps. Previously
+          // `minimize: false` shipped un-minified, un-hashed bundles that
+          // could not be safely long-term cached.
+          optimization: {
+            minimize: true,
+            // Split shared chunks so common dependencies (react runtime, etc.)
+            // are not duplicated across every route bundle.
+            splitChunks: { chunks: 'all' },
+          },
+          devtool: 'source-map',
         });
 
         await new Promise<void>((resolve, reject) => {

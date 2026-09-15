@@ -6,6 +6,7 @@ import { resolveBundlerAdapter } from '../bundler-resolver';
 import { scanAppDir, resolveRoutes, generateStaticPages, generateStaticExport, renderSSR, buildAllTargets, writeRouteTypes, detectRouteConflicts, formatRouteConflicts } from 'pledgestack-core';
 import { createModuleLoader, loadEnv } from 'pledgestack-server';
 import { processTailwind, ensureTailwindConfig } from '../tailwind';
+import { assertEnv } from 'pledgestack-shared';
 
 /**
  * Builds the project for production.
@@ -28,6 +29,18 @@ export async function buildCommand(opts?: { crossCompile?: boolean }): Promise<v
   }
 
   loadEnv(config.rootDir, 'production');
+
+  // Validate required env vars before building — fail fast with a clear error
+  // instead of crashing mid-build when a missing DATABASE_URL is first accessed (#49).
+  if (config.envSchema) {
+    try {
+      assertEnv(config.envSchema);
+    } catch (err) {
+      console.error('\n  ✖ Environment validation failed:\n');
+      console.error(`    ${err}\n`);
+      process.exit(1);
+    }
+  }
 
   console.log('\n  PledgeStack — Building for production...\n');
 

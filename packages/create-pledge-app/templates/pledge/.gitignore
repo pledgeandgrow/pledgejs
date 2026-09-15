@@ -1,0 +1,7 @@
+node_modules/
+.pledge/
+dist/
+target/
+.env*.local
+*.tsbuildinfo
+pledge-env.d.ts

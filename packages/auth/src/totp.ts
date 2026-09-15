@@ -8,7 +8,8 @@
  * - Recovery code management
  */
 
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { InMemorySecurityStore, type SecurityKeyValueStore } from './security-store';
 
 export interface TOTPConfig {
   /** TOTP secret (base32 encoded) */
@@ -121,6 +122,10 @@ export function generateTOTPCode(
 /**
  * Verify a TOTP code against the current time window.
  * Allows a configurable window of time steps before and after.
+ *
+ * NOTE: this function is pure — it does not track consumed codes. To prevent
+ * replay attacks (RFC 6238 §5.2), wrap it with `TotpReplayGuard.verify`
+ * which tracks the last successfully used (counter, code) pair per user.
  */
 export function verifyTOTP(
   secret: string,
@@ -142,6 +147,73 @@ export function verifyTOTP(
   }
 
   return false;
+}
+
+/**
+ * Replay guard for TOTP verification (RFC 6238 §5.2: "the verifier MUST reject
+ * attempts to reuse a successfully used TOTP").
+ *
+ * Tracks the last successfully used (counter, code) pair per secret. A code
+ * that was already accepted within the same time window is rejected.
+ * In-memory by default; for multi-instance deployments, back this with a
+ * shared SecurityKeyValueStore (Redis, KV).
+ */
+export class TotpReplayGuard {
+  private store: SecurityKeyValueStore;
+
+  constructor(store?: SecurityKeyValueStore) {
+    this.store = store ?? new InMemorySecurityStore();
+  }
+
+  private key(secret: string): string {
+    return `totp:replay:${createHash('sha256').update(secret).digest('hex')}`;
+  }
+
+  /**
+   * Verify a TOTP code and record it as consumed if valid.
+   * Returns true only if the code is valid AND has not been used before.
+   */
+  async verify(
+    secret: string,
+    token: string,
+    time: number = Date.now(),
+    window = 1,
+    config?: Partial<Pick<TOTPConfig, 'digits' | 'step' | 'algorithm'>>,
+  ): Promise<boolean> {
+    const step = config?.step ?? DEFAULT_STEP;
+    if (!verifyTOTP(secret, token, time, window, config)) return false;
+
+    const counter = Math.floor(time / 1000 / step);
+    const storeKey = this.key(secret);
+    const raw = await this.store.get(storeKey);
+    let lastUsed: { counter: number; code: string } | null = null;
+    if (raw) {
+      try {
+        lastUsed = JSON.parse(raw) as { counter: number; code: string };
+      } catch {
+        lastUsed = null;
+      }
+    }
+    // Reject if the same code was already used in the same or adjacent counter window.
+    if (
+      lastUsed &&
+      Math.abs(lastUsed.counter - counter) <= window &&
+      lastUsed.code === token
+    ) {
+      return false;
+    }
+
+    // Record for slightly longer than the acceptance window so an adjacent
+    // window's code can't be replayed either.
+    const ttlMs = (window + 1) * step * 1000 * 2;
+    await this.store.set(storeKey, JSON.stringify({ counter, code: token }), ttlMs);
+    return true;
+  }
+
+  /** Clear replay state for a given secret (e.g., on re-enrollment). */
+  async clear(secret: string): Promise<void> {
+    await this.store.delete(this.key(secret));
+  }
 }
 
 /**
@@ -205,18 +277,22 @@ export function generateBackupCodes(count = BACKUP_CODE_COUNT, length = BACKUP_C
 /**
  * Verify a backup code against a list (case-insensitive).
  * Returns the index of the used code, or -1 if not found.
+ *
+ * Iterates through ALL codes before returning to avoid a timing side-channel
+ * that would leak the match position (and thus which backup code was used).
  */
 export function verifyBackupCode(input: string, codes: string[]): number {
   const normalized = input.trim().toUpperCase();
   const inputBuf = Buffer.from(normalized);
+  let matchIndex = -1;
   for (let i = 0; i < codes.length; i++) {
     const codeBuf = Buffer.from(codes[i].toUpperCase());
-    if (inputBuf.length !== codeBuf.length) continue;
-    if (timingSafeEqual(inputBuf, codeBuf)) {
-      return i;
+    if (inputBuf.length === codeBuf.length && timingSafeEqual(inputBuf, codeBuf)) {
+      matchIndex = i;
+      // Do NOT early-return — continue the loop to keep timing constant.
     }
   }
-  return -1;
+  return matchIndex;
 }
 
 /**

@@ -101,8 +101,20 @@ export function setupGracefulShutdown(options: GracefulShutdownOptions = {}) {
     process.exit(0);
   }
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  // Register named handlers so they can be removed if setupGracefulShutdown is
+  // called again (tests, HMR). Without removal, multiple registrations stack
+  // and multiple shutdown sequences fire on a single signal (#30).
+  const onSigTerm = () => shutdown('SIGTERM');
+  const onSigInt = () => shutdown('SIGINT');
+  process.on('SIGTERM', onSigTerm);
+  process.on('SIGINT', onSigInt);
 
-  return { shutdown, isShuttingDown: () => shuttingDown, trackRequest, getInflightCount: () => tracker.count };
+  /** Remove the signal handlers registered by this call. Safe to call
+   * multiple times. Use in tests / HMR disposal to avoid stacking handlers. */
+  function dispose(): void {
+    process.removeListener('SIGTERM', onSigTerm);
+    process.removeListener('SIGINT', onSigInt);
+  }
+
+  return { shutdown, isShuttingDown: () => shuttingDown, trackRequest, getInflightCount: () => tracker.count, dispose };
 }

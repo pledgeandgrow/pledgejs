@@ -7,35 +7,24 @@ const require = createRequire(import.meta.url);
 
 /**
  * Resolves the native pledgepack binary for the current platform.
- * Checks platform-specific packages, local binaries, and postinstall-downloaded binaries.
+ * Checks local binaries and postinstall-downloaded binaries under the
+ * resolved `pledgepack` package.
  */
 export function resolveBinary(): string | null {
   const platform = process.platform;
   const arch = process.arch;
 
-  const platformPackages: Record<string, Record<string, string>> = {
-    darwin: { arm64: '@pledgepack/darwin-arm64', x64: '@pledgepack/darwin-x64' },
-    linux: { x64: '@pledgepack/linux-x64-gnu' },
-    win32: { x64: '@pledgepack/win32-x64-msvc' },
-  };
-
-  const packageName = platformPackages[platform]?.[arch];
-
-  if (packageName) {
-    try {
-      const pkgPath = require.resolve(packageName);
-      const pkgDir = dirname(pkgPath);
-      const candidates =
-        platform === 'win32'
-          ? [join(pkgDir, 'bin', 'pledgepack.exe'), join(pkgDir, 'bin', 'pledgepack')]
-          : [join(pkgDir, 'bin', 'pledgepack'), join(pkgDir, 'bin', 'pledgepack.exe')];
-      for (const candidate of candidates) {
-        if (existsSync(candidate)) return candidate;
-      }
-    } catch {
-      // Platform package not installed
-    }
-  }
+  // Note: there used to be a lookup here for scoped per-platform packages
+  // (`@pledgepack/darwin-arm64` etc.), mirroring the esbuild/swc pattern. That
+  // family of packages has never been published — pledgepack ships one
+  // package whose postinstall downloads a prebuilt binary from GitHub
+  // Releases (see pledgepack/bin/postinstall.js and pledgepack/platforms.json
+  // for the full, current platform list) — so the lookup always failed and
+  // silently fell through to the logic below. Removed rather than "fixed"
+  // (e.g. by adding the missing linux-arm64/win32-arm64 entries) since
+  // patching a list for packages that don't exist wouldn't have made binary
+  // resolution work on any more platforms. See PRODUCTION-READINESS-100.md
+  // goals 8-9.
 
   // Try resolving via the pledgepack package
   // Use package.json as the entry point since it's always published

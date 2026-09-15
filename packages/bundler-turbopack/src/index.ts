@@ -10,7 +10,7 @@ import {
   ensureRootCargoToml,
   serializeSourceMap,
 } from 'pledgestack-core';
-import { generateRustFallback } from 'pledgestack-shared';
+import { generateRustFallback, BoundedLRUMap, MAX_TRANSFORM_CACHE_ENTRIES } from 'pledgestack-shared';
 import type {
   BundlerAdapter,
   BuildResult,
@@ -21,7 +21,7 @@ import type {
 } from 'pledgestack-shared';
 import type { PledgeConfig } from 'pledgestack-shared';
 
-const TRANSFORM_CACHE = new Map<string, string>();
+const TRANSFORM_CACHE = new BoundedLRUMap<string, string>(MAX_TRANSFORM_CACHE_ENTRIES);
 
 /**
  * Turbopack bundler adapter for PledgeStack.

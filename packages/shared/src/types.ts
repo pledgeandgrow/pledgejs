@@ -84,6 +84,13 @@ export interface PledgeRequest {
   params: Record<string, string>;
   query: Record<string, string>;
   cookies: Record<string, string>;
+  /**
+   * Aborted when the request times out. Handlers performing expensive work
+   * (DB calls, renders, fetches) should check `signal.aborted` and bail
+   * early rather than continuing to consume CPU/memory after the client has
+   * already received a 504.
+   */
+  signal?: AbortSignal;
 }
 
 export interface PledgeResponse {

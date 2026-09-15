@@ -70,6 +70,10 @@ export interface TransformOptions {
   cargoConfig?: PledgeConfig['cargo'];
   /** Project root directory — used for resolving relative paths to the dev server */
   rootDir?: string;
+  /** Hostname of the dev server (defaults to 'localhost'). Must match the
+   * hostname the bundler's dev server was started with — if the server binds
+   * to 0.0.0.0 or a LAN IP, transforms fetched via `localhost` will fail. */
+  hostname?: string;
 }
 
 /** Result of transforming a file */

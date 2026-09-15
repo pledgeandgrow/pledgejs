@@ -12,36 +12,45 @@
  * edge-security.ts functions with the wrong signatures) shipped without CI
  * ever catching it.
  *
- * `tsc -b` (project references / composite build mode) is the correct way to
- * typecheck this monorepo, but it has to be invoked once per "leaf" project
- * that isn't itself referenced by another project — otherwise leaves like
- * the renderer-* packages (deliberately *not* referenced by pledgestack-core,
- * see packages/core/src/render/renderer-manager.ts, to avoid a circular
- * project reference) are silently skipped. This script runs `tsc -b` against
- * every such leaf, plus a plain `tsc --noEmit` for the handful of packages
- * that are standalone (not part of the composite/project-reference graph at
- * all: create-pledge-app, eslint-plugin-pledge, the two VS Code extensions).
+ * `tsc -b` (project references / composite build mode) was the original approach,
+ * but it EMITS JS into each package's dist/ — overwriting the esbuild-bundled CLI
+ * output with tsc's unbundled emit (extensionless `import('./commands/x')`
+ * calls that Node ESM can't resolve, breaking `pnpm test`/`dev`/`build`).
+ * `tsc -b --noEmit` doesn't work either: composite referenced projects may not
+ * disable emit (TS6310). So we use `tsc --noEmit -p` per leaf project instead —
+ * the root tsconfig's `paths` mapping resolves all workspace imports to source
+ * files directly, so project references aren't needed for typechecking. This
+ * script runs `tsc --noEmit -p` against every leaf project that isn't itself
+ * referenced by another project, plus the standalone projects (create-pledge-app,
+ * eslint-plugin-pledge, the two VS Code extensions).
  */
 
 import { spawnSync } from 'node:child_process';
 
-const COMPOSITE_LEAVES = [
+// All projects are typechecked with `tsc --noEmit -p` — no emit, no project
+// references needed (the root tsconfig's `paths` resolve workspace imports to
+// source files directly). Listed by tsconfig path.
+const PROJECTS = [
   // Pulls in shared/core/server/client/auth/state/api/a11y/overlay/seo/
   // image/font/mdx/og/sitemap/rss/ws/adapters/privacy/bundler-* transitively
-  // via its own tsconfig.json "references".
-  'packages/cli',
+  // via the root tsconfig's path aliases.
+  'packages/cli/tsconfig.json',
   // Not referenced by pledgestack-core (would create a circular project
   // reference — renderer-* depends on core, not the other way around), so
   // each needs its own invocation to be checked at all.
-  'packages/renderer-react',
-  'packages/renderer-vue',
-  'packages/renderer-solid',
-  'packages/renderer-svelte',
-  // composite:true but not referenced by any other project.
-  'packages/eslint-plugin-pledge',
-];
-
-const STANDALONE_PROJECTS = [
+  'packages/renderer-react/tsconfig.json',
+  'packages/renderer-vue/tsconfig.json',
+  'packages/renderer-solid/tsconfig.json',
+  'packages/renderer-svelte/tsconfig.json',
+  // Leaf plugins only reached via `export *` re-exports in the CLI. A bare
+  // re-export doesn't always force the target's own bodies through contextual
+  // checks reliably, so list them explicitly — packages/mdx shipped a
+  // `config.mdx` bug that only `tsc --build` caught.
+  'packages/mdx/tsconfig.json',
+  'packages/content/tsconfig.json',
+  'packages/deploy/tsconfig.json',
+  // Standalone (not part of the composite/project-reference graph).
+  'packages/eslint-plugin-pledge/tsconfig.json',
   'packages/create-pledge-app/tsconfig.json',
   'packages/vscode-extension/tsconfig.json',
   'packages/vscode-psx/tsconfig.json',
@@ -63,11 +72,7 @@ function run(label, command, args) {
   }
 }
 
-for (const project of COMPOSITE_LEAVES) {
-  run(project, 'npx', ['tsc', '-b', project]);
-}
-
-for (const tsconfig of STANDALONE_PROJECTS) {
+for (const tsconfig of PROJECTS) {
   run(tsconfig, 'npx', ['tsc', '--noEmit', '-p', tsconfig]);
 }
 

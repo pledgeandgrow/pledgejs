@@ -153,7 +153,6 @@ export function SelectiveHydration({
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-  // eslint-disable-next-line react-hooks/exhaustive-deps
     const el = ref.current;
     if (!el || hydrated) return;
 

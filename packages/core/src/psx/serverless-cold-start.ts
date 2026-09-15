@@ -41,7 +41,7 @@ export interface ColdStartMetrics {
   cacheHitCount: number;
 }
 
-type ModuleLoader = () => unknown;
+type ModuleLoader = () => unknown | Promise<unknown>;
 
 // ---------------------------------------------------------------------------
 // Cold Start Optimizer
@@ -57,11 +57,11 @@ export class ColdStartOptimizer extends EventEmitter {
   private loadTimes = new Map<string, number>();
   private loadCount = 0;
   private cacheHitCount = 0;
+  private cachedModules = new Set<string>();
   private loaders = new Map<string, ModuleLoader>();
   private initialized = false;
   private initStartTime = 0;
   private initEndTime = 0;
-  private lastLoadedModule: string | null = null;
 
   constructor(config: ColdStartConfig) {
     super();
@@ -101,11 +101,13 @@ export class ColdStartOptimizer extends EventEmitter {
   }
 
   /**
-   * Loads a module, using cache if available.
+   * Loads a module, using cache if available. Supports both sync and async
+   * loaders — async loaders are awaited and the resolved value is cached.
    */
-  loadModule(moduleName: string): unknown {
+  async loadModule(moduleName: string): Promise<unknown> {
     if (this.moduleCache.has(moduleName)) {
       this.cacheHitCount++;
+      this.cachedModules.add(moduleName);
       return this.moduleCache.get(moduleName);
     }
 
@@ -115,13 +117,13 @@ export class ColdStartOptimizer extends EventEmitter {
     }
 
     const startTime = Date.now();
-    const module = loader();
+    const result = loader();
+    const module = result instanceof Promise ? await result : result;
     const loadTime = Date.now() - startTime;
 
     this.moduleCache.set(moduleName, module);
     this.loadTimes.set(moduleName, loadTime);
     this.loadCount++;
-    this.lastLoadedModule = moduleName;
 
     this.emit('module-loaded', { module: moduleName, loadTimeMs: loadTime });
     return module;
@@ -130,7 +132,7 @@ export class ColdStartOptimizer extends EventEmitter {
   /**
    * Gets a module, loading it lazily if needed.
    */
-  get(moduleName: string): unknown {
+  async get(moduleName: string): Promise<unknown> {
     return this.loadModule(moduleName);
   }
 
@@ -138,16 +140,16 @@ export class ColdStartOptimizer extends EventEmitter {
    * Pre-warms a module without returning it.
    */
   async preWarm(moduleName: string): Promise<void> {
-    this.loadModule(moduleName);
+    await this.loadModule(moduleName);
   }
 
   /**
    * Pre-warms all registered modules.
    */
   async preWarmAll(): Promise<void> {
-    for (const moduleName of this.loaders.keys()) {
-      this.loadModule(moduleName);
-    }
+    await Promise.all(
+      Array.from(this.loaders.keys()).map(m => this.loadModule(m)),
+    );
   }
 
   /**
@@ -162,11 +164,10 @@ export class ColdStartOptimizer extends EventEmitter {
    * Returns cold start metrics.
    */
   getMetrics(): ColdStartMetrics {
-    const loadedModules = new Set(this.loadTimes.keys());
     const moduleLoadTimes = Array.from(this.loadTimes.entries()).map(([module, loadTimeMs]) => ({
       module,
       loadTimeMs,
-      cached: !loadedModules.has(module) || this.moduleCache.has(module) && this.cacheHitCount > 0 && module !== this.lastLoadedModule,
+      cached: this.cachedModules.has(module),
     }));
 
     const criticalPathMs = this.config.criticalModules.reduce((sum, m) => {

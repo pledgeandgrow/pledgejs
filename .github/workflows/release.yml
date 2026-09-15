@@ -30,6 +30,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+        continue-on-error: true
+
+      - name: Test
+        run: pnpm test
+
       - name: Build packages
         run: pnpm build:packages
 

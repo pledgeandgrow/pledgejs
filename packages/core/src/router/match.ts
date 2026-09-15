@@ -88,8 +88,18 @@ export function isParallelSlot(segment: string): boolean {
 
 /**
  * Compiles a URL pattern into a RegExp and param names.
+ *
+ * Compiled patterns are memoized per `pattern` string, since route matching
+ * runs the same patterns against every request. Without memoization each
+ * request rebuilds the RegExp and re-pays the compilation cost.
  */
+const compileCache = new Map<string, { regex: RegExp; paramNames: string[] }>();
+const COMPILE_CACHE_MAX = 2000;
+
 export function compilePattern(pattern: string): { regex: RegExp; paramNames: string[] } {
+  const cached = compileCache.get(pattern);
+  if (cached) return cached;
+
   const paramNames: string[] = [];
   const segments = pattern.split('/').filter(Boolean);
   const regexParts: string[] = [];
@@ -129,10 +139,30 @@ export function compilePattern(pattern: string): { regex: RegExp; paramNames: st
     }
   }
 
-  return {
+  const result = {
     regex: new RegExp(`^/${regexStr}/?$`),
     paramNames,
   };
+
+  if (compileCache.size >= COMPILE_CACHE_MAX) {
+    const oldest = compileCache.keys().next().value;
+    if (oldest !== undefined) compileCache.delete(oldest);
+  }
+  compileCache.set(pattern, result);
+  return result;
+}
+
+/**
+ * Safely decodes a URI component, returning the original string on malformed
+ * input instead of throwing. A malformed `%ZZ` sequence would otherwise crash
+ * the request with a URIError before a 404 could be served.
+ */
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
@@ -155,7 +185,7 @@ export function matchRoute(pathname: string, routes: ResolvedRoute[]): RouteMatc
 
     const params: Record<string, string> = {};
     paramNames.forEach((name, i) => {
-      params[name] = decodeURIComponent(match[i + 1] ?? '');
+      params[name] = safeDecodeURIComponent(match[i + 1] ?? '');
     });
 
     const score = specificityScore(route.pattern);

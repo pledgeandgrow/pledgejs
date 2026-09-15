@@ -52,6 +52,22 @@ class ErrorBoundary extends Component<{ fallback: ComponentType<{ error: Error; 
 }
 
 /**
+ * Default error fallback used when a route segment has no error.tsx.
+ * Without this, a render crash in a page with no error boundary propagates
+ * through every layout and kills the whole response — with it, layout chrome
+ * survives and only the failing segment shows an error UI.
+ */
+function DefaultErrorFallback({ error, reset }: { error: Error; reset: () => void }) {
+  return createElement(
+    'div',
+    { role: 'alert', style: { padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '0.5rem' } },
+    createElement('h2', { style: { margin: '0 0 0.5rem', fontSize: '1rem' } }, 'Something went wrong'),
+    createElement('p', { style: { margin: 0, color: '#6b7280' } }, error.message || 'An unexpected error occurred.'),
+    createElement('button', { onClick: reset, style: { marginTop: '0.5rem' } }, 'Try again'),
+  );
+}
+
+/**
  * Renders a route match to an HTML string using SSR.
  * Wraps the page in its layout chain with loading and error boundaries.
  *
@@ -168,12 +184,18 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
     searchParams: searchParamsRecord,
   });
 
-  // Wrap page in error boundary if error.tsx exists for this route
-  if (match.route.errorFilePath) {
-    const errorModule = modules.get(match.route.errorFilePath) as ErrorModule | undefined;
-    if (errorModule) {
-      element = createElement(ErrorBoundary, { fallback: errorModule.default }, element);
-    }
+  // Wrap page in an error boundary — uses the route's error.tsx when present,
+  // otherwise the built-in default so a render crash can't kill the whole
+  // layout chain.
+  {
+    const errorModule = match.route.errorFilePath
+      ? (modules.get(match.route.errorFilePath) as ErrorModule | undefined)
+      : undefined;
+    element = createElement(
+      ErrorBoundary,
+      { fallback: errorModule?.default ?? DefaultErrorFallback },
+      element,
+    );
   }
 
   // Wrap page in suspense boundary if loading.tsx exists for this route

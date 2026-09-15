@@ -5,6 +5,8 @@
  * Items 170, 171, 175, 176 of the PledgeStack roadmap.
  */
 
+import { InMemorySecurityStore, type SecurityKeyValueStore } from 'pledgestack-auth';
+
 
 // ---------------------------------------------------------------------------
 // 170. Bot detection — heuristic UA/pattern/CAPTCHA
@@ -131,66 +133,52 @@ interface FailedAttempt {
   lockedUntil: number;
 }
 
-const attemptStore = new Map<string, FailedAttempt>();
-
-/** Max entries in the brute force store before cleanup evicts stale entries */
-const MAX_ATTEMPT_STORE_ENTRIES = 10000;
-
-/** Periodic cleanup interval (10 minutes) */
-const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
-let bruteForceCleanupTimer: ReturnType<typeof setInterval> | null = null;
-
 /**
- * Removes stale entries from the attempt store.
- * An entry is stale if its window has passed AND it's not currently locked out.
+ * Pluggable store for brute-force state. Default: process-local in-memory —
+ * with it, limits are per-worker (effective limit = maxAttempts × workers).
+ * For multi-instance deployments, call setBruteForceStore() with a shared
+ * SecurityKeyValueStore (Redis, KV, DB) before serving traffic.
  */
-function cleanupStaleAttempts(): void {
-  const now = Date.now();
-  for (const [key, entry] of attemptStore.entries()) {
-    const windowPassed = now - entry.firstAttemptAt > defaultBruteForceConfig.windowMs;
-    const notLocked = entry.lockedUntil <= now;
-    if (windowPassed && notLocked) {
-      attemptStore.delete(key);
-    }
+let attemptStore: SecurityKeyValueStore = new InMemorySecurityStore();
+
+/** Sets the brute-force state store (e.g. a Redis-backed SecurityKeyValueStore). */
+export function setBruteForceStore(store: SecurityKeyValueStore): void {
+  attemptStore = store;
+}
+
+const BF_KEY_PREFIX = 'bf:';
+
+function bfKey(identifier: string): string {
+  return BF_KEY_PREFIX + identifier;
+}
+
+async function getAttempt(identifier: string): Promise<FailedAttempt | null> {
+  const raw = await attemptStore.get(bfKey(identifier));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<FailedAttempt>;
+    return {
+      count: typeof parsed.count === 'number' ? parsed.count : 0,
+      firstAttemptAt: typeof parsed.firstAttemptAt === 'number' ? parsed.firstAttemptAt : 0,
+      lastAttemptAt: typeof parsed.lastAttemptAt === 'number' ? parsed.lastAttemptAt : 0,
+      lockedUntil: typeof parsed.lockedUntil === 'number' ? parsed.lockedUntil : 0,
+    };
+  } catch {
+    return null;
   }
 }
 
-/**
- * Ensures the periodic cleanup timer is running.
- * Called automatically when brute force protection is used.
- */
-function ensureBruteForceCleanup(): void {
-  if (bruteForceCleanupTimer) return;
-  bruteForceCleanupTimer = setInterval(cleanupStaleAttempts, CLEANUP_INTERVAL_MS);
-  if (bruteForceCleanupTimer.unref) bruteForceCleanupTimer.unref();
+async function setAttempt(identifier: string, entry: FailedAttempt, ttlMs: number): Promise<void> {
+  await attemptStore.set(bfKey(identifier), JSON.stringify(entry), ttlMs);
 }
 
 /**
  * Stops the brute force cleanup timer (for tests or graceful shutdown).
+ * Retained for API compatibility — with the pluggable store, expiry is
+ * handled by store TTLs and no timer is needed.
  */
 export function stopBruteForceCleanup(): void {
-  if (bruteForceCleanupTimer) {
-    clearInterval(bruteForceCleanupTimer);
-    bruteForceCleanupTimer = null;
-  }
-}
-
-/**
- * Enforces max entry limit by removing stale entries first, then oldest if needed.
- */
-function enforceAttemptStoreLimit(): void {
-  if (attemptStore.size <= MAX_ATTEMPT_STORE_ENTRIES) return;
-  // First try cleaning up stale entries
-  cleanupStaleAttempts();
-  // If still over limit, remove oldest entries
-  if (attemptStore.size <= MAX_ATTEMPT_STORE_ENTRIES) return;
-  const toEvict = attemptStore.size - MAX_ATTEMPT_STORE_ENTRIES;
-  let count = 0;
-  for (const key of attemptStore.keys()) {
-    if (count >= toEvict) break;
-    attemptStore.delete(key);
-    count++;
-  }
+  // No-op: expiry is delegated to the store's TTL.
 }
 
 export interface BruteForceConfig {
@@ -229,19 +217,25 @@ export interface BruteForceCheckResult {
 /**
  * Checks if a login attempt should be allowed, throttled, or blocked.
  */
-export function checkBruteForce(
+export async function checkBruteForce(
   identifier: string,
   config: Partial<BruteForceConfig> = {},
-): BruteForceCheckResult {
-  ensureBruteForceCleanup();
+): Promise<BruteForceCheckResult> {
   const cfg = { ...defaultBruteForceConfig, ...config };
   const now = Date.now();
-  let entry = attemptStore.get(identifier);
+  const entry = await getAttempt(identifier);
 
   // Reset if window has passed
   if (entry && now - entry.firstAttemptAt > cfg.windowMs) {
-    attemptStore.delete(identifier);
-    entry = undefined;
+    await attemptStore.delete(bfKey(identifier));
+    return {
+      allowed: true,
+      requiresCaptcha: false,
+      lockedOut: false,
+      remainingAttempts: cfg.maxAttempts,
+      retryAfterMs: 0,
+      lockoutEndsAt: null,
+    };
   }
 
   if (!entry) {
@@ -289,13 +283,13 @@ export function checkBruteForce(
 /**
  * Records a failed authentication attempt.
  */
-export function recordFailedAttempt(
+export async function recordFailedAttempt(
   identifier: string,
   config: Partial<BruteForceConfig> = {},
-): BruteForceCheckResult {
+): Promise<BruteForceCheckResult> {
   const cfg = { ...defaultBruteForceConfig, ...config };
   const now = Date.now();
-  let entry = attemptStore.get(identifier);
+  let entry = await getAttempt(identifier);
 
   if (!entry || now - entry.firstAttemptAt > cfg.windowMs) {
     entry = {
@@ -312,8 +306,9 @@ export function recordFailedAttempt(
     }
   }
 
-  attemptStore.set(identifier, entry);
-  enforceAttemptStoreLimit();
+  // TTL covers both the counting window and any active lockout.
+  const ttl = Math.max(cfg.windowMs, cfg.lockoutDurationMs) + 60_000;
+  await setAttempt(identifier, entry, ttl);
 
   return checkBruteForce(identifier, config);
 }
@@ -321,15 +316,15 @@ export function recordFailedAttempt(
 /**
  * Clears failed attempts after successful authentication.
  */
-export function clearFailedAttempts(identifier: string): void {
-  attemptStore.delete(identifier);
+export async function clearFailedAttempts(identifier: string): Promise<void> {
+  await attemptStore.delete(bfKey(identifier));
 }
 
 /**
  * Gets the current brute force state for an identifier.
  */
-export function getBruteForceState(identifier: string): FailedAttempt | null {
-  return attemptStore.get(identifier) ?? null;
+export async function getBruteForceState(identifier: string): Promise<FailedAttempt | null> {
+  return getAttempt(identifier);
 }
 
 // ---------------------------------------------------------------------------

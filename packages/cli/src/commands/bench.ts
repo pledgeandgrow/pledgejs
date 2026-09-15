@@ -44,41 +44,79 @@ export async function benchCommand(
     try {
       rustAddon = require('@pledgestack/core/native/rust-bench.node');
     } catch {
-      console.log(yellow('No Rust benchmark addon found.'));
-      console.log(dim('Build first with: pledge build'));
-      console.log(dim('Then run: pledge bench --psx\n'));
-      return;
+      rustAddon = null;
     }
   }
 
-  const addon: Record<string, unknown> = rustAddon!;
-
-  // Benchmark available Rust functions
   const results: Array<{ name: string; result: unknown }> = [];
 
-  // NAPI overhead measurement
-  console.log(bold('Measuring NAPI boundary overhead...'));
-  if (typeof addon.noop === 'function') {
-    const overhead = await measureNapiOverhead(addon.noop as () => void, { iterations });
-    console.log(`  NAPI overhead: ${overhead.overheadMs.toFixed(4)}ms per call (${overhead.overheadPercent.toFixed(1)}%)`);
-    console.log(`  Rust noop: ${overhead.rustResult.avgTimeMs.toFixed(4)}ms  JS noop: ${overhead.tsResult.avgTimeMs.toFixed(4)}ms\n`);
-  }
+  if (rustAddon) {
+    const addon: Record<string, unknown> = rustAddon;
 
-  // Benchmark each function in the addon
-  console.log(bold('Benchmarking Rust functions:'));
-  console.log('  ' + ['Name'.padEnd(35), 'avg'.padStart(12), 'median'.padStart(12), 'p95'.padStart(12), 'p99'.padStart(12), 'ops/s'.padStart(15)].join('  '));
-  console.log('  ' + '-'.repeat(100));
+    // NAPI overhead measurement
+    console.log(bold('Measuring NAPI boundary overhead...'));
+    if (typeof addon.noop === 'function') {
+      const overhead = await measureNapiOverhead(addon.noop as () => void, { iterations });
+      console.log(`  NAPI overhead: ${overhead.overheadMs.toFixed(4)}ms per call (${overhead.overheadPercent.toFixed(1)}%)`);
+      console.log(`  Rust noop: ${overhead.rustResult.avgTimeMs.toFixed(4)}ms  JS noop: ${overhead.tsResult.avgTimeMs.toFixed(4)}ms\n`);
+    }
 
-  for (const [name, fn] of Object.entries(addon)) {
-    if (typeof fn !== 'function') continue;
-    if (name.startsWith('_')) continue;
+    // Benchmark each function in the addon
+    console.log(bold('Benchmarking Rust functions:'));
+    console.log('  ' + ['Name'.padEnd(35), 'avg'.padStart(12), 'median'.padStart(12), 'p95'.padStart(12), 'p99'.padStart(12), 'ops/s'.padStart(15)].join('  '));
+    console.log('  ' + '-'.repeat(100));
 
-    try {
-      const result = await benchmarkFn(`rust.${name}`, fn as () => unknown, { iterations, concurrency });
-      console.log('  ' + formatBenchResult(result));
-      results.push({ name, result });
-    } catch (err) {
-      console.log(`  ${red('✗')} rust.${name} — ${(err as Error).message}`);
+    for (const [name, fn] of Object.entries(addon)) {
+      if (typeof fn !== 'function') continue;
+      if (name.startsWith('_')) continue;
+
+      try {
+        const result = await benchmarkFn(`rust.${name}`, fn as () => unknown, { iterations, concurrency });
+        console.log('  ' + formatBenchResult(result));
+        results.push({ name, result });
+      } catch (err) {
+        console.log(`  ${red('✗')} rust.${name} — ${(err as Error).message}`);
+      }
+    }
+  } else {
+    // No native rust-bench addon — benchmark the JS fallback implementations
+    // of the PSX accelerated modules instead of exiting. These are the exact
+    // code paths that run in production when the native addons aren't
+    // compiled, so the numbers reflect real deployment behavior.
+    console.log(yellow('Native rust-bench addon not found — benchmarking JS fallback implementations.'));
+    console.log(dim('These are the code paths used when native addons are not compiled.'));
+    console.log(dim('To benchmark the native addons, compile them first: pledge build\n'));
+
+    const core = await import('pledgestack-core');
+    const benchPayload = Buffer.alloc(1024, 0x61);
+
+    const jsSuites: Array<{ name: string; fn: () => unknown }> = [
+      { name: 'kvSet (1KB)', fn: () => core.kvSet('bench:key', benchPayload) },
+      { name: 'kvGet (1KB)', fn: () => core.kvGet('bench:key') },
+      { name: 'checkRateLimit', fn: () => core.checkRateLimit('bench:rl', 1000, 100) },
+      { name: 'recordRender', fn: () => core.recordRender('/bench/:x', 12345) },
+      { name: 'getCompiledTemplate', fn: () => core.getCompiledTemplate('/bench/:x') },
+      { name: 'gzipCompress (1KB)', fn: () => core.gzipCompress(benchPayload) },
+      { name: 'searchAddDocument', fn: () => core.searchAddDocument('bench:doc', 'benchmark document content for search indexing') },
+      { name: 'searchQuery', fn: () => core.searchQuery('benchmark', 10) },
+    ];
+
+    console.log(bold('Benchmarking JS fallback implementations:'));
+    console.log('  ' + ['Name'.padEnd(35), 'avg'.padStart(12), 'median'.padStart(12), 'p95'.padStart(12), 'p99'.padStart(12), 'ops/s'.padStart(15)].join('  '));
+    console.log('  ' + '-'.repeat(100));
+
+    // Warm up the async kv/store state so benchmarks measure steady state.
+    await core.kvSet('bench:key', benchPayload).catch(() => {});
+    await core.searchAddDocument('bench:doc', 'benchmark document content for search indexing').catch(() => {});
+
+    for (const suite of jsSuites) {
+      try {
+        const result = await benchmarkFn(`js.${suite.name}`, suite.fn as () => unknown, { iterations, concurrency });
+        console.log('  ' + formatBenchResult(result));
+        results.push({ name: suite.name, result });
+      } catch (err) {
+        console.log(`  ${red('✗')} js.${suite.name} — ${(err as Error).message}`);
+      }
     }
   }
 

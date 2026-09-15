@@ -341,16 +341,26 @@ export class ReactRendererAdapter implements RendererAdapter {
     const viewport = await resolveViewport(pageModule);
     const headHtml = await resolveHead(match.route, modules, metadata);
 
-    // JIT template check — use compiled template if available (bypasses React reconciliation)
-    const compiledTemplate = getCompiledTemplate(match.route.pattern);
-    if (compiledTemplate) {
-      const filled = fillCompiledTemplate(compiledTemplate, {
-        params: match.params,
-        searchParams: ctx.searchParams ?? {},
-        metadata,
-      });
-      recordRender(match.route.pattern, simpleHash(filled));
-      return filled;
+    // JIT template check — use compiled template if available (bypasses React
+    // reconciliation). The cache stores fully-rendered HTML keyed only by the
+    // route pattern, so it is only safe for routes with no per-request
+    // variation. A dynamic route like /blog/:slug would serve one request's
+    // HTML to every other request — a cross-request content leak.
+    const isCacheable =
+      Object.keys(match.params).length === 0 &&
+      Object.keys(ctx.searchParams ?? {}).length === 0;
+
+    if (isCacheable) {
+      const compiledTemplate = getCompiledTemplate(match.route.pattern);
+      if (compiledTemplate) {
+        const filled = fillCompiledTemplate(compiledTemplate, {
+          params: match.params,
+          searchParams: ctx.searchParams ?? {},
+          metadata,
+        });
+        recordRender(match.route.pattern, simpleHash(filled));
+        return filled;
+      }
     }
 
     // Try Rust SSR acceleration first
@@ -375,10 +385,13 @@ export class ReactRendererAdapter implements RendererAdapter {
       pattern: match.route.pattern,
     });
 
-    // Record render for JIT profiling — store template if threshold reached
-    const profileResult = recordRender(match.route.pattern, simpleHash(fullHtml));
-    if (profileResult.shouldCompile) {
-      void storeCompiledTemplate(match.route.pattern, fullHtml);
+    // Record render for JIT profiling — store template if threshold reached.
+    // Only for cacheable (param/query-free) renders; see isCacheable above.
+    if (isCacheable) {
+      const profileResult = recordRender(match.route.pattern, simpleHash(fullHtml));
+      if (profileResult.shouldCompile) {
+        void storeCompiledTemplate(match.route.pattern, fullHtml);
+      }
     }
 
     return fullHtml;

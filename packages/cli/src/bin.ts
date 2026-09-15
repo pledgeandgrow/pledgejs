@@ -30,6 +30,10 @@ const { values, positionals } = parseArgs({
     all: { type: 'boolean' },
     open: { type: 'boolean' },
     optimized: { type: 'boolean' },
+    'dry-run': { type: 'boolean' },
+    target: { type: 'string' },
+    branch: { type: 'string' },
+    project: { type: 'string' },
     output: { type: 'string', short: 'o' },
     help: { type: 'boolean', short: 'h' },
   },
@@ -86,7 +90,7 @@ async function main() {
         process.exit(1);
       }
       await createCommand(projectName, {
-        template: values.template as 'default' | 'blank' | 'blog' | 'dashboard' | undefined,
+        template: values.template as string | undefined,
       });
       break;
     }
@@ -326,6 +330,36 @@ async function main() {
       }
       break;
     }
+    case 'deploy': {
+      const { deploy } = await import('pledgestack-deploy');
+      const { loadConfig } = await import('./config-loader');
+      const config = await loadConfig();
+      const target = values.target as 'cloudflare' | 'vercel' | 'netlify' | 'auto' | undefined;
+      const result = await deploy(config, {
+        target,
+        dryRun: values['dry-run'] as boolean | undefined,
+        branch: values.branch as string | undefined,
+        project: values.project as string | undefined,
+        verbose: values.verbose as boolean | undefined,
+      });
+      if (!result.success) {
+        console.error(`\n  ✖ ${result.message}`);
+        process.exit(1);
+      }
+      console.log(`\n  ✓ ${result.message}`);
+      if (result.url) console.log(`  → ${result.url}`);
+      console.log(`  (${result.durationMs}ms)\n`);
+      break;
+    }
+    case 'content': {
+      const { contentCommand } = await import('./commands/content');
+      await contentCommand({
+        subcommand: positionals[1],
+        collection: positionals[2],
+        verbose: values.verbose as boolean | undefined,
+      });
+      break;
+    }
     default:
       console.error(`Unknown command: ${command}`);
       printHelp();
@@ -382,6 +416,8 @@ function printHelp() {
     search   Index pages and search content (pledge search [query])
     codemod  Run code transformations (pledge codemod <name> <path>)
     docker   Generate Dockerfile, .dockerignore, docker-compose.yml
+    deploy   Build and deploy to Cloudflare Pages, Vercel, or Netlify
+    content  Index, list, and validate content collections
 
   Options:
     -p, --port <number>      Server port (default: 3000)
@@ -442,6 +478,11 @@ function printHelp() {
     pledge docker --optimized     (Rust-addon-aware multi-stage build)
     pledge docker compose
     pledge docker ignore
+    pledge deploy                  (auto-detect platform)
+    pledge deploy --target cloudflare
+    pledge deploy --target vercel
+    pledge deploy --dry-run        (build only, don't upload)
+    pledge deploy --project myapp  (specify project/site name)
   `);
 }
 

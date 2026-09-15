@@ -241,6 +241,7 @@ export class PsxProductionProfiler extends EventEmitter {
     functionName: string,
     module: string,
   ): T {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- capture for closure
     const profiler = this;
     return (async function (...args: unknown[]) {
       const start = performance.now();

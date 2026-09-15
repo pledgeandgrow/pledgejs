@@ -29,27 +29,54 @@ export function createEdgeHandler(options: EdgeServerOptions) {
       headers[key] = value;
     });
 
-    // Read the request body for methods that can carry one. Without this, every
-    // edge adapter delivered POST/PUT/PATCH with an empty body — server actions
-    // saw no args and API routes received a bodyless request.
+    // Read the request body for methods that can carry one. Enforce a max
+    // size to prevent memory exhaustion (default 1MB).
+    const MAX_BODY_SIZE = parseInt(process.env.PLEDGE_MAX_BODY_SIZE ?? '1048576', 10);
     let body: string | undefined;
     if (method !== 'GET' && method !== 'HEAD') {
-      body = await request.text();
+      const text = await request.text();
+      if (text.length > MAX_BODY_SIZE) {
+        return new Response('Request body too large', { status: 413 });
+      }
+      body = text;
     }
 
-    const result = await handler({ url, method, headers, body });
+    try {
+      const result = await handler({ url, method, headers, body });
 
-    // Apply security headers to edge responses
-    const isHttps = url.protocol === 'https:' || headers['x-forwarded-proto'] === 'https';
-    const finalHeaders = new Headers(applySecurityHeaders({ ...result.headers }, config, isHttps));
-    // Append each Set-Cookie individually (a Headers object preserves multiple).
-    if (result.cookies) {
-      for (const cookie of result.cookies) finalHeaders.append('Set-Cookie', cookie);
+      // Apply security headers to edge responses
+      const isHttps = url.protocol === 'https:' || headers['x-forwarded-proto'] === 'https';
+      const finalHeaders = new Headers(applySecurityHeaders({ ...result.headers }, config, isHttps));
+      // Append each Set-Cookie individually (a Headers object preserves multiple).
+      if (result.cookies) {
+        for (const cookie of result.cookies) finalHeaders.append('Set-Cookie', cookie);
+      }
+
+      // Handle base64-encoded binary content (OG images, downloads) — the
+      // Node server decodes these but the edge handler previously didn't,
+      // returning corrupted/empty bodies for binary responses.
+      let responseBody: BodyInit | null = null;
+      if (typeof result.body === 'string') {
+        if (result.isBase64) {
+          // Decode base64 to binary for edge Response
+          const binary = atob(result.body);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          responseBody = bytes;
+        } else {
+          responseBody = result.body;
+        }
+      } else if (result.body) {
+        responseBody = result.body;
+      }
+
+      return new Response(responseBody, {
+        status: result.status,
+        headers: finalHeaders,
+      });
+    } catch (err) {
+      console.error('[pledgestack] Edge handler error:', err);
+      return new Response('Internal Server Error', { status: 500 });
     }
-
-    return new Response(result.body, {
-      status: result.status,
-      headers: finalHeaders,
-    });
   };
 }

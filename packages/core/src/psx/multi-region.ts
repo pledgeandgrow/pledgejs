@@ -1,3 +1,5 @@
+// @unconsumed — exported but not used in the request path. See REMAINING-ISSUES.md.
+
 /**
  * #280 — Multi-Region Deployment.
  *
@@ -137,7 +139,7 @@ export class MultiRegionManager extends EventEmitter {
 
     switch (this.config.routingStrategy) {
       case 'latency':
-        return this.routeByLatency(candidates, clientLatency);
+        return this.routeByLatency(candidates, clientLatency, clientRegion);
       case 'weighted':
         return this.routeByWeight(candidates);
       case 'geo':
@@ -264,8 +266,12 @@ export class MultiRegionManager extends EventEmitter {
   // Routing strategies
   // ---------------------------------------------------------------------------
 
-  private routeByLatency(regions: RegionConfig[], clientLatency?: Record<string, number>): RouteResult {
-    if (!clientLatency) {
+  private routeByLatency(
+    regions: RegionConfig[],
+    clientLatency?: Record<string, number>,
+    clientRegion?: string,
+  ): RouteResult {
+    if (!clientLatency && !clientRegion) {
       return this.routeByPrimary(regions);
     }
 
@@ -273,7 +279,15 @@ export class MultiRegionManager extends EventEmitter {
     let bestLatency = Infinity;
 
     for (const region of regions) {
-      const latency = clientLatency[region.id] ?? region.latency?.[region.id] ?? Infinity;
+      // Prefer the client's measured latency to this region. Fall back to the
+      // region's configured latency to the client's market — the previous
+      // fallback looked up `region.latency[region.id]` (the region's own id),
+      // which only resolves if the region lists itself as a market and was
+      // effectively always Infinity.
+      const latency =
+        clientLatency?.[region.id] ??
+        (clientRegion ? region.latency?.[clientRegion] : undefined) ??
+        Infinity;
       if (latency < bestLatency) {
         bestLatency = latency;
         best = region;

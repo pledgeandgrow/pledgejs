@@ -84,6 +84,8 @@ export interface OAuthTokens {
 export interface OAuthUserInfo {
   id: string;
   email?: string;
+  /** Whether the IdP has verified the email (OIDC `email_verified` claim) */
+  emailVerified?: boolean;
   name?: string;
   avatar?: string;
   provider: string;
@@ -320,6 +322,12 @@ export class OAuthManager {
     const provider = this.providers.get(providerName);
     if (!provider) throw new Error(`Unknown provider: ${providerName}`);
 
+    // Validate the redirect URL against same-origin to prevent open redirect.
+    // Only same-origin relative paths or the configured redirectUri are allowed.
+    if (!isSafeRedirect(redirect, provider.redirectUri)) {
+      throw new Error('Invalid redirect URL: must be same-origin or match the configured redirect URI');
+    }
+
     const pkce = generatePKCE();
     const state = createOAuthStateParam(providerName, redirect, pkce.codeVerifier, this.secret);
     const url = buildAuthorizeUrl(provider, state, pkce);
@@ -354,5 +362,21 @@ function normalizeUserInfo(data: any, provider: string): OAuthUserInfo {
   const name = data.name ?? data.nickname ?? data.preferred_username;
   const avatar = data.picture ?? data.avatar_url ?? data.avatar;
 
-  return { id, email, name, avatar, provider, raw: data };
+  return { id, email, emailVerified: data.email_verified === true, name, avatar, provider, raw: data };
+}
+
+/**
+ * Validate that a redirect URL is safe (same-origin relative path or matches
+ * the allowed base). Prevents open redirect via crafted OAuth state.
+ */
+function isSafeRedirect(redirect: string, allowedBase: string): boolean {
+  // Relative paths (starting with /) are same-origin.
+  if (redirect.startsWith('/') && !redirect.startsWith('//')) return true;
+  try {
+    const redirectUrl = new URL(redirect);
+    const baseUrl = new URL(allowedBase);
+    return redirectUrl.origin === baseUrl.origin;
+  } catch {
+    return false;
+  }
 }

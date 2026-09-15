@@ -11,6 +11,32 @@
 import { createHash, randomBytes as nodeRandomBytes, createCipheriv, createDecipheriv, pbkdf2Sync, createHmac } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 
+/**
+ * Dynamically imports an optional runtime package, converting a missing-module
+ * error into a clear, actionable install hint. The PSX fallback packages
+ * (pg, mysql2, redis, ioredis, argon2, bcryptjs, jsonwebtoken, sharp,
+ * puppeteer, nodemailer, xlsx) are intentionally undeclared as dependencies —
+ * users install only the ones they use.
+ */
+export async function importOptional<T>(pkg: string, feature: string): Promise<T> {
+  try {
+    return (await import(pkg)) as T;
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      (err.message.includes('Cannot find module') ||
+        err.message.includes('Cannot find package') ||
+        err.message.includes('MODULE_NOT_FOUND'))
+    ) {
+      throw new Error(
+        `PledgeStack: ${feature} requires the optional package '${pkg}'. ` +
+        `Install it with: npm install ${pkg}`,
+      );
+    }
+    throw err;
+  }
+}
+
 // ============================================================================
 // SQLx fallback — uses pg (node-postgres) or mysql2
 // ============================================================================
@@ -26,13 +52,13 @@ export class SqlxFallback {
   async connect(): Promise<void> {
     const url = this.config.url;
     if (url.startsWith('postgres://') || url.startsWith('postgresql://')) {
-      const { Pool } = await import('pg');
+      const { Pool } = await importOptional<typeof import('pg')>('pg', 'SQLx fallback (postgres)');
       this.pool = new Pool({
         connectionString: url,
         max: this.config.maxConnections ?? 10,
       });
     } else if (url.startsWith('mysql://')) {
-      const mysql = await import('mysql2/promise');
+      const mysql = await importOptional<typeof import('mysql2/promise')>('mysql2/promise', 'SQLx fallback (mysql)');
       this.pool = mysql.createPool({
         uri: url,
         connectionLimit: this.config.maxConnections ?? 10,

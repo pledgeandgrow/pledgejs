@@ -123,37 +123,82 @@ export function websocketPlugin(): PledgePlugin {
 export class WSRoom {
   private clients: Map<string, PledgeWebSocket> = new Map();
   private topics: Map<string, Set<string>> = new Map();
+  /** Maximum concurrent clients per room. Prevents a single room from
+   * accumulating unbounded connections (and unbounded broadcast cost). */
+  private maxClients: number;
+  /** Maximum subscribers per topic. Bounds the per-topic fan-out. */
+  private maxTopicSize: number;
 
-  addClient(ws: PledgeWebSocket): void {
+  constructor(options?: { maxClients?: number; maxTopicSize?: number }) {
+    this.maxClients = options?.maxClients ?? 10_000;
+    this.maxTopicSize = options?.maxTopicSize ?? 10_000;
+  }
+
+  addClient(ws: PledgeWebSocket): boolean {
+    if (this.clients.size >= this.maxClients && !this.clients.has(ws.id)) {
+      // Room is full — reject so the caller can close the connection with a
+      // policy-violation code rather than silently exceeding the cap.
+      return false;
+    }
     this.clients.set(ws.id, ws);
+    return true;
   }
 
   removeClient(ws: PledgeWebSocket): void {
     this.clients.delete(ws.id);
-    for (const [, subscribers] of this.topics) {
+    for (const [topic, subscribers] of this.topics) {
       subscribers.delete(ws.id);
+      // Delete empty topics so the topics map doesn't accumulate dead entries
+      // over the lifetime of a long-running room.
+      if (subscribers.size === 0) this.topics.delete(topic);
     }
   }
 
   broadcast(data: string, excludeId?: string): void {
     for (const [id, ws] of this.clients) {
-      if (id !== excludeId) ws.send(data);
+      if (id !== excludeId) {
+        // Isolate per-client send errors so one bad socket doesn't abort the
+        // whole broadcast loop and leave remaining clients unnotified.
+        try {
+          ws.send(data);
+        } catch {
+          // A send failure (e.g. socket already closing) is logged at most by
+          // the socket impl; the broadcast continues to other clients.
+        }
+      }
     }
   }
 
   broadcastBinary(data: ArrayBuffer, excludeId?: string): void {
     for (const [id, ws] of this.clients) {
-      if (id !== excludeId) ws.sendBinary(data);
+      if (id !== excludeId) {
+        try {
+          ws.sendBinary(data);
+        } catch {
+          // Isolate per-client send errors — see broadcast().
+        }
+      }
     }
   }
 
-  subscribe(clientId: string, topic: string): void {
-    if (!this.topics.has(topic)) this.topics.set(topic, new Set());
-    this.topics.get(topic)!.add(clientId);
+  subscribe(clientId: string, topic: string): boolean {
+    let subscribers = this.topics.get(topic);
+    if (!subscribers) {
+      subscribers = new Set();
+      this.topics.set(topic, subscribers);
+    }
+    if (subscribers.size >= this.maxTopicSize && !subscribers.has(clientId)) {
+      return false;
+    }
+    subscribers.add(clientId);
+    return true;
   }
 
   unsubscribe(clientId: string, topic: string): void {
-    this.topics.get(topic)?.delete(clientId);
+    const subscribers = this.topics.get(topic);
+    if (!subscribers) return;
+    subscribers.delete(clientId);
+    if (subscribers.size === 0) this.topics.delete(topic);
   }
 
   publish(topic: string, data: string, excludeId?: string): void {
@@ -161,7 +206,14 @@ export class WSRoom {
     if (!subscribers) return;
     for (const id of subscribers) {
       if (id !== excludeId) {
-        this.clients.get(id)?.send(data);
+        const ws = this.clients.get(id);
+        if (ws) {
+          try {
+            ws.send(data);
+          } catch {
+            // Isolate per-subscriber send errors.
+          }
+        }
       }
     }
   }

@@ -153,7 +153,7 @@ describe('Integration Smoke Test', () => {
 
       // 14. Brute force protection
       const bfId = 'smoke-test-user';
-      const bfResult = checkBruteForce(bfId);
+      const bfResult = await checkBruteForce(bfId);
       expect(bfResult.allowed).toBe(true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

@@ -2,6 +2,7 @@ import type { PledgeConfig } from 'pledgestack-shared';
 import { resolveBundlerAdapter } from '../bundler-resolver';
 import { startNodeServer, loadEnv } from 'pledgestack-server';
 import { processTailwind } from '../tailwind';
+import { assertEnv } from 'pledgestack-shared';
 
 const DEFAULT_BUNDLER_PORT = 3001;
 
@@ -36,6 +37,18 @@ export async function devCommand(options: { port?: number; hostname?: string } =
   }
 
   loadEnv(config.rootDir, 'development');
+
+  // Validate required env vars before starting dev — fail fast with a clear
+  // error instead of crashing on the first request that needs a missing var (#49).
+  if (config.envSchema) {
+    try {
+      assertEnv(config.envSchema);
+    } catch (err) {
+      console.error('\n  ✖ Environment validation failed:\n');
+      console.error(`    ${err}\n`);
+      process.exit(1);
+    }
+  }
 
   const port = options.port ?? 3000;
   const hostname = options.hostname ?? 'localhost';

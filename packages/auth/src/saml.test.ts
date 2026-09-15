@@ -88,4 +88,68 @@ describe('SAML signature verification (fail-closed)', () => {
     const signed = buildSignedResponse('alice@example.com', '2999-01-01T00:00:00Z');
     expect(parseSAMLResponse(signed, baseConfig)?.nameId).toBe('alice@example.com');
   });
+
+  it('verifies a real-IdP-style enveloped signature (Signature inside the Assertion, canonicalized)', () => {
+    // Real IdPs (Okta, Azure AD, Shibboleth) sign like this:
+    // - the Signature element lives INSIDE the Assertion;
+    // - the digest covers the canonicalized assertion WITHOUT the Signature;
+    // - the SignatureValue covers the canonicalized SignedInfo.
+    const assertionId = '_abc123';
+    // Canonical form of the assertion with the Signature removed.
+    const assertionC14n =
+      '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_abc123">' +
+      '<saml:Issuer>idp</saml:Issuer>' +
+      '<saml:Subject><saml:NameID>bob@example.com</saml:NameID></saml:Subject>' +
+      '</saml:Assertion>';
+    const digest = createHash('sha256').update(assertionC14n).digest('base64');
+
+    const signedInfoC14n =
+      '<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">' +
+      '<ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"></ds:CanonicalizationMethod>' +
+      '<ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"></ds:SignatureMethod>' +
+      `<ds:Reference URI="#${assertionId}"><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"></ds:DigestMethod><ds:DigestValue>${digest}</ds:DigestValue></ds:Reference>` +
+      '</ds:SignedInfo>';
+    const signatureValue = createSign('RSA-SHA256').update(signedInfoC14n).end().sign(privateKey).toString('base64');
+
+    const signatureXml =
+      `<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">${signedInfoC14n}<ds:SignatureValue>${signatureValue}</ds:SignatureValue></ds:Signature>`;
+
+    // The on-the-wire assertion: Signature embedded before the Subject.
+    const assertionXml =
+      `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}"><saml:Issuer>idp</saml:Issuer>${signatureXml}<saml:Subject><saml:NameID>bob@example.com</saml:NameID></saml:Subject></saml:Assertion>`;
+    const xml = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol">${assertionXml}</samlp:Response>`;
+    const b64 = Buffer.from(xml).toString('base64');
+
+    expect(verifySAMLSignature(b64, baseConfig)).toBe(true);
+    expect(parseSAMLResponse(b64, baseConfig)?.nameId).toBe('bob@example.com');
+  });
+
+  it('rejects a real-IdP-style signature whose assertion was tampered after signing', () => {
+    const assertionId = '_def456';
+    const assertionC14n =
+      '<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_def456">' +
+      '<saml:Issuer>idp</saml:Issuer>' +
+      '<saml:Subject><saml:NameID>carol@example.com</saml:NameID></saml:Subject>' +
+      '</saml:Assertion>';
+    const digest = createHash('sha256').update(assertionC14n).digest('base64');
+
+    const signedInfoC14n =
+      '<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">' +
+      `<ds:Reference URI="#${assertionId}"><ds:DigestValue>${digest}</ds:DigestValue></ds:Reference>` +
+      '</ds:SignedInfo>';
+    const signatureValue = createSign('RSA-SHA256').update(signedInfoC14n).end().sign(privateKey).toString('base64');
+
+    const signatureXml =
+      `<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">${signedInfoC14n}<ds:SignatureValue>${signatureValue}</ds:SignatureValue></ds:Signature>`;
+
+    // Wire form asserts carol@example.com, but after signing we swap in an attacker.
+    const assertionXml =
+      `<saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="${assertionId}"><saml:Issuer>idp</saml:Issuer>${signatureXml}<saml:Subject><saml:NameID>attacker@evil.com</saml:NameID></saml:Subject></saml:Assertion>`;
+    const xml = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol">${assertionXml}</samlp:Response>`;
+    const b64 = Buffer.from(xml).toString('base64');
+
+    // Digest no longer matches any byte form of the assertion → rejected.
+    expect(verifySAMLSignature(b64, baseConfig)).toBe(false);
+    expect(parseSAMLResponse(b64, baseConfig)).toBeNull();
+  });
 });

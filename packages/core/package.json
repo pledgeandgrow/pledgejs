@@ -36,7 +36,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
-  "comment:optionalPeers": "The PSX integration JS fallbacks use optional runtime packages (pg, mysql2, argon2, bcryptjs, jsonwebtoken, sharp, puppeteer, nodemailer, xlsx). They are intentionally NOT declared as peerDependencies (pnpm would auto-install them). Install only the ones you use; each integration imports its package dynamically and throws a clear error if it is missing.",
+  "comment:optionalRuntimeDeps": "The PSX integration JS fallbacks use optional runtime packages (pg, mysql2, redis, ioredis, argon2, bcryptjs, jsonwebtoken, sharp, puppeteer, nodemailer, xlsx). They are intentionally NOT declared as peerDependencies or optionalDependencies — pnpm auto-installs optional peers and npm/pnpm would install ~200MB of heavy native modules (puppeteer's Chromium, argon2's compiled addon, sharp's platform binaries) that most users never use. Install only the ones you use; each integration imports its package dynamically and throws a clear error with the exact install command if it is missing.",
   "devDependencies": {
     "typescript": "^5.7.0",
     "rimraf": "^6.0.0",

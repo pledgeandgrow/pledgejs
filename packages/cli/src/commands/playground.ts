@@ -20,6 +20,85 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
+/**
+ * Cache of successfully compiled WASM modules, keyed by source string.
+ * Bounded (last 20 entries) — playground usage is small and interactive.
+ */
+const wasmModuleCache = new Map<string, WebAssembly.Module>();
+function cacheWasmModule(source: string, module: WebAssembly.Module): void {
+  if (wasmModuleCache.size >= 20) {
+    const oldest = wasmModuleCache.keys().next().value;
+    if (oldest !== undefined) wasmModuleCache.delete(oldest);
+  }
+  wasmModuleCache.set(source, module);
+}
+
+interface WasmBuildResult {
+  ok: boolean;
+  module?: WebAssembly.Module;
+  error?: string;
+}
+
+/**
+ * Compiles Rust source to WebAssembly using the real toolchain (cargo with
+ * the wasm32-unknown-unknown target). Returns ok:false when the toolchain
+ * is unavailable — callers then fall back to a labeled simulation.
+ */
+async function compileRustToWasm(source: string): Promise<WasmBuildResult> {
+  const { execFile } = require('node:child_process') as typeof import('node:child_process');
+  const { mkdtemp, writeFile, rm } = require('node:fs/promises') as typeof import('node:fs/promises');
+  const { tmpdir } = require('node:os') as typeof import('node:os');
+  const { join } = require('node:path') as typeof import('node:path');
+
+  const runCargo = (args: string[], opts: { cwd: string; timeout: number }) =>
+    new Promise<{ code: number; stderr: string }>((resolve) => {
+      execFile('cargo', args, opts, (err, _stdout, stderr) => {
+        resolve({ code: err ? (err as { code?: number }).code ?? 1 : 0, stderr: String(stderr ?? '') });
+      });
+    });
+
+  // Check the toolchain is present before doing any work.
+  const probe = await runCargo(['--version', '--quiet'], { cwd: process.cwd(), timeout: 10_000 });
+  if (probe.code !== 0) return { ok: false, error: 'cargo not found' };
+
+  const dir = await mkdtemp(join(tmpdir(), 'pledge-playground-'));
+  try {
+    await writeFile(
+      join(dir, 'Cargo.toml'),
+      [
+        '[package]',
+        'name = "playground"',
+        'version = "0.1.0"',
+        'edition = "2021"',
+        '',
+        '[lib]',
+        'crate-type = ["cdylib"]',
+      ].join('\n'),
+      'utf-8',
+    );
+    const { mkdir } = require('node:fs/promises') as typeof import('node:fs/promises');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src', 'lib.rs'), source, 'utf-8');
+
+    const build = await runCargo(
+      ['build', '--release', '--target', 'wasm32-unknown-unknown'],
+      { cwd: dir, timeout: 120_000 },
+    );
+    if (build.code !== 0) {
+      return { ok: false, error: 'wasm32 target not installed or compile failed: ' + build.stderr.slice(0, 500) };
+    }
+
+    const { readFile } = require('node:fs/promises') as typeof import('node:fs/promises');
+    const wasmPath = join(dir, 'target', 'wasm32-unknown-unknown', 'release', 'playground.wasm');
+    const wasmBytes = await readFile(wasmPath);
+    const module = await WebAssembly.compile(wasmBytes);
+    cacheWasmModule(source, module);
+    return { ok: true, module };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 interface PlaygroundOptions {
   port?: number;
   open?: boolean;
@@ -90,7 +169,9 @@ export async function playgroundCommand(opts: PlaygroundOptions = {}): Promise<v
         return;
       }
 
-      // POST /api/compile — compile Rust to WASM (simulated)
+            // POST /api/compile — compile Rust to WASM. Uses the real toolchain
+      // (cargo + wasm32-unknown-unknown target) when available; falls back to
+      // a clearly-labeled signature-only result when it is not.
       if (path === '/api/compile' && req.method === 'POST') {
         const body = await readBody(req);
         let source: string;
@@ -102,42 +183,84 @@ export async function playgroundCommand(opts: PlaygroundOptions = {}): Promise<v
           return;
         }
 
-        // In a real implementation, this would invoke cargo+wasm-pack
-        // For now, we return a simulated compilation result
         const functions = extractRustFunctions(source);
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          success: true,
-          functions: functions.map((f) => ({
-            name: f.name,
-            wasmExport: `__pledge_wasm_${f.name}`,
-            params: f.params,
-            returnType: f.returnType,
-          })),
-          message: 'Compiled successfully (simulated). In production, this uses wasm-pack.',
-        }));
+        const build = await compileRustToWasm(source);
+        if (build.ok && build.module) {
+          wasmModuleCache.set(source, build.module);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            compiled: true,
+            wasmExports: WebAssembly.Module.exports(build.module).map((e) => e.name),
+            functions: functions.map((f) => ({
+              name: f.name,
+              params: f.params,
+              returnType: f.returnType,
+            })),
+            message: 'Compiled to real WebAssembly via cargo.',
+          }));
+        } else {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            compiled: false,
+            functions: functions.map((f) => ({
+              name: f.name,
+              params: f.params,
+              returnType: f.returnType,
+            })),
+            message: 'Toolchain unavailable (' + (build.error || 'cargo + wasm32 target not found') + ') — returning signatures only. Install Rust with the wasm32-unknown-unknown target for real compilation.',
+          }));
+        }
         return;
       }
-
-      // POST /api/execute — execute a compiled function (simulated)
+      // POST /api/execute — execute a compiled function. Calls the real WASM
+      // export when the source was compiled; otherwise simulates (labeled).
       if (path === '/api/execute' && req.method === 'POST') {
         const body = await readBody(req);
         let fnName: string;
         let args: unknown[];
+        let source = '';
         try {
-          ({ function: fnName, args } = JSON.parse(body) as { function: string; args: unknown[] });
+          const parsed = JSON.parse(body) as { function: string; args: unknown[]; source?: string };
+          ({ function: fnName, args } = parsed);
+          source = parsed.source ?? '';
         } catch {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Invalid JSON body' }));
           return;
         }
 
-        // Simulate execution
+        const cachedModule = source ? wasmModuleCache.get(source) : undefined;
+        if (cachedModule && WebAssembly.Module.exports(cachedModule).some((e) => e.name === fnName && e.kind === 'function')) {
+          try {
+            const instance = await WebAssembly.instantiate(cachedModule, {});
+            const result = (instance.exports as Record<string, (...a: unknown[]) => unknown>)[fnName](
+              ...args.map((a) => (typeof a === 'number' ? a : 0)),
+            );
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: true,
+              result,
+              message: 'Executed real WebAssembly export.',
+            }));
+            return;
+          } catch (err) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: false,
+              error: 'WASM export call failed: ' + (err instanceof Error ? err.message : String(err)),
+            }));
+            return;
+          }
+        }
+
+        // Simulate execution — real WASM module not available for this source.
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           success: true,
           result: simulateRustExecution(fnName, args),
-          message: 'Executed (simulated). In production, this calls the WASM module.',
+          message: 'Executed (simulated) — compile with a real toolchain for WASM execution.',
         }));
         return;
       }
@@ -176,7 +299,7 @@ export async function playgroundCommand(opts: PlaygroundOptions = {}): Promise<v
     console.log(`  ✓ PSX Playground running at http://localhost:${port}\n`);
     console.log('  Features:');
     console.log('    • PSX parser — split Rust/TSX in real-time');
-    console.log('    • Rust function compiler (simulated WASM)');
+    console.log('    • Rust function compiler (real WASM when Rust toolchain present)');
     console.log('    • Function executor with live output');
     console.log('    • Snippet sharing via URL\n');
     console.log('  Press Ctrl+C to stop.\n');
@@ -334,6 +457,7 @@ export default function Page() {
     let activeTab = 'parsed';
     let parsedData = null;
     let compiledFns = [];
+    let lastRustSource = '';
 
     function switchTab(tab) {
       activeTab = tab;
@@ -391,6 +515,7 @@ export default function Page() {
       });
       const data = await res.json();
       compiledFns = data.functions || [];
+      lastRustSource = rustSource;
       outputLog = '[Compile] ' + data.message + '\\n' +
         compiledFns.map(f => '  ✓ ' + f.name + '(' + f.params + ') -> ' + f.returnType).join('\\n');
       switchTab('output');
@@ -419,7 +544,7 @@ export default function Page() {
       const res = await fetch('/api/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ function: name, args }),
+        body: JSON.stringify({ function: name, args, source: lastRustSource }),
       });
       const data = await res.json();
       outputLog += '\\n[Execute] ' + name + '(' + args.join(', ') + ') = ' + JSON.stringify(data.result);

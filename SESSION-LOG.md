@@ -3,8 +3,127 @@
 A running log of work done on this repo, one entry per work session, **newest
 first**. Each entry follows the same shape: why the session happened, what was
 fixed/changed, what was verified, and what's still open going into the next
-session. See [REMAINING-ISSUES.md](./REMAINING-ISSUES.md) for the live,
+session. See [docs/roadmap-issues.md](./docs/roadmap-issues.md) for the live,
 un-fixed backlog — this file is the historical record of what was *done*.
+
+---
+
+## 2026-09-14 — All 50 production-readiness goals implemented
+
+### Why
+
+The user requested implementation of all 50 goals across five tiers identified
+in the full-codebase production-readiness audit.
+
+### What was changed
+
+**Tier 1 — Security-Critical (15 goals):** Session regeneration, password
+strength validation, email verification/OIDC `email_verified` handling, account
+lockout, JWT `typ` claim enforcement, TOTP replay guard, OAuth redirect
+validation, SSRF DNS-rebinding pinning, encryption salt persistence, SAML XML
+escaping, upload magic-byte verification, RSS element name validation, OG
+`nosniff` + depth limit, CCPA HMAC-signed cookies, `trustProxy` default deny.
+
+**Tier 2 — Server Reliability (15 goals):** Request body size limits, metrics
+endpoint protection, metric cardinality bounding, request timeout abort,
+bundler proxy timeout, stream backpressure/disconnect handling, edge base64
+responses, health tri-state, image optimization param bounding, graceful
+shutdown handler dedup, request ID sanitization, server-action error masking,
+middleware rewrite open-redirect validation, brute-force route matching, CSRF
+config decoupling, context initialization race fix.
+
+**Tier 3 — Render/Router (8 goals):** Streaming timeout cleanup, hybrid SSR
+post-shell error handling + hard timeout, compiled pattern memoization,
+safe `decodeURIComponent`, `generateStaticParams` failure surfacing, bounded
+prefetch cache, navigation race protection, ISR LRU eviction + TTL sweep +
+thundering-herd guard, media hydration listener cleanup.
+
+**Tier 4 — Performance & Memory (7 goals):** JIT template profile cache
+bounding, KV-store memory cap + debounced persistence, WS decompression bomb
+limit, WS room client/topic caps + empty topic cleanup + per-send error
+isolation, state store listener error isolation, persistence quota error
+surfacing, URL-state redundant update prevention.
+
+**Tier 5 — Build & CI/CD (5 goals):** Webpack production minification + content
+hashes + split chunks + source maps, Vite server/client source maps + content
+hashes, CLI source maps, Docker entrypoint via `pledge start` (not hardcoded
+path), env validation (`validateEnv`/`assertEnv`), CI build gate, release
+workflow typecheck/test/build gates, `pledgestack-privacy` path alias fix.
+
+### What was verified
+
+- `pnpm typecheck`: **0 errors** across the workspace
+- `pnpm test`: **1002/1002 passing across 111 files** (up from 974 — user
+  added content markdown renderer, caching, deploy project names, and
+  server-fn middleware with tests). Later updated to **1023 passing, 2
+  failing (new MDX/server-fn tests), 5 skipped across 112 files** after
+  the user added `compileMdx` (first-party MDX compiler) and
+  `.inputValidator()`/`.outputValidator()` server-fn builder methods.
+
+### What's still open
+
+- The ISR locale-key question was evaluated and left as-is (locale is already
+  in the pathname under current i18n behavior).
+- SAML signature canonicalization needs more than XML escaping for full
+  security — the current fix addresses injection, not canonicalization.
+- The deploy edge config path was fixed (`config.pledgepack.edge.target`
+  instead of `config.edge.target`) — the user also added `--project` flag
+  support for Vercel/Netlify deploys.
+- The user added server-fn middleware chains, a `pledge content` CLI
+  command, content markdown renderer + caching, and `getAllCollectionNames()`.
+- The user added `compileMdx` (first-party MDX compiler with JSX component
+  registry) and `.inputValidator()`/`.outputValidator()` server-fn builder
+  methods. **2 tests fail** in this new work:
+  1. `compileMdx > renderBody uses compileMdx for .mdx files` — test pollution:
+     a previous test registered a `Callout` component, so the fallback
+     `data-component="Callout"` placeholder is not emitted. Fix: clear
+     `mdxComponents` in `beforeEach`/`afterEach`.
+  2. `server-fn > multiple outputValidators all run` — the test calls
+     `.outputValidator()` **after** `.handler()`, but the API only exposes
+     `outputValidator` on the builder (before `handler()`). The returned
+     `ServerFnCallable` doesn't have `outputValidator`. Fix: move
+     `.outputValidator()` calls before `.handler()` in the test.
+
+---
+
+## 2026-09-14 — Operational fixes: CLI dist, typecheck script, React types, sccache flake
+
+### Why
+
+A re-audit of the monorepo found that the existing audit docs
+(`AUDIT-STATUS.md`, `docs/roadmap-issues.md`) were **stale** — they listed many
+issues as open that were already fixed in commit `3a4dd5a`. The real current
+issues were fewer and different: the CLI entrypoint couldn't run any
+subcommand, typecheck was red, and one test was flaky.
+
+### Real bugs fixed
+
+| Area | What was wrong | Fix |
+|---|---|---|
+| CLI dist (ESM imports) | `pnpm test`/`dev`/`build` all threw `ERR_MODULE_NOT_FOUND: Cannot find module '...dist/commands/test'`. Root cause: `tsc -b` (build mode) in the typecheck script **emitted JS** into `packages/cli/dist/`, overwriting the esbuild-bundled output with tsc's unbundled extensionless `import('./commands/test')` calls that Node ESM can't resolve. | Rebuilt dist with esbuild (`node scripts/build.mjs`). Switched `scripts/typecheck-workspace.mjs` from `tsc -b` (emits) to `tsc --noEmit -p` (typechecks only, no emit) for all projects — the root tsconfig's `paths` resolve workspace imports to source directly, so project references aren't needed for typechecking. |
+| `@types/react` hoisting | `@types/react` wasn't hoisted to the workspace root (pnpm strict hoisting), so `tsc` resolved a **global** copy from `C:/Users/ilyas/node_modules/@types/react` (v19.1.2) for some dependency types, causing a version mismatch with the local v19.2.17. `renderer-react` typecheck failed with `ReactNode` assignment errors. | Added `@types/react` and `@types/react-dom` to the root `package.json` devDependencies so pnpm hoists a consistent v19.2.17 to the root. |
+| `create.ts` type errors | `packages/cli/src/commands/create.ts` had an unused `fileURLToPath` import (`noUnusedLocals`) and `export type { PledgeConfig };` re-exporting a type that was never imported/defined (TS2304). | Removed the unused import and the dangling re-export. |
+| `ignoreDeprecations` stale cache | After `pnpm install` invalidated the `.tsbuildinfo` cache, `tsc -b` surfaced `TS5103: Invalid value for '--ignoreDeprecations'` across all child projects. The root tsconfig had `"ignoreDeprecations": "5.0"` (valid for TS 5.x). | Cleaned stale `.tsbuildinfo` files; the switch to `tsc --noEmit -p` (which doesn't use project-reference build mode) avoids the cache invalidation issue entirely. |
+| Sccache test flake | `packages/core/src/psx/sccache.test.ts > generates cache key` timed out at 5000ms. `generateCacheKey()` calls `execSync('rustc --version')` which is slow on Windows (subprocess spawn + PATH search). | Increased the test's timeout to 30000ms with a comment explaining why. |
+| `serverless-cold-start.ts` | `loadModule`/`get`/`preWarm`/`preWarmAll` were synchronous but loaders can be async; `preWarmAll` fired loaders without awaiting; the `cached` metric in `getMetrics()` used a convoluted heuristic that could misreport. | Made `loadModule`/`get`/`preWarm`/`preWarmAll` async; `preWarmAll` now `Promise.all`s the loaders; added a `cachedModules` Set for accurate `cached` reporting. Removed the stale `@unconsumed` comment. |
+
+### Verification
+
+- `pnpm typecheck`: **0 errors** (no longer overwrites dist)
+- `pnpm test`: **920/920 passing** across 108 files (was 918/108 — the sccache
+  test now passes reliably; the 2-test gain is from the serverless-cold-start
+  async-loader tests)
+- `packages/cli/dist/bin.js` intact after typecheck (confirmed the typecheck
+  script no longer emits into dist)
+
+### Still open going into next session
+
+See [docs/roadmap-issues.md](./docs/roadmap-issues.md) — updated to reflect the
+current verified state. The previously-listed critical/security blockers
+(server actions, hydration, PKCE, SAML, edge-JWT, image, ISR, state) are
+fixed in source. Remaining items are the stub layer (15 PSX integrations
+with no Rust crates, playground/bench simulations), workspace version drift,
+and the stale `docs/roadmap.md` status note (now updated).
 
 ---
 
@@ -134,7 +253,7 @@ Bugs found *while* fixing the above (not in the original audit):
 
 A follow-up audit pass targeting packages this session didn't touch (state,
 seo, a11y, sitemap, api, font, the create-pledge-app templates, vscode-psx)
-found new, unfixed bugs — see [REMAINING-ISSUES.md](./REMAINING-ISSUES.md) for
+found new, unfixed bugs — see [docs/roadmap-issues.md](./docs/roadmap-issues.md) for
 the full, current list. Highlights: a real state-corruption bug in
 `pledgestack-state`'s `setValue`, a JSON-LD XSS in `pledgestack-seo`, and a
 non-functional `create-pledge-app` `api` template.

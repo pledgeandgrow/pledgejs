@@ -23,9 +23,11 @@ import {
   transformTsxLocally,
   generateRustFallback,
   clearTransformCacheDir,
+  BoundedLRUMap,
+  MAX_TRANSFORM_CACHE_ENTRIES,
 } from 'pledgestack-shared';
 
-const TRANSFORM_CACHE = new Map<string, string>();
+const TRANSFORM_CACHE = new BoundedLRUMap<string, string>(MAX_TRANSFORM_CACHE_ENTRIES);
 
 /** Cache for source maps: moduleName → { entries, sourceFilePath } */
 const SOURCE_MAP_CACHE = new Map<string, { entries: import('pledgestack-core').SourceMapEntry[]; sourceFilePath: string }>();
@@ -58,28 +60,29 @@ export async function transformFile(
   pledgepackPort?: number,
   cargoConfig?: CargoConfig,
   rootDir?: string,
+  hostname?: string,
 ): Promise<string> {
   const projectRoot = rootDir ?? process.cwd();
   const ext = extname(sourcePath);
 
   // Handle .psx and .ps files — parse Rust, generate TSX/types + NAPI bindings
   if (ext === '.psx' || ext === '.ps') {
-    return transformPSXFile(sourcePath, isDev, pledgepackPort, ext === '.ps' ? 'ps' : 'psx', cargoConfig, projectRoot);
+    return transformPSXFile(sourcePath, isDev, pledgepackPort, ext === '.ps' ? 'ps' : 'psx', cargoConfig, projectRoot, hostname);
   }
 
   // Handle .vue single-file components
   if (ext === '.vue') {
-    return transformVueSFC(sourcePath, isDev, pledgepackPort, projectRoot);
+    return transformVueSFC(sourcePath, isDev, pledgepackPort, projectRoot, hostname);
   }
 
   // Handle .svelte single-file components
   if (ext === '.svelte') {
-    return transformSvelteSFC(sourcePath, isDev, pledgepackPort, projectRoot);
+    return transformSvelteSFC(sourcePath, isDev, pledgepackPort, projectRoot, hostname);
   }
 
   // Handle .mdx files — compile MDX to JSX/JS
   if (ext === '.mdx') {
-    return transformMDX(sourcePath, isDev, pledgepackPort, projectRoot);
+    return transformMDX(sourcePath, isDev, pledgepackPort, projectRoot, hostname);
   }
 
   if (ext !== '.ts' && ext !== '.tsx' && ext !== '.jsx' && ext !== '.mjs') {
@@ -95,7 +98,7 @@ export async function transformFile(
   let transformedCode: string;
 
   if (isDev && port > 0) {
-    transformedCode = await fetchFromPledgepack(sourcePath, port, projectRoot);
+    transformedCode = await fetchFromPledgepack(sourcePath, port, projectRoot, hostname);
   } else {
     transformedCode = await transformLocally(sourcePath, ext);
   }
@@ -147,6 +150,7 @@ async function transformPSXFile(
   format: 'psx' | 'ps' = 'psx',
   cargoConfig?: CargoConfig,
   rootDir?: string,
+  hostname?: string,
 ): Promise<string> {
   const projectRoot = rootDir ?? process.cwd();
   const ext = format === 'ps' ? '.ps' : '.psx';
@@ -226,7 +230,7 @@ async function transformPSXFile(
     // Write TSX to temp file and fetch from PledgePack
     const tsxTempPath = join(cacheDir, `${moduleName}.tsx`);
     await writeFile(tsxTempPath, result.tsx, 'utf-8');
-    transformedCode = await fetchFromPledgepack(tsxTempPath, port, projectRoot);
+    transformedCode = await fetchFromPledgepack(tsxTempPath, port, projectRoot, hostname);
   } else {
     transformedCode = await transformTsxLocally(result.tsx, isDev);
   }
@@ -353,10 +357,11 @@ async function compileRustAddon(
 
   try {
     const { stdout } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const timeoutMs = cargoConfig?.timeout ?? (isDev ? 30000 : 120000);
       const child = spawn('cargo', cargoArgs, {
         cwd: rustDir,
         stdio: 'pipe',
-        timeout: cargoConfig?.timeout ?? (isDev ? 30000 : 120000),
+        timeout: timeoutMs,
         env: cargoEnv,
       });
       let stdout = '';
@@ -364,7 +369,7 @@ async function compileRustAddon(
       child.stdout?.on('data', (data: Buffer) => { stdout += data.toString(); });
       child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
       child.on('error', reject);
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
         if (code === 0) resolve({ stdout, stderr });
         else {
           // ── #210: Map Rust errors to .psx/.ps source locations ───────
@@ -382,7 +387,21 @@ async function compileRustAddon(
           } else {
             console.error(`[pledgestack] Rust compilation failed for ${moduleName}:`, stderr);
           }
-          reject(new Error(`cargo exited with ${code}`));
+          // PRODUCTION-READINESS-100.md goal 85: `code` is `null` whenever
+          // the process was killed by a signal instead of exiting normally
+          // — which is exactly what happens when Node's `timeout` option
+          // above fires (it sends SIGTERM). The old `cargo exited with
+          // ${code}` message rendered as the literally useless "cargo
+          // exited with null" in that case, with no indication a timeout
+          // was the cause. `signal` (Node's second `close` argument) tells
+          // us which case this actually is.
+          if (code === null && signal === 'SIGTERM') {
+            reject(new Error(`cargo build timed out after ${timeoutMs}ms`));
+          } else if (code === null) {
+            reject(new Error(`cargo was killed by signal ${signal ?? 'unknown'}`));
+          } else {
+            reject(new Error(`cargo exited with code ${code}`));
+          }
         }
       });
     });
@@ -596,6 +615,7 @@ async function transformVueSFC(
   // matching transformReactSFC's signature — not yet needed by this transform.
   _pledgepackPort: number | undefined,
   _projectRoot: string,
+  _hostname?: string,
 ): Promise<string> {
   const source = await readFile(sourcePath, 'utf-8');
   const blocks = parseVueSFC(source);
@@ -768,6 +788,7 @@ async function transformSvelteSFC(
   // matching transformReactSFC's signature — not yet needed by this transform.
   _pledgepackPort: number | undefined,
   _projectRoot: string,
+  _hostname?: string,
 ): Promise<string> {
   const source = await readFile(sourcePath, 'utf-8');
   const blocks = parseSvelteSFC(source);
@@ -862,6 +883,7 @@ async function transformMDX(
   isDev: boolean,
   pledgepackPort?: number,
   _projectRoot?: string,
+  _hostname?: string,
 ): Promise<string> {
   const source = await readFile(sourcePath, 'utf-8');
   const moduleName = basename(sourcePath, '.mdx');
@@ -893,10 +915,36 @@ async function transformMDX(
 /**
  * Lightweight MDX-to-JSX compiler.
  * Converts markdown to HTML elements and preserves embedded JSX.
+ * Frontmatter (--- delimited) is stripped from the rendered content and
+ * exported as `frontmatter`, honoring config.mdx.frontmatter (default: on).
  */
 function compileMDX(source: string, moduleName: string): string {
+  // Extract frontmatter before compiling so --- blocks never render as
+  // page content; the parsed data is exported for metadata resolution.
+  const fmMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  let frontmatter: Record<string, unknown> = {};
+  let body = source;
+  if (fmMatch) {
+    body = source.slice(fmMatch[0].length);
+    for (const line of fmMatch[1].split('\n')) {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+      const key = line.slice(0, colonIdx).trim();
+      let value: unknown = line.slice(colonIdx + 1).trim();
+      if (value === 'true') value = true;
+      else if (value === 'false') value = false;
+      else if (/^\d+$/.test(value as string)) value = Number(value);
+      else if ((value as string).startsWith('[') && (value as string).endsWith(']')) {
+        value = (value as string).slice(1, -1).split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+      } else {
+        value = (value as string).replace(/^["']|["']$/g, '');
+      }
+      frontmatter[key] = value;
+    }
+  }
+
   // Split into lines and process
-  const lines = source.split('\n');
+  const lines = body.split('\n');
   const jsxParts: string[] = [];
   let inJsxBlock = false;
   let jsxBuffer: string[] = [];
@@ -972,6 +1020,8 @@ function compileMDX(source: string, moduleName: string): string {
 
   return `// Compiled from ${moduleName}.mdx
 import { createElement as h } from 'react';
+
+export const frontmatter = ${JSON.stringify(frontmatter)};
 
 function MDXContent(props) {
   return h('div', { className: 'mdx-content', ...props }, ${JSON.stringify(jsxContent)});

@@ -25,13 +25,21 @@ export interface MDXPluginOptions {
   /** Provider component for MDX context (optional) */
   provider?: string;
   /**
-   * Reserved for PledgePack's MDX transform: frontmatter extraction toggle and
-   * remark/rehype plugin lists. NOTE: the JS plugin does not apply these — MDX
-   * compilation happens inside PledgePack, and there is no forwarding channel
-   * for them yet, so setting them currently has no effect.
+   * Extract frontmatter before compiling (default: true). Forwarded to
+   * config.mdx.frontmatter and honored by the JS transform pipeline.
    */
   frontmatter?: boolean;
+  /**
+   * remark plugin names/paths, forwarded to config.mdx.remarkPlugins for
+   * PledgePack's MDX transform. The JS fallback pipeline does not run remark
+   * plugins — they take effect when compiling through PledgePack.
+   */
   remarkPlugins?: string[];
+  /**
+   * rehype plugin names/paths, forwarded to config.mdx.rehypePlugins for
+   * PledgePack's MDX transform. The JS fallback pipeline does not run rehype
+   * plugins — they take effect when compiling through PledgePack.
+   */
   rehypePlugins?: string[];
 }
 
@@ -44,6 +52,14 @@ export function mdxPlugin(options: MDXPluginOptions = {}): PledgePlugin {
     configResolved(config) {
       // Ensure pledgepack knows about .mdx files
       if (!config.appDir) return;
+      // Forward MDX options through the resolved config so PledgePack's MDX
+      // transform (and the JS fallback pipeline) can read them. Previously
+      // these options were accepted but silently ignored.
+      config.mdx = {
+        frontmatter: options.frontmatter ?? true,
+        remarkPlugins: options.remarkPlugins,
+        rehypePlugins: options.rehypePlugins,
+      };
     },
 
     transformClientBundle(code) {

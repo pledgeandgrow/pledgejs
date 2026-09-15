@@ -2,6 +2,59 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 
+/**
+ * Common file magic bytes (signatures) for verifying that uploaded file
+ * content matches its claimed MIME type. The browser's Content-Type header
+ * is trivially spoofed, so we verify the actual file bytes server-side.
+ */
+const MAGIC_BYTES: Record<string, number[]> = {
+  'image/jpeg': [0xFF, 0xD8, 0xFF],
+  'image/png': [0x89, 0x50, 0x4E, 0x47],
+  'image/gif': [0x47, 0x49, 0x46, 0x38],
+  'application/pdf': [0x25, 0x50, 0x44, 0x46], // %PDF
+};
+
+/**
+ * Verifies that file content matches the claimed MIME type.
+ *
+ * WebP is a RIFF container — `RIFF` alone also matches WAV and AVI, so the
+ * four-byte "WEBP" form-type code at offset 8 must be checked too. Previously
+ * only the generic RIFF header was verified, letting any RIFF file (e.g. a
+ * .wav) pass as image/webp.
+ *
+ * SVG/text formats have no binary signature; for SVG we at least require the
+ * content to look like XML/SVG markup so arbitrary binaries can't claim the
+ * type.
+ */
+function matchesMagicBytes(buffer: Buffer, mimeType: string): boolean {
+  if (mimeType === 'image/webp') {
+    // RIFF<4-byte size>WEBP
+    return (
+      buffer.length >= 12 &&
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+    );
+  }
+
+  if (mimeType === 'image/svg+xml') {
+    // No magic bytes — require XML-ish content with an <svg element so a
+    // renamed binary can't claim to be an SVG.
+    const head = buffer.subarray(0, 4096).toString('utf-8').trimStart();
+    return head.startsWith('<') && /<svg[\s>]/i.test(head);
+  }
+
+  if (mimeType === 'text/plain' || mimeType === 'text/csv') {
+    // No signature — but the content should at least be valid UTF-8 text,
+    // not arbitrary binary. Reject NUL bytes (a strong binary indicator).
+    return !buffer.includes(0x00);
+  }
+
+  const magic = MAGIC_BYTES[mimeType];
+  if (!magic) return true; // Unknown type — nothing to verify against
+  if (buffer.length < magic.length) return false;
+  return magic.every((byte, i) => buffer[i] === byte);
+}
+
 export interface UploadOptions {
   /** Max file size in bytes (default: 10MB) */
   maxSize?: number;
@@ -58,6 +111,16 @@ export async function handleUpload(
       throw new Error(`File type ${file.type} not allowed`);
     }
 
+    const buffer = Buffer.from(await file.arrayBuffer());
+
+    // Verify the file's magic bytes match the claimed MIME type. The
+    // browser-supplied Content-Type is trivially spoofed — an attacker can
+    // upload a malicious file with a benign MIME type. This catches the
+    // common image/PDF spoofing vectors.
+    if (!matchesMagicBytes(buffer, file.type)) {
+      throw new Error(`File ${file.name}: content does not match claimed type ${file.type}`);
+    }
+
     let filename = file.name;
     if (uniqueNames) {
       // The extension is derived from the untrusted upload filename, so it can
@@ -76,7 +139,6 @@ export async function handleUpload(
     const filepath = join(uploadDir, filename);
     await mkdir(dirname(filepath), { recursive: true });
 
-    const buffer = Buffer.from(await file.arrayBuffer());
     await writeFile(filepath, buffer);
 
     results.push({

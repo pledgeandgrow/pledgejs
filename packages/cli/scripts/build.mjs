@@ -34,7 +34,9 @@ const commonOptions = {
   format: 'esm',
   target: 'node20',
   platform: 'node',
-  sourcemap: false,
+  // Enable source maps for production debugging — previously disabled, making
+  // CLI stack traces un-actionable in published npm installs.
+  sourcemap: true,
   jsx: 'automatic',
   jsxImportSource: 'react',
   external: [

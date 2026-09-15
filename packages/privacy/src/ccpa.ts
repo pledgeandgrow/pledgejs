@@ -1,4 +1,5 @@
 import type { PledgeRequest, PledgeResponse } from 'pledgestack-shared';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export interface CCPAConfig {
   /** Privacy policy URL */
@@ -7,6 +8,14 @@ export interface CCPAConfig {
   doNotSellEndpoint?: string;
   /** Data categories collected */
   dataCategories?: DataCategory[];
+  /** HMAC secret for signing the opt-out cookie (required to prevent forgery) */
+  cookieSecret?: string;
+  /**
+   * Reject unsigned opt-out cookies instead of accepting them (default: false).
+   * Without a cookieSecret the opt-out cookie is forgeable by clients — set
+   * this to true (and provide a secret) for production deployments.
+   */
+  requireSignedCookies?: boolean;
 }
 
 export interface DataCategory {
@@ -53,7 +62,9 @@ const DEFAULT_DO_NOT_SELL_ENDPOINT = '/api/privacy/do-not-sell';
  * privacy policy generator, data category labeling.
  */
 export class CCPAManager {
-  private config: Required<CCPAConfig>;
+  private config: Required<Omit<CCPAConfig, 'cookieSecret' | 'requireSignedCookies'>>;
+  private cookieSecret: string | null;
+  private requireSignedCookies: boolean;
 
   constructor(config: CCPAConfig = {}) {
     this.config = {
@@ -61,6 +72,46 @@ export class CCPAManager {
       doNotSellEndpoint: config.doNotSellEndpoint ?? DEFAULT_DO_NOT_SELL_ENDPOINT,
       dataCategories: config.dataCategories ?? DEFAULT_DATA_CATEGORIES,
     };
+    this.cookieSecret = config.cookieSecret ?? null;
+    this.requireSignedCookies = config.requireSignedCookies ?? false;
+    if (!this.cookieSecret) {
+      console.warn(
+        '[pledgestack-privacy] CCPAManager: no cookieSecret configured — the opt-out cookie is UNSIGNED and forgeable by clients. ' +
+          'Provide cookieSecret (and set requireSignedCookies: true) for production use.',
+      );
+    }
+  }
+
+  /**
+   * Sign a cookie value with HMAC to prevent client-side forgery.
+   * Format: value.signature
+   */
+  private signCookie(value: string): string {
+    if (!this.cookieSecret) return value;
+    const sig = createHmac('sha256', this.cookieSecret).update(value).digest('base64url');
+    return `${value}.${sig}`;
+  }
+
+  /**
+   * Verify a signed cookie value. Returns the original value if the signature
+   * is valid, or null if tampered. Unsigned cookies are accepted only in
+   * legacy mode (no secret configured AND requireSignedCookies is false).
+   */
+  private verifyCookie(raw: string | undefined): string | null {
+    if (!raw) return null;
+    if (!this.cookieSecret) {
+      // No secret: unsigned cookies accepted only when not enforced.
+      return this.requireSignedCookies ? null : raw;
+    }
+    const parts = raw.split('.');
+    if (parts.length !== 2) return null;
+    const [value, sig] = parts;
+    const expected = createHmac('sha256', this.cookieSecret).update(value).digest('base64url');
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length) return null;
+    if (!timingSafeEqual(sigBuf, expBuf)) return null;
+    return value;
   }
 
   /**
@@ -92,7 +143,7 @@ export class CCPAManager {
       status: 200,
       headers: {
         'Content-Type': 'application/json',
-        'Set-Cookie': `__pledge_ccpa_opt_out=${optOut ? 'true' : 'false'}; Max-Age=${365 * 24 * 60 * 60}; Path=/; SameSite=Lax; Secure; HttpOnly`,
+        'Set-Cookie': `__pledge_ccpa_opt_out=${this.signCookie(optOut ? 'true' : 'false')}; Max-Age=${365 * 24 * 60 * 60}; Path=/; SameSite=Lax; Secure; HttpOnly`,
       },
       body: JSON.stringify({
         userId,
@@ -107,9 +158,12 @@ export class CCPAManager {
 
   /**
    * Check if a user has opted out of data selling.
+   * Verifies the HMAC signature to prevent cookie forgery.
    */
   hasOptedOut(req: PledgeRequest): boolean {
-    return req.cookies['__pledge_ccpa_opt_out'] === 'true';
+    const raw = req.cookies['__pledge_ccpa_opt_out'];
+    const value = this.verifyCookie(raw);
+    return value === 'true';
   }
 
   /**

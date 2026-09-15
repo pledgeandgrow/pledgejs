@@ -142,6 +142,7 @@ export function createFlightEncoder() {
 export function createFlightDecoder() {
   let buffer = '';
   const chunks: FlightChunk[] = [];
+  const moduleMap: Record<string, string> = {};
 
   return {
     push(data: string): FlightChunk[] {
@@ -163,8 +164,13 @@ export function createFlightDecoder() {
         let dataValue: unknown;
         try {
           if (type === 'M' || type === 'L') {
-            const parsed = JSON.parse(dataStr) as { moduleId: string };
+            const parsed = JSON.parse(dataStr) as { moduleId: string; chunkPath?: string };
             dataValue = parsed.moduleId;
+            // Reconstruct the module map from the wire — without this the
+            // client can't resolve module references to chunk paths.
+            if (parsed.chunkPath !== undefined) {
+              moduleMap[parsed.moduleId] = parsed.chunkPath;
+            }
           } else {
             dataValue = JSON.parse(dataStr);
           }
@@ -182,6 +188,14 @@ export function createFlightDecoder() {
 
     getChunks(): FlightChunk[] {
       return [...chunks];
+    },
+
+    getModuleMap(): Record<string, string> {
+      return { ...moduleMap };
+    },
+
+    getPayload(): FlightPayload {
+      return { chunks: [...chunks], moduleMap: { ...moduleMap } };
     },
 
     isComplete(): boolean {

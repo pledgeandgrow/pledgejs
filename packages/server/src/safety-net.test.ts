@@ -39,39 +39,39 @@ describe('detectBot', () => {
 describe('checkBruteForce', () => {
   const testId = 'test-user-' + Date.now();
 
-  it('allows first attempt', () => {
-    const result = checkBruteForce(testId);
+  it('allows first attempt', async () => {
+    const result = await checkBruteForce(testId);
     expect(result.allowed).toBe(true);
     expect(result.lockedOut).toBe(false);
     expect(result.requiresCaptcha).toBe(false);
   });
 
-  it('blocks after max attempts', () => {
+  it('blocks after max attempts', async () => {
     const id = 'brute-test-' + Date.now();
     // Record multiple failed attempts
     for (let i = 0; i < 10; i++) {
-      recordFailedAttempt(id);
+      await recordFailedAttempt(id);
     }
-    const result = checkBruteForce(id, { maxAttempts: 5 });
+    const result = await checkBruteForce(id, { maxAttempts: 5 });
     expect(result.allowed).toBe(false);
     expect(result.lockedOut).toBe(true);
   });
 
-  it('requires captcha after threshold', () => {
+  it('requires captcha after threshold', async () => {
     const id = 'captcha-test-' + Date.now();
     for (let i = 0; i < 3; i++) {
-      recordFailedAttempt(id);
+      await recordFailedAttempt(id);
     }
-    const result = checkBruteForce(id, { maxAttempts: 10, captchaThreshold: 3 });
+    const result = await checkBruteForce(id, { maxAttempts: 10, captchaThreshold: 3 });
     expect(result.requiresCaptcha).toBe(true);
   });
 
-  it('respects custom config', () => {
+  it('respects custom config', async () => {
     const id = 'custom-test-' + Date.now() + '-' + Math.random();
     // Record 3 failed attempts with maxAttempts=2 — should be locked out
-    recordFailedAttempt(id, { maxAttempts: 2 });
-    recordFailedAttempt(id, { maxAttempts: 2 });
-    const result = checkBruteForce(id, { maxAttempts: 2 });
+    await recordFailedAttempt(id, { maxAttempts: 2 });
+    await recordFailedAttempt(id, { maxAttempts: 2 });
+    const result = await checkBruteForce(id, { maxAttempts: 2 });
     expect(result.allowed).toBe(false);
     expect(result.lockedOut).toBe(true);
   });

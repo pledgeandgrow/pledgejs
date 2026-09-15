@@ -54,15 +54,16 @@ export * from './debug-session';
 export * from './sccache';
 export * from './edge-psx';
 export * from './edge-kv';
-export * from './edge-durable-objects';
+// edge-durable-objects, lambda-psx, multi-region, monitoring-dashboard are
+// intentionally NOT re-exported from the public barrel — they are unconsumed
+// by any request path or CLI command (see NEXT-50-GOALS.md §"orphaned PSX
+// tooling"). Their tests import them directly via relative paths. Re-add them
+// to this barrel only when they are wired into a real consumer.
 export * from './edge-streaming-ssr';
 export * from './edge-middleware';
-export * from './lambda-psx';
 export * from './edge-cache-invalidation';
 export * from './edge-geo';
 export * from './serverless-cold-start';
-export * from './multi-region';
-export * from './monitoring-dashboard';
 export * from './rollback';
 export * from './canary';
 export * from './og-renderer';

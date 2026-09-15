@@ -3,16 +3,19 @@ import { randomUUID } from 'node:crypto';
 import type { PledgeConfig, PledgeResponse, MiddlewareResult, ResolvedRoute, PledgeRequest, PluginRenderContext, BundlerAdapter } from 'pledgestack-shared';
 import { scanAppDir, resolveRoutes, createRouter, renderSSR, renderNotFound } from 'pledgestack-core';
 import { getIsr, setIsr, isRevalidating, markRevalidating } from 'pledgestack-core';
+import { maybeRenderOgResponse } from './og-response';
 import { renderRSCToHTML } from 'pledgestack-core';
 import { renderRSCStream } from 'pledgestack-core';
 import { renderSSRStream } from 'pledgestack-core';
 import { initRenderer } from 'pledgestack-core';
+import { ColdStartOptimizer } from 'pledgestack-core';
 import type { PageModule, LayoutModule, RouteHandlerModule, MiddlewareModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, TemplateModule } from 'pledgestack-core';
 import type { RouteTree } from 'pledgestack-core';
 import { createModuleLoader, type ModuleLoader } from './module-loader';
 import { setRequestContext, clearRequestContext } from './server-utils';
 import { createMatcher } from './middleware-matcher';
 import { getServerAction } from './actions';
+import { dispatchServerFn, hasServerFn } from './server-fn';
 import { ACTION_ENDPOINT } from 'pledgestack-shared';
 import { PluginRunner } from 'pledgestack-shared';
 import { tryServeSeoRoute } from './seo-routes';
@@ -114,20 +117,33 @@ function collectAllFilePaths(routes: ResolvedRoute[]): string[] {
 export function createRequestHandler(options: RequestHandlerOptions) {
   const { config, isDev = false, pledgepackPort, adapter } = options;
   let localCtx: HandlerContext | null = null;
+  // Promise singleton to prevent concurrent double-initialization: two
+  // simultaneous first-requests both seeing localCtx === null would each run
+  // the full init (scanning app dir, loading all modules), doing duplicate
+  // work and potentially causing inconsistent state.
+  let initPromise: Promise<HandlerContext> | null = null;
 
   /** Default request timeout in ms (30s, configurable via env) */
   const REQUEST_TIMEOUT_MS = parseInt(process.env.PLEDGE_REQUEST_TIMEOUT ?? '30000', 10);
 
   /**
    * Wraps a promise with a timeout. Returns the promise result or a 504 timeout response.
+   * On timeout, aborts the `AbortController` so handlers performing expensive
+   * work (DB calls, renders, fetches) can bail early via `signal.aborted`
+   * instead of continuing to consume CPU/memory after the response is gone.
    */
-  function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  function withTimeout<T>(
+    promise: (signal: AbortSignal) => Promise<T>,
+    timeoutMs: number,
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
+      const controller = new AbortController();
       const timer = setTimeout(() => {
+        controller.abort();
         reject(new TimeoutError(`Request timed out after ${timeoutMs}ms`));
       }, timeoutMs);
 
-      promise
+      promise(controller.signal)
         .then((result) => {
           clearTimeout(timer);
           resolve(result);
@@ -148,16 +164,46 @@ export function createRequestHandler(options: RequestHandlerOptions) {
 
   async function ensureContext() {
     if (localCtx) return localCtx;
+    // If initialization is already in progress, wait for it instead of
+    // running a duplicate initialization (prevents race condition).
+    if (initPromise) return initPromise;
+    initPromise = doEnsureContext();
+    try {
+      return await initPromise;
+    } finally {
+      initPromise = null;
+    }
+  }
 
-    // Initialize the renderer adapter for the configured framework
-    await initRenderer(config);
+  async function doEnsureContext(): Promise<HandlerContext> {
+    if (localCtx) return localCtx;
 
-    const moduleLoader = createModuleLoader(config, isDev, pledgepackPort, adapter);
-    const files = await scanAppDir(join(config.rootDir, config.appDir));
-    const routes = resolveRoutes(files, config);
+    // Cold-start optimization: wrap the initialization path in the optimizer
+    // so critical modules are pre-warmed and cold start time is measured.
+    // On serverless/edge runtimes the first request pays the init cost; the
+    // optimizer tracks that cost and pre-loads the critical path (renderer,
+    // router, module loader) so subsequent requests hit a warm cache.
+    const coldStart = new ColdStartOptimizer({
+      modules: ['renderer', 'routes', 'modules', 'middleware'],
+      criticalModules: ['renderer', 'routes'],
+      preloadCritical: true,
+      trackMetrics: true,
+    });
+
+    coldStart.registerLoader('renderer', () => initRenderer(config));
+    coldStart.registerLoader('routes', async () => {
+      const files = await scanAppDir(join(config.rootDir, config.appDir));
+      return resolveRoutes(files, config);
+    });
+
+    // Pre-warm the critical path (renderer + route resolution)
+    await coldStart.initialize();
+
+    const routes = (await coldStart.get('routes')) as ReturnType<typeof resolveRoutes>;
     const router = createRouter(routes, config);
 
     // Load all modules including convention files
+    const moduleLoader = createModuleLoader(config, isDev, pledgepackPort, adapter);
     const allPaths = collectAllFilePaths(routes);
     const modules = new Map<string, AnyModule>();
     await Promise.all(
@@ -184,10 +230,16 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       middleware,
       pluginRunner,
     };
+
+    // Report cold start metrics when enabled (e.g. PLEDGE_COLD_START_METRICS=1)
+    if (process.env.PLEDGE_COLD_START_METRICS === '1') {
+      console.log(coldStart.generateReport());
+    }
+
     return localCtx;
   }
 
-  async function innerHandler(req: { url: URL; method: string; headers: Record<string, string>; body?: string | Buffer | null }): Promise<PledgeResponse> {
+  async function innerHandler(req: { url: URL; method: string; headers: Record<string, string>; body?: string | Buffer | null }, signal?: AbortSignal): Promise<PledgeResponse> {
     const context = await ensureContext();
     const { router, middleware } = context;
 
@@ -199,14 +251,19 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       params: {},
       query: Object.fromEntries(req.url.searchParams.entries()),
       cookies: parseCookies(req.headers),
+      signal,
     };
 
     // Set request context so server utilities can access it
     setRequestContext(pledgeReq);
 
-    // Generate request ID for tracing
-    const requestId = req.headers['x-request-id'] ?? randomUUID();
-    pledgeReq.headers['x-request-id'] = requestId;
+    // Generate request ID for tracing — sanitize client-supplied value to
+    // prevent log injection via newlines or control characters.
+    const rawRequestId = req.headers['x-request-id'];
+    const sanitizedRequestId = rawRequestId && /^[a-zA-Z0-9_-]{1,128}$/.test(rawRequestId)
+      ? rawRequestId
+      : randomUUID();
+    pledgeReq.headers['x-request-id'] = sanitizedRequestId;
 
     // Start tracing span for this request
     let tracingSpan: { end: (error?: Error) => void } | null = null;
@@ -216,7 +273,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         const span = startSpan(`HTTP ${req.method} ${req.url.pathname}`, {
           'http.method': req.method,
           'http.url': req.url.toString(),
-          'http.request_id': requestId,
+          'http.request_id': sanitizedRequestId,
         });
         tracingSpan = span;
       }
@@ -232,7 +289,9 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         // branch returns early (before the general CSRF block below), so the
         // check has to be applied here explicitly — otherwise any third-party
         // page could POST a known action id with the victim's cookies.
-        if (config.securityHeaders !== false && !passesCsrf(req.headers, req.url.origin)) {
+        // CSRF is decoupled from securityHeaders — disabling headers should
+        // not silently disable CSRF protection.
+        if (config.csrf !== false && !passesCsrf(req.headers, req.url.origin)) {
           return {
             status: 403,
             headers: { 'Content-Type': 'application/json' },
@@ -243,11 +302,6 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         const actionId = req.headers['x-pledge-action-id'];
         if (!actionId) {
           return { status: 400, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Missing action ID' }) };
-        }
-
-        const actionFn = getServerAction(actionId);
-        if (!actionFn) {
-          return { status: 404, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: `Action "${actionId}" not found` }) };
         }
 
         // Parse body (may arrive as a Buffer from the Node server, or a string
@@ -263,6 +317,38 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           return { status: 400, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Invalid JSON body' }) };
         }
 
+        // Try server functions first (new TanStack Start-style API).
+        // Server functions use the same action endpoint and ID header but
+        // are registered via createServerFn() rather than serverAction().
+        if (hasServerFn(actionId)) {
+          try {
+            const result = await dispatchServerFn(actionId, args, {
+              method: req.method,
+              url: req.url.toString(),
+              headers: req.headers,
+            });
+            return {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ result }),
+            };
+          } catch (err) {
+            console.error('[pledgestack] Server function error:', err);
+            const isProd = process.env.NODE_ENV === 'production';
+            return {
+              status: 500,
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: isProd ? 'Server function failed' : (err instanceof Error ? err.message : 'Server function failed') }),
+            };
+          }
+        }
+
+        // Fall back to legacy server actions
+        const actionFn = getServerAction(actionId);
+        if (!actionFn) {
+          return { status: 404, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: `Action "${actionId}" not found` }) };
+        }
+
         try {
           const result = await actionFn(...args);
           return {
@@ -271,10 +357,13 @@ export function createRequestHandler(options: RequestHandlerOptions) {
             body: JSON.stringify({ result }),
           };
         } catch (err) {
+          console.error('[pledgestack] Server action error:', err);
+          // In production, don't leak internal error details to the client.
+          const isProd = process.env.NODE_ENV === 'production';
           return {
             status: 500,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: err instanceof Error ? err.message : 'Action failed' }),
+            body: JSON.stringify({ message: isProd ? 'Action failed' : (err instanceof Error ? err.message : 'Action failed') }),
           };
         }
       }
@@ -310,7 +399,13 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           }
 
           if (mwResult.rewrite) {
-            req.url = new URL(mwResult.rewrite, req.url.origin);
+            // Validate that the rewrite stays same-origin to prevent open
+            // redirect via an absolute URL in the middleware rewrite target.
+            const rewriteUrl = new URL(mwResult.rewrite, req.url.origin);
+            if (rewriteUrl.origin !== req.url.origin) {
+              return { status: 400, headers: {}, body: 'Invalid rewrite: cross-origin not allowed' };
+            }
+            req.url = rewriteUrl;
           }
 
           if (mwResult.next === false) {
@@ -367,11 +462,13 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         }
       }
 
-      // Auto-apply brute force protection on auth endpoints (if enabled in config)
-      if (config.bruteForceProtection && (req.url.pathname.includes('/login') || req.url.pathname.includes('/auth'))) {
+      // Auto-apply brute force protection on auth endpoints (if enabled in config).
+      // Use exact path matching or trailing slash to avoid false positives on
+      // paths like /blog/login-tips or /user/auth-settings.
+      if (config.bruteForceProtection && (req.url.pathname === '/login' || req.url.pathname === '/login/' || req.url.pathname === '/auth' || req.url.pathname === '/auth/' || req.url.pathname.startsWith('/auth/'))) {
         const { checkBruteForce } = await import('./safety-net');
         const ip = clientIdentifier(req.headers);
-        const bfResult = checkBruteForce(ip);
+        const bfResult = await checkBruteForce(ip);
         if (bfResult.lockedOut) {
           return {
             status: 429,
@@ -388,10 +485,11 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       }
 
       // CSRF protection for state-changing requests (server actions are handled
-      // by the same check in their own branch above).
+      // by the same check in their own branch above). CSRF is decoupled from
+      // securityHeaders — disabling headers should not silently disable CSRF.
       const isStateChanging = ['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method);
       const isServerAction = req.url.pathname === ACTION_ENDPOINT;
-      if (isStateChanging && !isServerAction && config.securityHeaders !== false) {
+      if (isStateChanging && !isServerAction && config.csrf !== false) {
         if (!passesCsrf(req.headers, req.url.origin)) {
           return {
             status: 403,
@@ -415,11 +513,13 @@ export function createRequestHandler(options: RequestHandlerOptions) {
 
       // i18n: extract locale from pathname if configured
       let matchPathname = req.url.pathname;
+      let requestLocale: string | undefined;
       if (config.i18n) {
         const { extractLocale } = await import('pledgestack-core');
         const extracted = extractLocale(req.url.pathname, config.i18n);
         if (extracted) {
           matchPathname = extracted.pathWithoutLocale;
+          requestLocale = extracted.locale;
         } else {
           // No locale prefix and 'always' strategy — redirect to detected locale
           const acceptLang = req.headers['accept-language'] ?? '';
@@ -508,23 +608,27 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         });
         const response = await handlerFn(request);
 
+        // OG pipeline: rasterize ImageResponse bodies (X-Pledge-OG) that are
+        // SVG-shaped; layout-based trees stay for PledgePack's build-time renderer.
+        const ogRendered = await maybeRenderOgResponse(response);
+
         // Extract Set-Cookie separately: Headers.entries() combines multiple
         // Set-Cookie into one comma-joined value (corrupting cookies that
         // contain commas, e.g. Expires), so pull the real array via
         // getSetCookie() and drop the combined entry from the flat record.
-        const setCookies = typeof response.headers.getSetCookie === 'function'
-          ? response.headers.getSetCookie()
+        const setCookies = typeof ogRendered.headers.getSetCookie === 'function'
+          ? ogRendered.headers.getSetCookie()
           : [];
-        const responseHeaders = Object.fromEntries(response.headers.entries());
+        const responseHeaders = Object.fromEntries(ogRendered.headers.entries());
         delete responseHeaders['set-cookie'];
         if (corsResult) {
           Object.assign(responseHeaders, corsResult.headers);
         }
 
         return {
-          status: response.status,
+          status: ogRendered.status,
           headers: responseHeaders,
-          body: response.body,
+          body: ogRendered.body,
           ...(setCookies.length > 0 ? { cookies: setCookies } : {}),
         };
       }
@@ -661,7 +765,9 @@ export function createRequestHandler(options: RequestHandlerOptions) {
         // stale-while-revalidate. Only in production (dev always renders fresh).
         const pageMod = context.modules.get(match.route.filePath) as (PageModule & { revalidate?: number }) | undefined;
         const revalidate = getRevalidateSeconds(pageMod);
-        const isrKey = req.url.pathname;
+        // Include locale in the ISR cache key so different locales sharing the
+        // same pathname don't get each other's cached HTML (#28).
+        const isrKey = requestLocale ? `${requestLocale}::${req.url.pathname}` : req.url.pathname;
         const isrEligible = !isDev
           && revalidate > 0
           && Object.keys(pledgeReq.query).length === 0
@@ -724,7 +830,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
 
         return {
           status: 200,
-          headers: { 'Content-Type': 'text/html; charset=utf-8', ETag: etag, 'X-Request-Id': requestId },
+          headers: { 'Content-Type': 'text/html; charset=utf-8', ETag: etag, 'X-Request-Id': sanitizedRequestId },
           body: finalHtml,
         };
       } catch (err) {
@@ -774,7 +880,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
 
   async function handler(req: { url: URL; method: string; headers: Record<string, string>; body?: string | Buffer | null }): Promise<PledgeResponse> {
     try {
-      return await withTimeout(innerHandler(req), REQUEST_TIMEOUT_MS);
+      return await withTimeout((signal) => innerHandler(req, signal), REQUEST_TIMEOUT_MS);
     } catch (err) {
       if (err instanceof TimeoutError) {
         console.error(`[pledgestack] ${err.message} — ${req.method} ${req.url.pathname}`);

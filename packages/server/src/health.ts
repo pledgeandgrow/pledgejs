@@ -72,7 +72,11 @@ export function createHealthCheck(options: HealthCheckOptions = {}) {
     handler: async () => {
       const status = await check();
       return {
-        status: status.status === 'healthy' ? 200 : status.status === 'degraded' ? 200 : 503,
+        // 200 for healthy AND degraded (the instance can still serve
+        // traffic); 503 only when all checks fail. Returning 503 for
+        // degraded would cause load balancers to drain instances that
+        // are partially healthy, defeating the tri-state design.
+        status: status.status === 'unhealthy' ? 503 : 200,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(status, null, 2),
       };

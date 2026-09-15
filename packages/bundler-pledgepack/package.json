@@ -20,7 +20,8 @@
   "dependencies": {
     "pledgestack-shared": "workspace:*",
     "pledgestack-core": "workspace:*",
-    "pledgepack": ">=0.2.0",
+    "pledgestack-server": "workspace:*",
+    "pledgepack": "^0.3.2",
     "esbuild": "^0.24.0"
   },
   "devDependencies": {

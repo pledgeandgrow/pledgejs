@@ -148,10 +148,18 @@ async function serveOptimizedImage(
 
     const data = await readFile(publicPath);
     const srcExt = imagePath.split('.').pop()?.toLowerCase() ?? '';
-    const width = url.searchParams.get('w') ? parseInt(url.searchParams.get('w')!, 10) : undefined;
-    const height = url.searchParams.get('h') ? parseInt(url.searchParams.get('h')!, 10) : undefined;
-    const format = url.searchParams.get('format') ?? undefined;
-    const quality = url.searchParams.get('q') ? parseInt(url.searchParams.get('q')!, 10) : undefined;
+    // Clamp width/height/quality to safe ranges to prevent DoS via huge resizes.
+    const MAX_DIMENSION = 4096;
+    const rawWidth = url.searchParams.get('w') ? parseInt(url.searchParams.get('w')!, 10) : undefined;
+    const rawHeight = url.searchParams.get('h') ? parseInt(url.searchParams.get('h')!, 10) : undefined;
+    const width = rawWidth ? Math.min(Math.max(1, rawWidth), MAX_DIMENSION) : undefined;
+    const height = rawHeight ? Math.min(Math.max(1, rawHeight), MAX_DIMENSION) : undefined;
+    const rawQuality = url.searchParams.get('q') ? parseInt(url.searchParams.get('q')!, 10) : undefined;
+    const quality = rawQuality ? Math.min(Math.max(1, rawQuality), 100) : undefined;
+    // Validate format against an allowlist to prevent passing arbitrary strings to sharp.
+    const ALLOWED_FORMATS = ['jpeg', 'png', 'webp', 'avif', 'gif', 'tiff'];
+    const rawFormat = url.searchParams.get('format') ?? undefined;
+    const format = rawFormat && ALLOWED_FORMATS.includes(rawFormat.toLowerCase()) ? rawFormat.toLowerCase() : undefined;
 
     // Real resize/convert via sharp when it's installed and a transform was
     // requested. When sharp isn't available (or nothing to do), serve the

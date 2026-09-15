@@ -58,6 +58,9 @@ interface JsProfile {
   compiledTemplate: string | null;
 }
 const jsProfiles = new Map<string, JsProfile>();
+/** Cap on profiled routes to bound memory — without it, every distinct
+ * route pattern ever rendered stays in the profile map forever. */
+const JS_PROFILES_MAX = 2000;
 
 /**
  * Records a route render and returns whether JIT compilation should occur.
@@ -76,6 +79,10 @@ export function recordRender(routePattern: string, templateHash: number, thresho
   let profile = jsProfiles.get(routePattern);
 
   if (!profile) {
+    if (jsProfiles.size >= JS_PROFILES_MAX) {
+      const oldest = jsProfiles.keys().next().value;
+      if (oldest !== undefined) jsProfiles.delete(oldest);
+    }
     profile = { renderCount: 0, lastTemplateHash: 0, compiledTemplate: null };
     jsProfiles.set(routePattern, profile);
   }
