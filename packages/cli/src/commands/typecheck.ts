@@ -14,6 +14,14 @@ export interface TypecheckOptions {
   dir?: string;
 }
 
+/**
+ * Arguments for the tsc invocation. The tsconfig is passed relative to the
+ * child's cwd: with `shell: true` on Windows the arguments are joined into one
+ * command line, so an absolute path containing spaces (C:\Users\Jane Doe\app)
+ * would be split into separate arguments and tsc would fail to find it.
+ */
+export const TSC_ARGS = ['tsc', '--noEmit', '-p', 'tsconfig.json'] as const;
+
 export async function typecheckCommand(opts: TypecheckOptions): Promise<void> {
   const rootDir = opts.dir ?? process.cwd();
 
@@ -26,14 +34,15 @@ export async function typecheckCommand(opts: TypecheckOptions): Promise<void> {
     process.exit(1);
   }
 
-  const child = spawn('npx', ['tsc', '--noEmit', '-p', tsconfigPath], {
+  const child = spawn('npx', [...TSC_ARGS], {
     cwd: rootDir,
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
 
   const exitCode = await new Promise<number>((resolve) => {
-    child.on('close', (code) => resolve(code ?? 0));
+    // code is null when tsc was killed by a signal — that is not a pass.
+    child.on('close', (code) => resolve(code ?? 1));
     child.on('error', () => {
       console.error('  \x1b[31m✗\x1b[0m TypeScript (tsc) not found. Install with: npm install -D typescript');
       resolve(1);

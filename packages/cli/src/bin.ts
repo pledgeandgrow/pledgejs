@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { join } from 'node:path';
+import { parsePort } from './parse-port';
+// Registers all bundled renderer adapters (side-effect) — required by
+// dev/build/start commands that render pages.
+import './renderers';
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -15,18 +19,23 @@ const { values, positionals } = parseArgs({
     check: { type: 'boolean', short: 'c' },
     'rust-only': { type: 'boolean' },
     'vitest-only': { type: 'boolean' },
-    fix: { type: 'boolean' },
     'dead-code': { type: 'boolean' },
     'cross-compile': { type: 'boolean' },
     production: { type: 'boolean' },
     suggestions: { type: 'boolean' },
     psx: { type: 'boolean' },
-    compare: { type: 'boolean' },
+    compare: { type: 'string' },
+    save: { type: 'string' },
+    threshold: { type: 'string' },
+    edition: { type: 'string' },
+    'config-file': { type: 'string' },
     iterations: { type: 'string', short: 'i' },
     concurrency: { type: 'string' },
     force: { type: 'boolean' },
     'skip-install': { type: 'boolean' },
     'skip-codemods': { type: 'boolean' },
+    install: { type: 'boolean' },
+    'no-install': { type: 'boolean' },
     all: { type: 'boolean' },
     open: { type: 'boolean' },
     optimized: { type: 'boolean' },
@@ -52,7 +61,7 @@ async function main() {
   }
 
   const opts = {
-    port: values.port ? parseInt(values.port, 10) : undefined,
+    port: parsePort(values.port),
     hostname: values.hostname,
   };
 
@@ -91,6 +100,10 @@ async function main() {
       }
       await createCommand(projectName, {
         template: values.template as string | undefined,
+        // The guard above already rejected non-React frameworks; pass 'react'
+        // explicitly so create-pledge-app doesn't ask interactively.
+        framework: 'react',
+        install: values['no-install'] ? false : values.install ? true : undefined,
       });
       break;
     }
@@ -111,6 +124,8 @@ async function main() {
       await fmtCommand({
         check: values.check as boolean | undefined,
         dir: positionals[1],
+        edition: values.edition as string | undefined,
+        configFile: values['config-file'] as string | undefined,
       });
       break;
     }
@@ -133,7 +148,6 @@ async function main() {
       const { lintCommand } = await import('./commands/lint');
       await lintCommand({
         dir: positionals[1],
-        fix: values.fix as boolean | undefined,
         deadCode: values['dead-code'] as boolean | undefined,
       });
       break;
@@ -146,7 +160,7 @@ async function main() {
         console.error('Usage: pledge add <crate>[@version]');
         process.exit(1);
       }
-      await addCommand(crateSpec);
+      await addCommand(crateSpec, { version: positionals[2] });
       break;
     }
     case 'remove': {
@@ -253,7 +267,7 @@ async function main() {
     case 'playground': {
       const { playgroundCommand } = await import('./commands/playground');
       await playgroundCommand({
-        port: values.port ? parseInt(values.port as string) : undefined,
+        port: opts.port,
         open: values['open'] as boolean | undefined,
       });
       break;
@@ -275,7 +289,9 @@ async function main() {
         psx: values.psx as boolean | undefined,
         iterations: values.iterations as string | undefined,
         concurrency: values.concurrency as string | undefined,
-        compare: values.compare as boolean | undefined,
+        compare: values.compare as string | undefined,
+        save: values.save as string | undefined,
+        threshold: values.threshold as string | undefined,
       });
       break;
     }
@@ -303,7 +319,7 @@ async function main() {
         break;
       }
       const targetPath = positionals[2] ?? '.';
-      await runCodemod({ name: codemodName, path: targetPath, dryRun: values.check as boolean | undefined });
+      await runCodemod({ name: codemodName, path: targetPath, dryRun: Boolean(values['dry-run'] || values.check) });
       break;
     }
     case 'docker': {
@@ -410,7 +426,7 @@ function printHelp() {
     init     Add PledgeStack to an existing project (detects Next.js, Vite, CRA)
     why      Trace why a module is in the bundle (import chains, circular deps)
     docs     Generate API documentation from TypeScript source
-    upgrade  Check for new versions, run codemods, update deps
+    upgrade  Check for new versions and update deps
     storybook  Set up zero-config Storybook for PledgeStack
     playground Start PSX REPL playground (Rust + TSX in browser)
     search   Index pages and search content (pledge search [query])
@@ -427,6 +443,11 @@ function printHelp() {
     -w, --watch              Re-run tests on change (test only)
     -v, --verbose            Show detailed output
     -c, --check              Check formatting without modifying (fmt only)
+    --edition <year>         Rust edition for rustfmt (fmt only; default: from rustfmt.toml, else 2021)
+    --config-file <path>     rustfmt config file (fmt only; default: rustfmt.toml/.rustfmt.toml discovered upward)
+    --save <file>            Save bench results as a baseline (bench only)
+    --compare <file>         Compare bench results to a baseline; exit 1 on regressions (bench only)
+    --threshold <percent>    Regression threshold for --compare (default: 10)
     --version                Print the pledge CLI version
     -h, --help               Show this help message
 
@@ -443,7 +464,8 @@ function printHelp() {
     pledge analyze
     pledge analyze --suggestions
     pledge bench --psx
-    pledge bench --psx --compare -i 50000
+    pledge bench --psx --save base.json
+    pledge bench --psx --compare base.json --threshold 10
     pledge fmt
     pledge fmt --check
     pledge test
@@ -452,6 +474,7 @@ function printHelp() {
     pledge lint
     pledge add sqlx
     pledge add sqlx@0.8
+    pledge add my-crate '{ version = "1.0", features = ["json"] }'
     pledge remove sqlx
     pledge list
     pledge update
@@ -461,11 +484,13 @@ function printHelp() {
     pledge check-routes
     pledge init
     pledge init --force
+    pledge init --skip-install    (scaffold only; do not run the package manager)
     pledge why app/utils/helpers
     pledge docs
     pledge docs --output docs/api.md
     pledge upgrade
     pledge upgrade --check
+    pledge upgrade --skip-install
     pledge storybook
     pledge storybook --force --all
     pledge playground
@@ -474,6 +499,7 @@ function printHelp() {
     pledge search "react hooks"
     pledge codemod
     pledge codemod pledgejs-to-pledgestack src/
+    pledge codemod next-to-pledge src/ --dry-run   (report changes, write nothing)
     pledge docker
     pledge docker --optimized     (Rust-addon-aware multi-stage build)
     pledge docker compose
@@ -487,6 +513,8 @@ function printHelp() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  // Print a one-line message for expected failures (bad flags, missing files);
+  // set PLEDGE_DEBUG=1 for the full stack.
+  console.error(err instanceof Error && !process.env.PLEDGE_DEBUG ? `Error: ${err.message}` : err);
   process.exit(1);
 });

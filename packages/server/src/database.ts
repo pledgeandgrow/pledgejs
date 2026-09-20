@@ -101,7 +101,10 @@ export async function createDrizzleAdapter(options?: DrizzleAdapterOptions): Pro
       name: 'drizzle-postgres',
       client,
       async connect() {
-        await pool.connect();
+        // Verify connectivity, then hand the connection straight back to the pool
+        // (holding it forever leaked one pooled connection per connect()).
+        const conn = await pool.connect();
+        conn.release();
       },
       async disconnect() {
         await pool.end();
@@ -169,6 +172,13 @@ export async function createDrizzleAdapter(options?: DrizzleAdapterOptions): Pro
   };
 }
 
+/** Runs `SELECT 1` through Kysely's `sql` tag — the query builder has no `eb.sql`. */
+async function kyselyHealthy(client: unknown): Promise<boolean> {
+  const { sql } = await import('kysely');
+  await sql`SELECT 1`.execute(client as never);
+  return true;
+}
+
 export interface KyselyAdapterOptions {
   /** Database connection string */
   url?: string;
@@ -198,15 +208,15 @@ export async function createKyselyAdapter(options?: KyselyAdapterOptions): Promi
       name: 'kysely-postgres',
       client,
       async connect() {
-        await (client as { destroy: () => Promise<void> }).destroy();
+        // The pool connects lazily. (This used to call destroy(), tearing the
+        // pool down the moment the app connected.)
       },
       async disconnect() {
         await (client as { destroy: () => Promise<void> }).destroy();
       },
       async healthCheck() {
         try {
-          await (client as { selectNoFrom: (fn: unknown) => Promise<unknown> }).selectNoFrom((eb: unknown) => (eb as (a: number) => number)((eb as { sql: (s: string) => number }).sql('1')));
-          return true;
+          return await kyselyHealthy(client);
         } catch {
           return false;
         }
@@ -232,8 +242,7 @@ export async function createKyselyAdapter(options?: KyselyAdapterOptions): Promi
       },
       async healthCheck() {
         try {
-          await (client as { selectNoFrom: (fn: unknown) => Promise<unknown> }).selectNoFrom((eb: unknown) => (eb as (a: number) => number)((eb as { sql: (s: string) => number }).sql('1')));
-          return true;
+          return await kyselyHealthy(client);
         } catch {
           return false;
         }
@@ -259,8 +268,7 @@ export async function createKyselyAdapter(options?: KyselyAdapterOptions): Promi
     },
     async healthCheck() {
       try {
-        await (client as { selectNoFrom: (fn: unknown) => Promise<unknown> }).selectNoFrom((eb: unknown) => (eb as (a: number) => number)((eb as { sql: (s: string) => number }).sql('1')));
-        return true;
+        return await kyselyHealthy(client);
       } catch {
         return false;
       }

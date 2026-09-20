@@ -76,3 +76,29 @@ describe('checkBruteForce', () => {
     expect(result.lockedOut).toBe(true);
   });
 });
+
+import { vi, afterEach } from 'vitest';
+import { captchaChallengePage } from './safety-net';
+
+describe('brute-force lockout outlasting the counting window', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('stays locked until lockoutDurationMs even after windowMs elapses', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2030-01-01T00:00:00Z'));
+    const cfg = { maxAttempts: 2, windowMs: 1000, lockoutDurationMs: 10_000 };
+    await recordFailedAttempt('ip-lock', cfg);
+    const locked = await recordFailedAttempt('ip-lock', cfg);
+    expect(locked.lockedOut).toBe(true);
+    vi.advanceTimersByTime(5000); // window passed, lockout not
+    expect((await checkBruteForce('ip-lock', cfg)).lockedOut).toBe(true);
+    // a further attempt must not silently reset the lock either
+    expect((await recordFailedAttempt('ip-lock', cfg)).lockedOut).toBe(true);
+  });
+});
+
+describe('captchaChallengePage', () => {
+  it('escapes the form action', () => {
+    expect(captchaChallengePage('/x"><script>1</script>')).not.toContain('<script>');
+  });
+});

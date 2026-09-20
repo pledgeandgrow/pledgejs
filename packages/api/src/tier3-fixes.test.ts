@@ -44,6 +44,20 @@ describe('defineApiRoute options (#defineApiRoute)', () => {
     expect((await handler(req)).status).toBe(429);
   });
 
+  it('keys rate limits on req.ip, not spoofable X-Forwarded-For', async () => {
+    const handler = defineApiRoute(
+      () => ({ status: 200, headers: {}, body: 'ok' }),
+      { rateLimit: { windowMs: 60000, max: 1 } },
+    );
+    // Same trusted proxy-resolved IP, rotating spoofed XFF — an attacker
+    // rotating XFF must NOT bypass the limit.
+    const spoof = (xff: string): PledgeRequest =>
+      ({ headers: { 'x-forwarded-for': xff }, ip: '203.0.113.7' }) as unknown as PledgeRequest;
+    expect((await handler(spoof('1.1.1.1'))).status).toBe(200);
+    expect((await handler(spoof('2.2.2.2'))).status).toBe(429);
+    expect((await handler(spoof('3.3.3.3'))).status).toBe(429);
+  });
+
   it('returns the handler unchanged when no options are given', () => {
     const h = () => ({ status: 200, headers: {}, body: 'x' });
     expect(defineApiRoute(h)).toBe(h);

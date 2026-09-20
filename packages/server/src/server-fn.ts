@@ -179,17 +179,11 @@ export interface ServerFnCallable<TInput, TOutput> {
 // Implementation
 // ---------------------------------------------------------------------------
 
+import { stableRpcId, registerUnique } from './rpc-id';
+
 const serverFnRegistry = new Map<string, ServerFnCallable<unknown, unknown>>();
 
-function stableFnId(name: string, src: string): string {
-  let h = 2166136261;
-  const combined = `${name}${src}`;
-  for (let i = 0; i < combined.length; i++) {
-    h ^= combined.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return `sfn_${name || 'anonymous'}_${(h >>> 0).toString(36)}`;
-}
+const serverFnIdentities = new Map<string, string>();
 
 const ACTION_ENDPOINT = '/__pledge__/action';
 
@@ -203,7 +197,11 @@ const ACTION_ENDPOINT = '/__pledge__/action';
  *     return { id: data.id, name: 'Alice' };
  *   });
  */
-export function createServerFn(): ServerFnBuilder {
+export function createServerFn(options?: {
+  /** Stable id shared by server and client bundles, e.g. "users/api#getUser". */
+  id?: string;
+  name?: string;
+}): ServerFnBuilder {
   const middlewares: MiddlewareFn<unknown>[] = [];
   const inputValidators: Array<(input: unknown) => void | Promise<void>> = [];
   const outputValidators: Array<(output: unknown) => void | Promise<void>> = [];
@@ -262,6 +260,7 @@ export function createServerFn(): ServerFnBuilder {
               validatorFn as ValidatorFn<unknown, unknown>,
               wrappedHandler,
               [...middlewares, inputValidatorMw],
+              options,
             );
           }
 
@@ -269,6 +268,7 @@ export function createServerFn(): ServerFnBuilder {
             validatorFn as ValidatorFn<unknown, unknown>,
             wrappedHandler,
             [...middlewares],
+            options,
           );
         },
       } as ServerFnBuilderWithValidator<TInput, TOutput>;
@@ -301,6 +301,7 @@ export function createServerFn(): ServerFnBuilder {
           identityValidator,
           wrappedHandler,
           [...middlewares, inputValidatorMw],
+          options,
         );
       }
 
@@ -308,6 +309,7 @@ export function createServerFn(): ServerFnBuilder {
         identityValidator,
         wrappedHandler,
         [...middlewares],
+        options,
       );
     },
   };
@@ -319,10 +321,11 @@ function createCallable<TInput, TData, TOutput>(
   validator: ValidatorFn<unknown, unknown>,
   handler: HandlerFn<unknown, unknown>,
   middlewares: MiddlewareFn<unknown>[],
+  options?: { id?: string; name?: string },
 ): ServerFnCallable<TInput, TOutput> {
   void {} as TData; // TData used for type inference at call sites
-  const fnName = (handler as { name?: string }).name ?? 'anonymous';
-  const fnId = stableFnId(fnName, handler.toString());
+  const fnName = options?.name ?? options?.id?.split('#').pop() ?? ((handler as { name?: string }).name || 'anonymous');
+  const fnId = stableRpcId({ prefix: 'sfn', id: options?.id, name: options?.name, source: handler.toString() });
 
   /** Compose middleware chain: each mw can call next() to proceed */
   async function runMiddlewareChain(
@@ -385,7 +388,7 @@ function createCallable<TInput, TData, TOutput>(
     middleware: middlewares,
   };
 
-  serverFnRegistry.set(fnId, callable as ServerFnCallable<unknown, unknown>);
+  registerUnique(serverFnRegistry, fnId, callable as ServerFnCallable<unknown, unknown>, handler.toString(), serverFnIdentities);
 
   return callable as ServerFnCallable<TInput, TOutput>;
 }

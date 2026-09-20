@@ -141,7 +141,10 @@ export function verifyTOTP(
 
   for (let i = -window; i <= window; i++) {
     const expectedCode = generateTOTPCode(secret, time + i * step * 1000, config);
-    if (timingSafeEqual(Buffer.from(token), Buffer.from(expectedCode))) {
+    const tokenBuf = Buffer.from(token);
+    const expectedBuf = Buffer.from(expectedCode);
+    // Byte length can differ from string length for non-ASCII input.
+    if (tokenBuf.length === expectedBuf.length && timingSafeEqual(tokenBuf, expectedBuf)) {
       return true;
     }
   }

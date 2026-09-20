@@ -28,6 +28,21 @@ describe('Open Redirect Protection', () => {
       expect(validateRedirect('//evil.com')).toBeNull();
     });
 
+    it('blocks backslash protocol-relative bypass', () => {
+      // Browsers normalize \ to / — /\evil.com navigates as //evil.com
+      expect(validateRedirect('/\\evil.com')).toBeNull();
+      expect(validateRedirect('\\evil.com')).toBeNull();
+      expect(validateRedirect('/\\/\\evil.com')).toBeNull();
+      expect(validateRedirect('https:\\evil.com')).toBeNull();
+    });
+
+    it('blocks control characters that URL parsing strips', () => {
+      // WHATWG URL strips \t \r \n anywhere — "java\tscript:" parses as javascript:
+      expect(validateRedirect('java\tscript:alert(1)')).toBeNull();
+      expect(validateRedirect('/foo\nbar')).toBeNull();
+      expect(validateRedirect('jav\nascript:alert(1)')).toBeNull();
+    });
+
     it('blocks path traversal in redirects', () => {
       expect(validateRedirect('/../etc/passwd')).toBeNull();
     });

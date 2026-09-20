@@ -35,8 +35,9 @@ export function extractTranslations(
     for (const fn of functionNames) {
       const escapedFn = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const patterns = [
-        new RegExp(`${escapedFn}\\(\\s*['"\`]([^'"\`]+)['"\`]`, 'g'),
-        new RegExp(`${escapedFn}\\(\\s*"([^"]+)"`, 'g'),
+        // (?<![\w$]): a call must start at an identifier boundary, otherwise `t(`
+        // also matches the tail of `split('a')` or `format('x')`.
+        new RegExp(`(?<![\\w$])${escapedFn}\\(\\s*['"\`]([^'"\`]+)['"\`]`, 'g'),
       ];
 
       for (const pattern of patterns) {

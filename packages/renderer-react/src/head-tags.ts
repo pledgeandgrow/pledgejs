@@ -5,6 +5,7 @@
 
 import type { ResolvedRoute, Viewport } from 'pledgestack-shared';
 import type { HeadMetadata } from 'pledgestack-shared';
+import { escapeJsonForScript } from 'pledgestack-shared';
 
 export function renderHeadTags(metadata: HeadMetadata, route: ResolvedRoute): string {
   const tags: string[] = [];
@@ -70,7 +71,7 @@ export function renderHeadTags(metadata: HeadMetadata, route: ResolvedRoute): st
   if (metadata.structuredData) {
     const items = Array.isArray(metadata.structuredData) ? metadata.structuredData : [metadata.structuredData];
     for (const item of items) {
-      tags.push(`<script type="application/ld+json">${JSON.stringify(item)}</script>`);
+      tags.push(`<script type="application/ld+json">${escapeJsonForScript(JSON.stringify(item))}</script>`);
     }
   }
 

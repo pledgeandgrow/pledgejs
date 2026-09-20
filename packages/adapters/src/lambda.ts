@@ -43,6 +43,8 @@ export interface APIGatewayEventV2 {
   version: '2.0';
   rawPath: string;
   rawQueryString: string;
+  /** HTTP API v2 delivers request cookies here, NOT in `headers`. */
+  cookies?: string[];
   headers: Record<string, string>;
   body?: string | null;
   isBase64Encoded?: boolean;
@@ -64,6 +66,8 @@ export interface APIGatewayResult {
   isBase64Encoded?: boolean;
   /** HTTP API v2 multi-cookie field — one entry per Set-Cookie header. */
   cookies?: string[];
+  /** REST API (v1) multi-value headers — carries repeated Set-Cookie headers. */
+  multiValueHeaders?: Record<string, string[]>;
 }
 
 function isV2Event(event: APIGatewayEvent): event is APIGatewayEventV2 {
@@ -133,7 +137,9 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
       if (path === `/${stage}`) path = '/';
       else if (path.startsWith(`/${stage}/`)) path = path.slice(stage.length + 1);
     }
-    const url = new URL(path, `https://${domain}`);
+    // Concatenate instead of new URL(path, base): a path like "//evil.example/x"
+    // is protocol-relative and would REPLACE the host.
+    const url = new URL(`https://${domain}${path.startsWith('/') ? '' : '/'}${path}`);
     if (queryString) url.search = queryString;
 
     const hasBody = event.body != null && method !== 'GET' && method !== 'HEAD';
@@ -141,9 +147,16 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
       ? (event.isBase64Encoded ? Buffer.from(event.body as string, 'base64') : (event.body as string))
       : undefined;
 
+    const requestHeaders = new Headers(event.headers);
+    // HTTP API v2 strips the Cookie header and lists the cookies separately;
+    // without this the app never sees session/CSRF cookies.
+    if (isV2Event(event) && event.cookies && event.cookies.length > 0 && !requestHeaders.has('cookie')) {
+      requestHeaders.set('cookie', event.cookies.join('; '));
+    }
+
     const request = new Request(url.toString(), {
       method,
-      headers: event.headers,
+      headers: requestHeaders,
       body,
     });
 
@@ -170,7 +183,11 @@ export function createLambdaHandler(options: { config: PledgeConfig }) {
       statusCode: response.status,
       headers,
       body: responseBody,
-      ...(cookies.length > 0 ? { cookies } : {}),
+      // v2 takes a `cookies` array; v1 (REST API) ignores it and needs
+      // multiValueHeaders, otherwise every Set-Cookie is silently dropped.
+      ...(cookies.length > 0
+        ? isV2Event(event) ? { cookies } : { multiValueHeaders: { 'Set-Cookie': cookies } }
+        : {}),
       ...(isBase64Encoded ? { isBase64Encoded: true } : {}),
     };
   };

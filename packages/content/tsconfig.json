@@ -3,11 +3,25 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "composite": true
+    "composite": true,
+    "emitDeclarationOnly": true,
+    "declaration": true,
+    "declarationMap": false,
+    "sourceMap": false
   },
-  "include": ["src"],
-  "references": [
-    { "path": "../shared" }
+  "include": [
+    "src"
   ],
-  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
+  "references": [
+    {
+      "path": "../shared"
+    }
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "dist",
+    "node_modules",
+    "src/**/*.test.tsx"
+  ]
 }

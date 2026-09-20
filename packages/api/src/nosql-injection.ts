@@ -49,6 +49,9 @@ export interface SanitizeOptions {
 
 const DEFAULT_MAX_DEPTH = 10;
 
+/** Keys that can pollute or replace an object's prototype. */
+const POLLUTION_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
 /**
  * Sanitize a MongoDB-style query object from user input.
  *
@@ -70,15 +73,28 @@ export function sanitizeMongoQuery(
     // Array input produces an array of sanitized values — return MongoValue[]
     // honestly rather than casting an array to MongoQuery, which broke
     // callers expecting object semantics.
-    return query
-      .map((item) => sanitizeMongoQuery(item, options, depth + 1))
-      .filter((v): v is NonNullable<typeof v> => v !== null);
+    // Scalars (e.g. the values of an allowed `$in: ['a', 'b']`) are legitimate
+    // array members and must be preserved; only objects need recursive
+    // sanitization, and unsupported values (undefined, functions) are dropped.
+    const out: MongoValue[] = [];
+    for (const item of query) {
+      if (item === null || typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+        out.push(item);
+      } else if (typeof item === 'object') {
+        const sanitized = sanitizeMongoQuery(item, options, depth + 1);
+        if (sanitized !== null) out.push(sanitized as MongoValue);
+      }
+    }
+    return out;
   }
 
   const result: MongoQuery = {};
   const allowed = options.allowedOperators ? new Set(options.allowedOperators) : null;
 
   for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
+    // Prototype-pollution keys are always dropped: assigning result['__proto__']
+    // on a plain object swaps its prototype instead of setting a field.
+    if (POLLUTION_KEYS.has(key)) continue;
     if (key.startsWith('$')) {
       if (DANGEROUS_OPERATORS.has(key)) {
         continue;
@@ -139,7 +155,7 @@ export function hasDangerousOperators(query: unknown): boolean {
   }
 
   for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
-    if (DANGEROUS_OPERATORS.has(key)) return true;
+    if (DANGEROUS_OPERATORS.has(key) || POLLUTION_KEYS.has(key)) return true;
     if (typeof value === 'object' && value !== null && hasDangerousOperators(value)) return true;
   }
 
@@ -157,7 +173,7 @@ export function stripOperators(query: unknown): Record<string, unknown> {
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
-    if (!key.startsWith('$')) {
+    if (!key.startsWith('$') && !POLLUTION_KEYS.has(key)) {
       if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
         result[key] = stripOperators(value);
       } else {
@@ -179,7 +195,7 @@ export function sanitizeProjection(projection: unknown): Record<string, 0 | 1> {
 
   const result: Record<string, 0 | 1> = {};
   for (const [key, value] of Object.entries(projection as Record<string, unknown>)) {
-    if (key.startsWith('$')) continue;
+    if (key.startsWith('$') || POLLUTION_KEYS.has(key)) continue;
     if (!/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(key)) continue;
     result[key] = value === 1 || value === true ? 1 : 0;
   }

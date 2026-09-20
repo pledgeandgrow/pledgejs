@@ -1,41 +1,7 @@
 {
   "name": "pledgestack-privacy",
-  "version": "0.0.1",
+  "version": "1.0.0-rc.0",
   "description": "Privacy & compliance helpers for PledgeStack — GDPR, CCPA, PII redaction, encryption, consent management",
-  "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "scripts": {
-    "build": "tsc --build",
-    "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "pledgestack-shared": "workspace:*"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.0",
-    "rimraf": "^6.0.0",
-    "@types/node": "^22.0.0"
-  },
-  "license": "MIT",
-  "author": "PledgeStack Contributors",
-  "homepage": "https://github.com/pledgeandgrow/pledgejs#readme",
-  "bugs": {
-    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/pledgeandgrow/pledgejs.git",
-    "directory": "packages/privacy"
-  },
   "keywords": [
     "pledgestack",
     "react",
@@ -47,5 +13,52 @@
     "encryption",
     "pii"
   ],
-  "private": true
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/privacy#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/privacy"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
+    "dev": "tsc --watch",
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "pledgestack-shared": "workspace:*"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

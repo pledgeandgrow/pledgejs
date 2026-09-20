@@ -11,9 +11,8 @@
  * - Generate optimized Cargo.toml
  */
 
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -124,8 +123,67 @@ export function analyzeCargoFeatures(cargoTomlPath: string): CrateFeatureUsage[]
   return results;
 }
 
+/** Reads every .rs file under `dir` (no shell — works on Windows and with any directory name). */
+function readRustSources(dir: string): string {
+  const chunks: string[] = [];
+  function walk(current: string): void {
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== 'target' && entry.name !== 'node_modules' && !entry.name.startsWith('.')) walk(full);
+      } else if (entry.isFile() && entry.name.endsWith('.rs')) {
+        try {
+          chunks.push(readFileSync(full, 'utf-8'));
+        } catch {
+          // unreadable file — skip
+        }
+      }
+    }
+  }
+  walk(dir);
+  return chunks.join('\n');
+}
+
+/**
+ * Names declared in dependency tables of a Cargo.toml (`[dependencies]`,
+ * `[dev-dependencies]`, `[build-dependencies]`, `[workspace.dependencies]`,
+ * `[target.*.dependencies]`, and `[dependencies.name]` sub-tables). Keys of
+ * other tables ([package], [lib], [profile.*], [features]) are not crates.
+ */
+function declaredDependencyNames(cargoToml: string): string[] {
+  const names = new Set<string>();
+  let inDependencyTable = false;
+
+  for (const rawLine of cargoToml.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const header = line.match(/^\[\s*([^\]]+?)\s*\]$/);
+    if (header) {
+      const table = header[1];
+      // [dependencies.name] declares one crate through its own table
+      const sub = table.match(/(?:^|\.)(?:dev-|build-)?dependencies\.([A-Za-z0-9_-]+)$/);
+      if (sub) names.add(sub[1]);
+      inDependencyTable = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(table);
+      continue;
+    }
+    if (!inDependencyTable || !line || line.startsWith('#')) continue;
+    const key = line.match(/^([A-Za-z0-9_-]+)(?:\.[A-Za-z0-9_-]+)?\s*=/);
+    if (key) names.add(key[1]);
+  }
+  return [...names];
+}
+
 /**
  * Detects unused crate dependencies by analyzing Rust source files.
+ *
+ * A crate counts as used when its (underscored) name appears as a path or
+ * macro root anywhere in the sources — `serde_json::json!`, `uuid::Uuid`,
+ * `use reqwest::…` — not only in `use` statements.
  */
 export function detectUnusedCrates(
   cargoTomlPath: string,
@@ -133,65 +191,20 @@ export function detectUnusedCrates(
 ): string[] {
   if (!existsSync(cargoTomlPath)) return [];
 
-  const content = readFileSync(cargoTomlPath, 'utf-8');
-  const declaredCrates: string[] = [];
+  const declaredCrates = declaredDependencyNames(readFileSync(cargoTomlPath, 'utf-8'));
+  const source = readRustSources(rustSourceDir)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
 
-  // Extract crate names from Cargo.toml
-  const depRegex = /^(\w[\w-]*)\s*=\s/gm;
-  let match: RegExpExecArray | null;
-  while ((match = depRegex.exec(content)) !== null) {
-    const name = match[1];
-    if (!['edition', 'name', 'version', 'authors', 'description', 'license', 'repository', 'homepage', 'documentation', 'keywords', 'categories', 'readme'].includes(name)) {
-      declaredCrates.push(name);
-    }
-  }
-
-  // Scan Rust source files for `use` statements
-  const usedCrates = new Set<string>();
-  try {
-    const output = execSync(
-      `find "${rustSourceDir}" -name "*.rs" -exec grep -h "^use " {} + 2>/dev/null || true`,
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-
-    for (const line of output.split('\n')) {
-      const useMatch = line.match(/^use\s+(\w+)/);
-      if (useMatch) {
-        usedCrates.add(useMatch[1].replace(/_/g, '-'));
-      }
-
-      // Also check for extern crate
-      const externMatch = line.match(/^extern\s+crate\s+(\w+)/);
-      if (externMatch) {
-        usedCrates.add(externMatch[1].replace(/_/g, '-'));
-      }
-    }
-  } catch {
-    // If find/grep fails, can't detect unused crates
-    return [];
-  }
-
-  // Also check for crate:: references
-  try {
-    const output = execSync(
-      `find "${rustSourceDir}" -name "*.rs" -exec grep -h "crate::" {} + 2>/dev/null || true`,
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    // The crate:: prefix refers to the current crate, not external ones
-    void output;
-  } catch {
-    // Ignore
-  }
-
-  // Mark crates as unused if not found in source
-  const unusedCrates = declaredCrates.filter(c => {
-    const crateName = c.replace(/-/g, '_');
-    return !usedCrates.has(c) && !usedCrates.has(crateName);
+  const unusedCrates = declaredCrates.filter((crate) => {
+    const ident = crate.replace(/-/g, '_');
+    return !new RegExp(`\\b${ident}\\b`).test(source);
   });
 
   // Don't flag napi/napi-derive as unused (they're used via macros)
-  return unusedCrates.filter(c => c !== 'napi' && c !== 'napi-derive');
+  return unusedCrates.filter((c) => c !== 'napi' && c !== 'napi-derive');
 }
+
 
 /**
  * Generates an optimized Cargo.toml with minimal features.

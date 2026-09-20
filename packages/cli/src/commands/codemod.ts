@@ -1,4 +1,5 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir, stat } from 'node:fs/promises';
+import { join, extname } from 'node:path';
 
 export interface CodemodOptions {
   /** Transform name */
@@ -332,6 +333,33 @@ export function listCodemods(): Array<{ name: string; description: string }> {
   return REGISTERED_CODEMODS.map((c) => ({ name: c.name, description: c.description }));
 }
 
+const CODEMOD_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts', '.psx']);
+const SKIPPED_DIRS = new Set(['node_modules', '.git', '.pledge', '.pledge-cache', '.next', 'dist', 'build', 'coverage']);
+
+/** Resolves a file-or-directory argument to the list of source files to transform. */
+async function collectCodemodFiles(target: string): Promise<string[]> {
+  const info = await stat(target);
+  if (!info.isDirectory()) return [target];
+
+  const files: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!SKIPPED_DIRS.has(entry.name)) await walk(full);
+      } else if (
+        entry.isFile() &&
+        CODEMOD_EXTENSIONS.has(extname(entry.name)) &&
+        !entry.name.endsWith('.d.ts')
+      ) {
+        files.push(full);
+      }
+    }
+  }
+  await walk(target);
+  return files.sort();
+}
+
 export async function runCodemod(options: CodemodOptions): Promise<{ filesChanged: number; totalChanges: number }> {
   const codemod = REGISTERED_CODEMODS.find((c) => c.name === options.name);
   if (!codemod) {
@@ -342,23 +370,35 @@ export async function runCodemod(options: CodemodOptions): Promise<{ filesChange
   let filesChanged = 0;
   let totalChanges = 0;
 
+  let files: string[];
   try {
-    const source = await readFile(options.path, 'utf-8');
-    const result = codemod.transform(source, options.path);
-
-    if (result.changes > 0) {
-      filesChanged++;
-      totalChanges += result.changes;
-
-      if (!dryRun) {
-        await writeFile(options.path, result.code, 'utf-8');
-        console.log(`  ${options.path}: ${result.changes} change(s)`);
-      } else {
-        console.log(`  [dry-run] ${options.path}: ${result.changes} change(s)`);
-      }
-    }
+    files = await collectCodemodFiles(options.path);
   } catch (err) {
-    console.error(`  Error processing ${options.path}: ${err}`);
+    console.error(`  Error reading ${options.path}: ${err}`);
+    process.exitCode = 1;
+    files = [];
+  }
+
+  for (const file of files) {
+    try {
+      const source = await readFile(file, 'utf-8');
+      const result = codemod.transform(source, file);
+
+      if (result.changes > 0) {
+        filesChanged++;
+        totalChanges += result.changes;
+
+        if (!dryRun) {
+          await writeFile(file, result.code, 'utf-8');
+          console.log(`  ${file}: ${result.changes} change(s)`);
+        } else {
+          console.log(`  [dry-run] ${file}: ${result.changes} change(s)`);
+        }
+      }
+    } catch (err) {
+      console.error(`  Error processing ${file}: ${err}`);
+      process.exitCode = 1;
+    }
   }
 
   console.log(`\nCodemod "${options.name}" complete: ${filesChanged} file(s), ${totalChanges} change(s)`);

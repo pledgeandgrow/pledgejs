@@ -66,23 +66,27 @@ function formatVersionSpec(name: string, version: string): string {
   return `"${version}"`;
 }
 
-export async function addCommand(crateSpec: string, _opts?: AddOptions): Promise<void> {
+/**
+ * Resolves the Cargo dependency spec for `pledge add`. An explicit version
+ * (`sqlx@0.8`) or full spec (`pledge add sqlx '{ version = "0.8" }'`, passed
+ * as `opts.version`) wins over the SUPPORTED_CRATES default. Returns
+ * undefined for an unknown crate with no version.
+ */
+export function resolveVersionSpec(name: string, version?: string, explicitSpec?: string): string | undefined {
+  const requested = version ?? explicitSpec?.trim();
+  if (requested) return formatVersionSpec(name, requested);
+  return SUPPORTED_CRATES[name];
+}
+
+export async function addCommand(crateSpec: string, opts?: AddOptions): Promise<void> {
   const { name, version } = parseCrateSpec(crateSpec);
   const projectRoot = process.cwd();
 
-  // Ensure Cargo.toml exists
-  await ensureRootCargoToml(projectRoot);
+  // Determine version spec (before touching the filesystem, so an unknown
+  // crate does not leave a freshly written Cargo.toml behind)
+  const versionSpec = resolveVersionSpec(name, version, opts?.version);
 
-  // Determine version spec
-  let versionSpec: string | undefined;
-
-  if (version) {
-    // User specified a version: pledge add sqlx@0.8
-    versionSpec = formatVersionSpec(name, version);
-  } else if (SUPPORTED_CRATES[name]) {
-    // Use default from SUPPORTED_CRATES
-    versionSpec = SUPPORTED_CRATES[name];
-  } else {
+  if (!versionSpec) {
     // Unknown crate — user must provide version
     console.error(
       `Unknown crate: ${name}\n` +
@@ -91,6 +95,9 @@ export async function addCommand(crateSpec: string, _opts?: AddOptions): Promise
     );
     process.exit(1);
   }
+
+  // Ensure Cargo.toml exists
+  await ensureRootCargoToml(projectRoot);
 
   // Add the crate
   await addCrate(projectRoot, name, versionSpec);

@@ -128,9 +128,20 @@ export class ApiKeyManager {
   }
 
   /**
-   * Check if a key has access to a specific route and method.
+   * Check if a key has access to a specific route and method — and, when the
+   * key's scope restricts `resources` / `permissions`, to the named resource /
+   * permission. A scope that lists resources or permissions is FAIL-CLOSED:
+   * the caller must pass the resource/permission being accessed, otherwise
+   * access is denied (previously these scope fields were silently ignored, so
+   * a key limited to `resources: ['reports']` could touch anything the
+   * route/method scopes allowed). `'*'` in a scope list grants all.
    */
-  canAccess(record: ManagedApiKeyRecord, route: string, method: string): boolean {
+  canAccess(
+    record: ManagedApiKeyRecord,
+    route: string,
+    method: string,
+    access: { resource?: string; permission?: string } = {},
+  ): boolean {
     if (record.scopes.routes) {
       const hasRoute = record.scopes.routes.some((pattern) => matchRoute(pattern, route));
       if (!hasRoute) return false;
@@ -141,6 +152,16 @@ export class ApiKeyManager {
         (m) => m.toUpperCase() === method.toUpperCase(),
       );
       if (!hasMethod) return false;
+    }
+
+    if (record.scopes.resources) {
+      const { resource } = access;
+      if (!resource || !record.scopes.resources.some((r) => r === '*' || r === resource)) return false;
+    }
+
+    if (record.scopes.permissions) {
+      const { permission } = access;
+      if (!permission || !record.scopes.permissions.some((p) => p === '*' || p === permission)) return false;
     }
 
     return true;
@@ -242,7 +263,8 @@ function matchRoute(pattern: string, route: string): boolean {
   if (pattern === '*') return true;
   if (pattern.endsWith('/*')) {
     const prefix = pattern.slice(0, -2);
-    return route.startsWith(prefix);
+    // Segment boundary: '/api/*' must not match '/apiary'.
+    return route === prefix || route.startsWith(prefix + '/');
   }
   if (pattern.includes('*')) {
     const regex = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');

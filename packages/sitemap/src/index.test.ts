@@ -113,3 +113,11 @@ describe('generateRobotsTxt', () => {
     expect(robots).toContain('Sitemap: https://example.com/sitemap.xml');
   });
 });
+
+describe('routesToSitemapEntries dynamic routes', () => {
+  it('skips :param and *catchall router patterns', async () => {
+    const { routesToSitemapEntries } = await import('./index');
+    const locs = routesToSitemapEntries(['/', '/blog/:slug', '/docs/*rest', '/about'], 'https://x.com').map((e) => e.loc);
+    expect(locs).toEqual(['https://x.com', 'https://x.com/about']);
+  });
+});

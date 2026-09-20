@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode, type ComponentType } from 'react';
 import { createElement } from 'react';
+import { routeMapKey } from './route-chain';
 
 /** Route data emitted by SSR into `window.__PLEDGE_ROUTE__`. */
 export interface PledgeRouteData {
@@ -42,7 +43,7 @@ export function resolveRouteElement(
   }
   const layouts: ComponentType<Record<string, unknown>>[] = [];
   for (const prefix of prefixes) {
-    const entry = routes[prefix];
+    const entry = routes[routeMapKey('layout', prefix)] ?? routes[prefix];
     if (entry && entry.type === 'layout' && entry.component) layouts.push(entry.component);
   }
   // Wrap innermost (leaf) first so the root layout ends up outermost.
@@ -165,7 +166,29 @@ export class ReadonlyURLSearchParams {
   }
 }
 
+/**
+ * Classify a navigation target. Cross-origin targets can't be handled by
+ * pushState (it throws SecurityError) or fetched as pages, so callers must do a
+ * real browser navigation for them; non-http(s) schemes (javascript:, data:)
+ * must never be navigated to at all.
+ */
+export function classifyNavigation(
+  to: string,
+  origin: string,
+): { url: URL; external: boolean; safe: boolean; fetchPath: string } {
+  let url: URL;
+  try {
+    url = new URL(to, origin);
+  } catch {
+    return { url: new URL(origin), external: true, safe: false, fetchPath: '/' };
+  }
+  const safe = url.protocol === 'http:' || url.protocol === 'https:';
+  return { url, external: url.origin !== origin, safe, fetchPath: url.pathname + url.search };
+}
+
 function prefetchPage(href: string, priority: 'high' | 'low' | 'auto' = 'auto'): void {
+  // Only same-origin pages can be prefetched into the SPA page cache.
+  if (typeof window !== 'undefined' && classifyNavigation(href, window.location.origin).external) return;
   const path = href.split('#')[0].split('?')[0];
   if (prefetchedPages.has(path)) return;
 
@@ -252,7 +275,14 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 
   const navigate = useCallback(async (to: string, options: NavigateOptions = {}) => {
     const { scroll = true, replace = false } = options;
-    const url = new URL(to, window.location.origin);
+    const target = classifyNavigation(to, window.location.origin);
+    if (!target.safe) return;
+    if (target.external) {
+      // pushState rejects cross-origin URLs, so hand off to the browser.
+      window.location.href = target.url.href;
+      return;
+    }
+    const url = target.url;
 
     if (url.pathname === pathname && url.search === window.location.search) {
       if (scroll) {
@@ -275,7 +305,8 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     abortControllerRef.current = controller;
 
     const seq = ++navSeq.current;
-    const content = await fetchPageContent(url.pathname, controller.signal);
+    // Include the query string: the server renders search-dependent pages from it.
+    const content = await fetchPageContent(target.fetchPath, controller.signal);
 
     // A newer navigation started before this one resolved — discard.
     if (seq !== navSeq.current) return;
@@ -316,7 +347,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
       const path = window.location.pathname;
       const savedScroll = scrollPositions.current.get(path);
 
-      const content = await fetchPageContent(path);
+      const content = await fetchPageContent(path + window.location.search);
 
       if (content) {
         swapRootContent(content);

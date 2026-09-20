@@ -13,10 +13,24 @@ export function createMetricsCollector(): MetricsCollector {
   const timings = new Map<string, number[]>();
   const histograms = new Map<string, number[]>();
 
+  // Prometheus exposition format: metric and label names must match
+  // [a-zA-Z_:][a-zA-Z0-9_:]* and label values must be double-quoted with
+  // backslash/quote/newline escaping. Unquoted `k=v` pairs or dotted names
+  // make the whole scrape unparseable.
+  const sanitizeName = (n: string): string => {
+    const s = n.replace(/[^a-zA-Z0-9_:]/g, '_');
+    return /^[0-9]/.test(s) ? `_${s}` : s;
+  };
+  const quoteLabelValue = (v: string): string =>
+    `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+
   function key(name: string, tags?: Record<string, string>): string {
-    if (!tags) return name;
-    const tagStr = Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(',');
-    return `${name}{${tagStr}}`;
+    const safeName = sanitizeName(name);
+    if (!tags) return safeName;
+    const tagStr = Object.entries(tags)
+      .map(([k, v]) => `${sanitizeName(k)}=${quoteLabelValue(v)}`)
+      .join(',');
+    return `${safeName}{${tagStr}}`;
   }
 
   return {

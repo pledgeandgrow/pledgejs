@@ -18,3 +18,13 @@ describe('MDX Plugin (#17)', () => {
     expect(props).toBeDefined();
   });
 });
+
+describe('extractFrontmatter CRLF', () => {
+  it('parses CRLF documents and bodyless frontmatter', async () => {
+    const { extractFrontmatter } = await import('./index');
+    const r = extractFrontmatter('---\r\ntitle: Hi\r\ndraft: true\r\n---\r\n# Body\r\n');
+    expect(r.frontmatter).toEqual({ title: 'Hi', draft: true });
+    expect(r.content).toBe('# Body\r\n');
+    expect(extractFrontmatter('---\na: 1\n---').frontmatter).toEqual({ a: 1 });
+  });
+});

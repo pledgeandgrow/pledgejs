@@ -1,7 +1,7 @@
-import { join, dirname, basename, extname, relative, isAbsolute } from 'node:path';
+import { join, dirname, basename, extname, relative, isAbsolute, sep, resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
   transformPSX,
@@ -9,6 +9,7 @@ import {
   generateModuleCargoToml,
   ensureRootCargoToml,
   serializeSourceMap,
+  rustLibName,
 } from 'pledgestack-core';
 import { generateRustFallback, BoundedLRUMap, MAX_TRANSFORM_CACHE_ENTRIES } from 'pledgestack-shared';
 import type {
@@ -61,63 +62,7 @@ export const webpackAdapter: BundlerAdapter = {
       // Try Webpack native build
       const webpack = await tryLoadWebpack();
       if (webpack) {
-        const entry: Record<string, string> = {};
-        for (const routeFile of routeFiles) {
-          const relPath = routeFile
-            .replace(appDir, '')
-            .replace(/^\//, '')
-            .replace(/\.(ts|tsx|jsx|psx|ps)$/, '');
-          entry[relPath] = routeFile;
-        }
-
-        const compiler = webpack({
-          entry,
-          mode: 'production',
-          target: 'node',
-          output: {
-            path: outDir,
-            filename: '[name].[contenthash:8].js',
-            module: true,
-            library: { type: 'module' },
-          },
-          resolve: {
-            extensions: ['.ts', '.tsx', '.jsx', '.js', '.mjs', '.psx', '.ps'],
-            alias: buildAliasMap(config),
-          },
-          module: {
-            rules: [
-              {
-                test: /\.(psx|ps)$/,
-                use: { loader: pledgeStackWebpackLoaderPath, options: { config } },
-              },
-              {
-                test: /\.(ts|tsx)$/,
-                use: {
-                  loader: pledgeStackEsbuildLoaderPath,
-                  options: { isDev: false },
-                },
-              },
-            ],
-          },
-          externals: {
-            react: 'react',
-            'react-dom': 'react-dom',
-            'react/jsx-runtime': 'react/jsx-runtime',
-            'pledgestack-core': 'pledgestack-core',
-            'pledgestack-shared': 'pledgestack-shared',
-            'pledgestack-server': 'pledgestack-server',
-          },
-          // Enable production minification and source maps. Previously
-          // `minimize: false` shipped un-minified, un-hashed bundles that
-          // could not be safely long-term cached.
-          optimization: {
-            minimize: true,
-            // Split shared chunks so common dependencies (react runtime, etc.)
-            // are not duplicated across every route bundle.
-            splitChunks: { chunks: 'all' },
-          },
-          devtool: 'source-map',
-        });
+        const compiler = webpack(createWebpackConfig(config, routeFiles, 'production'));
 
         await new Promise<void>((resolve, reject) => {
           compiler.run((err, stats) => {
@@ -186,51 +131,7 @@ export const webpackAdapter: BundlerAdapter = {
     if (webpack && devServerMod) {
       const appDir = join(config.rootDir, config.appDir);
       const routeFiles = await collectRouteFiles(appDir);
-      const entry: Record<string, string> = {};
-      for (const routeFile of routeFiles) {
-        const relPath = routeFile
-          .replace(appDir, '')
-          .replace(/^\//, '')
-          .replace(/\.(ts|tsx|jsx|psx|ps)$/, '');
-        entry[relPath] = routeFile;
-      }
-
-      const compiler = webpack({
-        entry,
-        mode: 'development',
-        target: 'node',
-        output: {
-          path: join(config.rootDir, config.outDir),
-          filename: '[name].js',
-          module: true,
-          library: { type: 'module' },
-        },
-        resolve: {
-          extensions: ['.ts', '.tsx', '.jsx', '.js', '.mjs', '.psx', '.ps'],
-          alias: buildAliasMap(config),
-        },
-        module: {
-          rules: [
-            {
-              test: /\.(psx|ps)$/,
-              use: { loader: pledgeStackWebpackLoaderPath, options: { config } },
-            },
-            {
-              test: /\.(ts|tsx)$/,
-              use: {
-                loader: pledgeStackEsbuildLoaderPath,
-                options: { isDev: true },
-              },
-            },
-          ],
-        },
-        externals: {
-          react: 'react',
-          'react-dom': 'react-dom',
-          'react/jsx-runtime': 'react/jsx-runtime',
-        },
-        devtool: 'inline-source-map',
-      });
+      const compiler = webpack(createWebpackConfig(config, routeFiles, 'development'));
 
       const devServer = new devServerMod.WebpackDevServer(
         {
@@ -251,7 +152,9 @@ export const webpackAdapter: BundlerAdapter = {
           await devServer.stop();
         },
         reloadAll() {
-          devServer.sendMessage(devServer.webSocketServer.clients, 'full-reload');
+          // 'content-changed' is the webpack-dev-server client message that reloads the page
+          // ('full-reload' is a Vite-only message type and is ignored by WDS).
+          devServer.sendMessage(devServer.webSocketServer.clients, 'content-changed');
         },
       };
     }
@@ -260,7 +163,7 @@ export const webpackAdapter: BundlerAdapter = {
     const { createServer } = await import('node:http');
 
     const server = createServer(async (req, res) => {
-      const cwd = process.cwd();
+      const cwd = resolvePath(config.rootDir);
       // Resolve within cwd and reject path traversal — otherwise a request like
       // `GET /../../secrets.ts` would read and transform arbitrary files.
       let filePath: string;
@@ -289,8 +192,10 @@ export const webpackAdapter: BundlerAdapter = {
         const { fileUrl } = await webpackAdapter.transformFile(filePath, {
           isDev: true,
         });
-        const code = await readFile(new URL(fileUrl), 'utf-8');
-        res.writeHead(200, { 'Content-Type': 'application/javascript' });
+        const code = isFallbackScript(filePath)
+          ? await readFile(new URL(fileUrl), 'utf-8')
+          : await readFile(new URL(fileUrl));
+        res.writeHead(200, { 'Content-Type': fallbackContentType(filePath) });
         res.end(code);
       } catch (err) {
         res.writeHead(500);
@@ -372,19 +277,20 @@ export const webpackAdapter: BundlerAdapter = {
 // ── Webpack Loader Paths ─────────────────────────────────────────────
 // These are referenced as string paths in the webpack config so webpack
 // can resolve them at runtime via require(). The actual loader files are
-// CommonJS (.js) in the loaders/ directory to avoid gitignore rules that
+// CommonJS (.cjs — the package is "type": "module", so a .js loader would be
+// loaded as ESM and fail on require()) in the loaders/ directory to avoid gitignore rules that
 // exclude .js files from src/.
 const pledgeStackWebpackLoaderPath = join(
-  dirname(new URL(import.meta.url).pathname.replace(/^\//, '')),
+  dirname(fileURLToPath(import.meta.url)),
   '..',
   'loaders',
-  'webpack-psx-loader.js',
+  'webpack-psx-loader.cjs',
 );
 const pledgeStackEsbuildLoaderPath = join(
-  dirname(new URL(import.meta.url).pathname.replace(/^\//, '')),
+  dirname(fileURLToPath(import.meta.url)),
   '..',
   'loaders',
-  'webpack-esbuild-loader.js',
+  'webpack-esbuild-loader.cjs',
 );
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -445,11 +351,96 @@ async function tryLoadWebpackDevServer(): Promise<WebpackDevServerAPI | null> {
   }
 }
 
+/**
+ * Builds the webpack configuration used for both production builds and the
+ * dev server. Exported so the config can be verified without webpack installed.
+ */
+export function createWebpackConfig(
+  config: PledgeConfig,
+  routeFiles: string[],
+  mode: 'production' | 'development',
+): Record<string, unknown> {
+  const isDev = mode === 'development';
+  const appDir = join(config.rootDir, config.appDir);
+  const outDir = join(config.rootDir, config.outDir);
+
+  // Entry name = route path without extension, always with forward slashes
+  // (a Windows `\users\page` entry name produced a broken output path).
+  const entry: Record<string, string> = {};
+  for (const routeFile of routeFiles) {
+    const name = relative(appDir, routeFile).split(sep).join('/').replace(/\.(ts|tsx|jsx|psx|ps)$/, '');
+    entry[name] = routeFile;
+  }
+
+  return {
+    entry,
+    mode,
+    target: 'node',
+    // `output.module` / `library: { type: 'module' }` are rejected by webpack
+    // ("only allowed when experiments.outputModule is enabled") without this.
+    experiments: { outputModule: true },
+    output: {
+      // Production bundles live at <outDir>/server/<route>.js — the location
+      // resolveProductionPath() looks in (it does not know a content hash).
+      path: isDev ? outDir : join(outDir, 'server'),
+      filename: '[name].js',
+      module: true,
+      library: { type: 'module' },
+    },
+    resolve: {
+      extensions: ['.ts', '.tsx', '.jsx', '.js', '.mjs', '.psx', '.ps'],
+      alias: buildAliasMap(config),
+    },
+    module: {
+      rules: [
+        {
+          // Loaders run right-to-left: expand PSX first, then compile the
+          // resulting TSX (the esbuild loader would otherwise pick the `ts`
+          // loader for a `.psx` extension and choke on JSX).
+          test: /\.(psx|ps)$/,
+          use: [
+            { loader: pledgeStackEsbuildLoaderPath, options: { isDev, loader: 'tsx' } },
+            { loader: pledgeStackWebpackLoaderPath, options: { config, isDev } },
+          ],
+        },
+        {
+          test: /\.(ts|tsx|jsx)$/,
+          use: { loader: pledgeStackEsbuildLoaderPath, options: { isDev } },
+        },
+      ],
+    },
+    externals: isDev
+      ? {
+          react: 'react',
+          'react-dom': 'react-dom',
+          'react/jsx-runtime': 'react/jsx-runtime',
+        }
+      : {
+          react: 'react',
+          'react-dom': 'react-dom',
+          'react/jsx-runtime': 'react/jsx-runtime',
+          'pledgestack-core': 'pledgestack-core',
+          'pledgestack-shared': 'pledgestack-shared',
+          'pledgestack-server': 'pledgestack-server',
+        },
+    ...(isDev
+      ? { devtool: 'inline-source-map' }
+      : {
+          // Production minification and source maps; shared chunks keep common
+          // dependencies from being duplicated in every route bundle.
+          optimization: { minimize: true, splitChunks: { chunks: 'all' } },
+          devtool: 'source-map',
+        }),
+  };
+}
+
 function buildAliasMap(config: PledgeConfig): Record<string, string> {
   const alias: Record<string, string> = {};
   if (config.alias) {
     for (const [name, path] of Object.entries(config.alias)) {
-      alias[name] = join(config.rootDir, path);
+      // Webpack aliases are plain prefixes: tsconfig-style `@/lib/*` -> `lib/*`
+      // must become `@/lib` -> `<root>/lib`, or the alias never matches.
+      alias[name.replace(/\/\*$/, '')] = join(config.rootDir, path.replace(/\/\*$/, ''));
     }
   }
   alias['@'] = join(config.rootDir, config.appDir);
@@ -503,6 +494,8 @@ async function transformPSXFile(
     moduleName,
     compileRust: true,
     addonPath: `./${moduleName}.node`,
+    // The wrapper is written next to the emitted module as <name>.napi.js.
+    wrapperImportPath: `./${moduleName}.napi.js`,
     format,
   });
 
@@ -640,15 +633,26 @@ async function compileRustAddon(
         timeout: cargoConfig?.timeout ?? (isDev ? 30000 : 120000),
         env: cargoEnv,
       });
+      // Always drain the pipes: cargo blocks once an unread pipe fills (~64KB),
+      // which turned a noisy build into a hang until the timeout. Keep stderr
+      // so a failed build says why instead of silently falling back.
+      let stderr = '';
+      child.stdout?.resume();
+      child.stderr?.on('data', (data: Buffer) => {
+        if (stderr.length < 64 * 1024) stderr += data.toString();
+      });
       child.on('error', reject);
       child.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`cargo exited with ${code}`));
+        else {
+          console.error(`[pledgestack] Rust compilation failed for ${moduleName}:\n${stderr}`);
+          reject(new Error(`cargo exited with ${code}`));
+        }
       });
     });
 
     const targetDir = join(sharedTargetDir, isDev ? 'debug' : 'release');
-    const libName = `pledge_${moduleName}`;
+    const libName = rustLibName(moduleName);
     const candidates = [
       join(targetDir, `lib${libName}.so`),
       join(targetDir, `lib${libName}.dylib`),
@@ -670,3 +674,37 @@ async function compileRustAddon(
 }
 
 export default webpackAdapter;
+
+const FALLBACK_SCRIPT_EXTS = new Set(['.ts', '.tsx', '.jsx', '.mjs', '.js', '.cjs', '.psx', '.ps']);
+const FALLBACK_CONTENT_TYPES: Record<string, string> = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+};
+
+/** Whether the dev-server fallback serves this file as (transformed) JavaScript. */
+export function isFallbackScript(filePath: string): boolean {
+  return FALLBACK_SCRIPT_EXTS.has(extname(filePath).toLowerCase());
+}
+
+/** Content-Type for a file served by the dev-server fallback, chosen by extension. */
+export function fallbackContentType(filePath: string): string {
+  if (isFallbackScript(filePath)) return 'application/javascript; charset=utf-8';
+  return FALLBACK_CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+}

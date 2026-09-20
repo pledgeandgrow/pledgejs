@@ -50,21 +50,37 @@ export interface ABACPolicy {
 /**
  * Built-in condition factories for common ABAC scenarios.
  */
+/** Strict dotted-quad parser: returns the 32-bit value or null when malformed. */
+function parseIPv4(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet > 255) return null;
+    n = n * 256 + octet;
+  }
+  return n;
+}
+
 export const conditions = {
   /** Check if the IP is in a CIDR range */
   ipInRange(cidr: string): ABACCondition {
     const [range, bits] = cidr.split('/');
-    const rangeParts = range.split('.').map(Number);
-    const mask = bits ? parseInt(bits, 10) : 32;
+    const mask = bits !== undefined ? Number(bits) : 32;
+    const rangeNum = parseIPv4(range);
+    // An invalid CIDR never matches (fail closed).
+    if (rangeNum === null || !Number.isInteger(mask) || mask < 0 || mask > 32) {
+      return () => false;
+    }
     const maskNum = mask === 0 ? 0 : (~0 << (32 - mask)) >>> 0;
-    const rangeNum = (rangeParts[0] << 24 | rangeParts[1] << 16 | rangeParts[2] << 8 | rangeParts[3]) >>> 0;
 
     return (ctx: ABACContext) => {
       if (!ctx.ip) return false;
-      const parts = ctx.ip.split('.').map(Number);
-      if (parts.length !== 4) return false;
-      const ipNum = (parts[0] << 24 | parts[1] << 16 | parts[2] << 8 | parts[3]) >>> 0;
-      return (ipNum & maskNum) === (rangeNum & maskNum);
+      const ipNum = parseIPv4(ctx.ip);
+      if (ipNum === null) return false;
+      return ((ipNum & maskNum) >>> 0) === ((rangeNum & maskNum) >>> 0);
     };
   },
 
@@ -103,7 +119,10 @@ export const conditions = {
     const maxIndex = levels.indexOf(level);
     return (ctx: ABACContext) => {
       const sensitivity = ctx.resource?.sensitivity ?? 'public';
-      return levels.indexOf(sensitivity) <= maxIndex;
+      const index = levels.indexOf(sensitivity);
+      // An unrecognised sensitivity label must not be treated as the lowest level.
+      if (index === -1 || maxIndex === -1) return false;
+      return index <= maxIndex;
     };
   },
 

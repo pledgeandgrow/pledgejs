@@ -10,11 +10,17 @@ This document lists what's genuinely still left to do. Items previously listed
 here that have been fixed are marked ✅ with a note; items still open are
 listed below.
 
-## Verification status as of 2026-09-14
+## Verification status as of 2026-09-20
+
+The authoritative, always-current status is [AUDIT-STATUS.md](../AUDIT-STATUS.md);
+this file only tracks the follow-up backlog.
 
 - `pnpm typecheck`: 0 errors (workspace-wide, via `scripts/typecheck-workspace.mjs`)
-- `pnpm test`: 1023 passing, 2 failing (new MDX/server-fn tests), 5 skipped across 112 files
-- `pnpm audit --audit-level=high`: 3 findings (all `js-yaml`, via `@changesets/cli`)
+- `pnpm lint`: 0 errors (75 pre-existing warnings)
+- `pnpm build:packages`: passes (34 public packages)
+- `pnpm test`: 1691 passing, 0 failing, 6 skipped across 206 files
+  (the 5 skips are Netlify real-CLI deploy tests gated on `NETLIFY_AUTH_TOKEN`)
+- `pnpm audit`: no known vulnerabilities (vitest upgraded to 4.1.11)
 
 ---
 
@@ -33,37 +39,30 @@ listed below.
 | Sccache test flake (timeout) | `packages/core/src/psx/sccache.test.ts` | ✅ Fixed (2026-09-14) — timeout increased to 30000ms. |
 | CLI dist overwritten by typecheck | `scripts/typecheck-workspace.mjs` | ✅ Fixed (2026-09-14) — switched from `tsc -b` (emits) to `tsc --noEmit -p` (typechecks only). |
 | `@types/react` hoisting gap | `package.json` | ✅ Fixed (2026-09-14) — added `@types/react`/`@types/react-dom` to root devDependencies. |
+| Workspace version drift (0.0.1 … 0.2.3, no policy) | all `packages/*/package.json` | ✅ Fixed (2026-09-20) — every public package is `1.0.0-rc.0` in one Changesets `fixed` group; `pnpm check:release` enforces it. |
+| Only the CLI was publishable / release workflow had no gate | `.github/workflows/release.yml` | ✅ Fixed (2026-09-20) — 34 packages are public; the workflow runs typecheck, lint, build, tests and the release check, then publishes through Changesets. |
+| `pledge init --skip-install` was a no-op | `packages/cli/src/commands/init.ts` | ✅ Fixed (2026-09-20) — init installs unless `--skip-install`; tested. |
+| `pledge upgrade` codemod path was dead | `packages/cli/src/commands/upgrade.ts` | ✅ Removed (2026-09-20) — codemods stay available via `pledge codemod`. |
+| WebAuthn UV not enforced / empty stored userId; api rate-limit buckets unbounded; nosql sanitizer let `__proto__` through; Prometheus labels unquoted | auth, api, server | ✅ Fixed and tested. |
+| OG `ImageResponse` never became a PNG | `packages/server/src/og-response.ts` | ✅ Fixed (2026-09-20) — renders via native addon or `sharp`, else `501`. |
+| VS Code PSX debug adapter was a non-functional stub | `packages/vscode-psx/src/debug-adapter.ts` | ✅ Fixed — rewritten as a real CDP-based adapter (~930 lines): connects to a debug target over WebSocket/CDP, and `continue`/`next`/`stepIn`/`stepOut` send real `Debugger.*` CDP commands instead of faking `stopped`/`terminated` events. |
+| `multi-region` `routeByLatency` fallback lookup wrong | `packages/core/src/psx/multi-region.ts` | ✅ Fixed — the fallback now looks up `region.latency[clientRegion]` (the client's market), not `region.latency[region.id]` (the region's own id, which never resolved). Still unwired to any request path. |
 
 ---
 
 ## Priority: Medium — still open
 
-- **VS Code PSX debug adapter is a non-functional stub.**
-  `packages/vscode-psx/src/debug-adapter.ts:130-148` — "Continue" emits a
-  `terminated` event (kills the session) instead of resuming execution; `next`/
-  `stepIn`/`stepOut` fake a `stopped` event without actually stepping. Not wired to
-  a real lldb/gdb session despite the doc comment implying it delegates to one.
-
-- **`multi-region` `routeByLatency` fallback lookup is wrong.**
-  `packages/core/src/psx/multi-region.ts:276` — the fallback
-  `region.latency?.[region.id]` is keyed by the region's own id, not the
-  market/client-region name, so it never resolves and always falls through to
-  `Infinity`. No practical impact today since this module is not consumed
-  anywhere in the request path.
+_(None currently — both items previously listed here were fixed.)_
 
 ---
 
 ## Priority: Low — still open
 
-- **Workspace version drift.** Packages span 0.0.1 … 0.2.8; root is 0.1.12;
-  no stated versioning policy. Not a functional bug, but makes dependency
-  resolution and publishing harder to reason about.
-
-- **`js-yaml` high-severity audit findings** (via `@changesets/cli`'s
-  `read-yaml-file` dependency) left unpatched — forcing js-yaml to a patched 4.x
-  would drop the 3.x `safeLoad` API `read-yaml-file` calls, risking a runtime
-  break in `pledge changeset`/`version-packages` for a dev-only tool. Needs
-  verifying `read-yaml-file` (or an upstream fix) before bumping.
+- **Bundler HMR** is only as real as the bundler's own dev server; see
+  [limitations.md](./limitations.md#bundler-hmr-hot-module-replacement).
+- **Renderer asset URLs** are not content-hashed (`/__pledge__/client.js`).
+- **75 lint warnings** (unused variables, `prefer-const`, SSRF-suggestion rule).
+- **Native addons** are not compiled in CI artifacts or shipped to npm.
 
 ---
 
@@ -74,8 +73,10 @@ Carried over from `AUDIT-AND-FIXES.md` §6 — still true, still out of scope:
 - **PSX Integrations** (SQLx, Redis, Argon2, image/PDF processing, etc. — 15
   wrappers in `packages/core/src/psx/integrations.ts`) have no corresponding Rust
   crate source anywhere in this repo, so they always run their JS fallback
-  regardless of whether the 16 real `rust-*` native addons are compiled.
-  These are honestly labeled as JS fallbacks in their output/docs.
+  regardless of whether the 17 real `rust-*` native addons are compiled.
+  Sea-ORM and ML inference have no JS fallback and now fail at construction
+  unless a `driver` / `executor` is supplied. These are honestly labeled as JS
+  fallbacks in their output/docs.
 - **macOS/Linux PledgePack binaries** aren't bundled in this repo (only Windows x64
   is); those platforms rely on a postinstall download from a GitHub release.
 - Several `packages/core/src/psx/*` modules (`multi-region.ts`,
@@ -84,6 +85,8 @@ Carried over from `AUDIT-AND-FIXES.md` §6 — still true, still out of scope:
   the request path — breadth without integration. (`serverless-cold-start.ts`
   was hardened in 2026-09-14 to support async loaders, but is still not wired
   to any request path.)
-- **`pledge playground`** simulates Rust→WASM compile/execute/save (fabricated
-  results); `pledge bench --psx` targets a nonexistent `rust-bench.node` addon.
-  Both are honestly labeled in their output/docs.
+- **`pledge playground`** uses the real `cargo --target wasm32-unknown-unknown`
+  toolchain when available and clearly labels simulated results when it isn't;
+  **`pledge bench --psx`** targets the real `rust-bench` crate (source now in
+  `packages/core/native/rust-bench/`) and benchmarks real JS fallback code when
+  the addon isn't compiled. Both are honestly labeled in their output/docs.

@@ -1,5 +1,7 @@
 import type { PledgeConfig } from 'pledgestack-shared';
 import { createRequire } from 'node:module';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 const require = createRequire(import.meta.url);
 
@@ -7,15 +9,78 @@ interface BenchOptions {
   psx?: boolean;
   iterations?: string;
   concurrency?: string;
-  compare?: boolean;
+  /** Path to a saved baseline results file to compare against */
+  compare?: string;
+  /** Path to write the current results to (use as a future --compare baseline) */
+  save?: string;
+  /** Regression threshold, percent slower than baseline (default 10) */
+  threshold?: string;
+}
+
+export interface BaselineEntry { name: string; avgTimeMs: number; opsPerSec?: number }
+export interface BaselineFile { version: 1; results: BaselineEntry[] }
+
+export interface ComparisonRow {
+  name: string;
+  baselineMs: number;
+  currentMs: number;
+  /** Positive = slower than baseline, in percent */
+  changePct: number;
+  status: 'regression' | 'improvement' | 'ok';
+}
+
+export interface ComparisonReport {
+  rows: ComparisonRow[];
+  regressions: ComparisonRow[];
+  /** Benchmarks present in the baseline but not in the current run */
+  missing: string[];
+  /** Benchmarks present now but absent from the baseline */
+  added: string[];
+}
+
+/** Parse and validate a baseline file's JSON text. Throws on malformed input. */
+export function parseBaseline(text: string): BaselineFile {
+  let data: unknown;
+  try { data = JSON.parse(text); } catch { throw new Error('baseline is not valid JSON'); }
+  const results = (data as { results?: unknown } | null)?.results;
+  if (!Array.isArray(results)) throw new Error('baseline is missing a "results" array');
+  const out: BaselineEntry[] = [];
+  for (const r of results as Array<Record<string, unknown>>) {
+    if (typeof r?.name !== 'string' || typeof r.avgTimeMs !== 'number' || !Number.isFinite(r.avgTimeMs)) {
+      throw new Error('baseline entries need a string "name" and numeric "avgTimeMs"');
+    }
+    out.push({ name: r.name, avgTimeMs: r.avgTimeMs, opsPerSec: typeof r.opsPerSec === 'number' ? r.opsPerSec : undefined });
+  }
+  return { version: 1, results: out };
+}
+
+/** Compare current results with a baseline; slower than `thresholdPct` is a regression. */
+export function compareToBaseline(
+  current: BaselineEntry[],
+  baseline: BaselineEntry[],
+  thresholdPct = 10,
+): ComparisonReport {
+  const base = new Map(baseline.map((b) => [b.name, b]));
+  const rows: ComparisonRow[] = [];
+  const added: string[] = [];
+  for (const cur of current) {
+    const b = base.get(cur.name);
+    if (!b) { added.push(cur.name); continue; }
+    base.delete(cur.name);
+    const changePct = b.avgTimeMs > 0 ? ((cur.avgTimeMs - b.avgTimeMs) / b.avgTimeMs) * 100 : 0;
+    const status = changePct > thresholdPct ? 'regression' : changePct < -thresholdPct ? 'improvement' : 'ok';
+    rows.push({ name: cur.name, baselineMs: b.avgTimeMs, currentMs: cur.avgTimeMs, changePct, status });
+  }
+  return { rows, regressions: rows.filter((r) => r.status === 'regression'), missing: [...base.keys()], added };
 }
 
 /**
- * pledge bench — Load test Rust functions and compare with TypeScript equivalents.
+ * pledge bench — Load test Rust functions.
  *
  * Usage:
- *   pledge bench --psx              Benchmark all Rust NAPI functions
- *   pledge bench --psx --compare    Compare Rust vs TypeScript
+ *   pledge bench --psx --save base.json      Save results as a baseline
+ *   pledge bench --psx --compare base.json   Compare against a baseline; exit 1 on regressions
+ *   pledge bench --psx --compare base.json --threshold 5
  *   pledge bench --psx -i 50000     Custom iteration count
  */
 export async function benchCommand(
@@ -32,7 +97,7 @@ export async function benchCommand(
 
   if (!opts?.psx) {
     console.log(yellow('Use --psx flag to benchmark Rust NAPI functions'));
-    console.log(dim('Example: pledge bench --psx --compare\n'));
+    console.log(dim('Example: pledge bench --psx --save base.json\n'));
     return;
   }
 
@@ -120,16 +185,55 @@ export async function benchCommand(
     }
   }
 
+  const current: BaselineEntry[] = results.map(({ result }) => {
+    const r = result as { name: string; avgTimeMs: number; opsPerSec?: number };
+    return { name: r.name, avgTimeMs: r.avgTimeMs, opsPerSec: r.opsPerSec };
+  });
+
+  if (opts?.save) {
+    const file: BaselineFile = { version: 1, results: current };
+    await mkdir(dirname(opts.save), { recursive: true });
+    await writeFile(opts.save, JSON.stringify(file, null, 2) + '\n', 'utf-8');
+    console.log(dim(`\nBaseline saved to ${opts.save}`));
+  }
+
   if (opts?.compare) {
-    console.log(bold('\nComparing Rust vs TypeScript...'));
-    console.log(yellow('  Comparison requires TypeScript equivalents to be registered.'));
-    console.log(dim('  Use the compareRustVsTs() API for programmatic comparison.\n'));
+    const threshold = opts.threshold ? parseFloat(opts.threshold) : 10;
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      console.log(red(`\nInvalid --threshold "${opts.threshold}"`));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(bold(`\nComparing against baseline ${opts.compare} (regression > ${threshold}% slower)...`));
+    let baseline: BaselineFile;
+    try {
+      baseline = parseBaseline(await readFile(opts.compare, 'utf-8'));
+    } catch (err) {
+      console.log(red(`  Cannot read baseline: ${(err as Error).message}`));
+      process.exitCode = 1;
+      return;
+    }
+    const report = compareToBaseline(current, baseline.results, threshold);
+    for (const row of report.rows) {
+      const sign = row.changePct >= 0 ? '+' : '';
+      const mark = row.status === 'regression' ? red('REGRESSION') : row.status === 'improvement' ? green('improved') : dim('ok');
+      console.log(`  ${row.name.padEnd(35)}  ${row.baselineMs.toFixed(4)}ms -> ${row.currentMs.toFixed(4)}ms  ${(sign + row.changePct.toFixed(1) + '%').padStart(9)}  ${mark}`);
+    }
+    for (const n of report.missing) console.log(yellow(`  missing from this run: ${n}`));
+    for (const n of report.added) console.log(dim(`  new (not in baseline): ${n}`));
+    if (report.regressions.length > 0) {
+      console.log(red(`\n${report.regressions.length} regression(s) detected.`));
+      process.exitCode = 1;
+    } else {
+      console.log(green('\nNo regressions.'));
+    }
   }
 
   console.log(bold(`\nBenchmark complete: ${results.length} function(s) tested`));
 }
 
 function red(s: string): string { return `\x1b[31m${s}\x1b[0m`; }
+function green(s: string): string { return `\x1b[32m${s}\x1b[0m`; }
 function yellow(s: string): string { return `\x1b[33m${s}\x1b[0m`; }
 function bold(s: string): string { return `\x1b[1m${s}\x1b[0m`; }
 function dim(s: string): string { return `\x1b[2m${s}\x1b[0m`; }

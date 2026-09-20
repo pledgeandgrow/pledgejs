@@ -160,6 +160,9 @@ export function verifyJWT(
   } catch {
     return null;
   }
+  if (!header || typeof header !== 'object' || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
 
   const allowedAlgorithms = options.algorithms ?? ['RS256', 'ES256'];
   if (!allowedAlgorithms.includes(header.alg)) {

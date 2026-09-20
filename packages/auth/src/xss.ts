@@ -39,8 +39,14 @@ const DANGEROUS_PATTERNS = [
 
 export function sanitizeInput(input: string): string {
   let result = input;
-  for (const pattern of DANGEROUS_PATTERNS) {
-    result = result.replace(pattern, '');
+  // Removal can splice the surrounding text into a new dangerous token
+  // (e.g. "jajavascript:vascript:"), so repeat until a fixed point.
+  for (let pass = 0; pass < 20; pass++) {
+    const before = result;
+    for (const pattern of DANGEROUS_PATTERNS) {
+      result = result.replace(pattern, '');
+    }
+    if (result === before) break;
   }
   return result;
 }

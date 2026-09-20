@@ -8,6 +8,7 @@
 
 import type { HeadMetadata } from '../router/types';
 import type { Viewport, ResolvedRoute } from 'pledgestack-shared';
+import { escapeJsonForScript } from 'pledgestack-shared';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -120,7 +121,7 @@ export function renderHeadTags(metadata: HeadMetadata, route?: ResolvedRoute): s
   if (metadata.structuredData) {
     const schemas = Array.isArray(metadata.structuredData) ? metadata.structuredData : [metadata.structuredData];
     for (const schema of schemas) {
-      tags.push(`<script type="application/ld+json">${JSON.stringify(schema)}</script>`);
+      tags.push(`<script type="application/ld+json">${escapeJsonForScript(JSON.stringify(schema))}</script>`);
     }
   }
 

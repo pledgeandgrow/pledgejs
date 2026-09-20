@@ -1,25 +1,28 @@
 /**
- * pledge upgrade — Check for new PledgeStack versions, run applicable codemods,
- * and update dependencies.
+ * pledge upgrade — Check for new PledgeStack versions and update dependencies.
  *
  * Goal #232: One-command upgrade experience:
  * 1. Check current vs latest PledgeStack version on npm
  * 2. Show changelog highlights between versions
- * 3. Run any applicable codemods for breaking changes
- * 4. Update package.json dependencies
- * 5. Regenerate route types and sync aliases
+ * 3. Update package.json dependencies and install
+ * 4. Regenerate route types and sync aliases
+ *
+ * There is intentionally no automatic codemod step: PledgeStack has not
+ * shipped a version-to-version breaking change that needs a source rewrite.
+ * The Next.js-migration codemods live behind the explicit `pledge codemod`
+ * command and must never run implicitly against user source on an upgrade.
  */
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import type { PledgeConfig } from 'pledgestack-shared';
+import { detectPackageManager } from './init';
 
 interface UpgradeOptions {
   /** Check for updates without applying */
   check?: boolean;
-  /** Skip codemods */
+  /** @deprecated No-op: `pledge upgrade` no longer runs codemods. Kept so existing scripts don't break. */
   skipCodemods?: boolean;
   /** Skip dependency installation */
   skipInstall?: boolean;
@@ -41,21 +44,24 @@ async function getCurrentVersion(rootDir: string): Promise<string> {
   if (!version) return '0.0.0';
 
   // Extract version from "latest", "^1.2.3", "1.2.3", etc.
-  const match = version.match(/(\d+\.\d+\.\d+)/);
+  const match = version.match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
   return match ? match[1] : '0.0.0';
 }
 
 /**
- * Gets the latest published PledgeStack version from npm.
+ * Gets the latest published PledgeStack version from npm. Returns null when
+ * the registry cannot be reached (offline, npm missing, package not found) —
+ * callers must not treat that as version 0.0.0, which previously made
+ * `pledge upgrade --force` write "^0.0.0" into package.json.
  */
-function getLatestVersion(): string {
+export function getLatestVersion(): string | null {
   try {
     const output = execSync('npm view pledgestack version', {
       encoding: 'utf-8',
       timeout: 10000,
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
-    return output || '0.0.0';
+    return output || null;
   } catch {
     // npm not available or package not found — check local monorepo
     try {
@@ -64,48 +70,53 @@ function getLatestVersion(): string {
         timeout: 10000,
         stdio: ['pipe', 'pipe', 'pipe'],
       }).trim();
-      return output || '0.0.0';
+      return output || null;
     } catch {
-      return '0.0.0';
+      return null;
     }
   }
 }
 
 /**
- * Compares two semver versions.
+ * Compares two semver versions (including prerelease tags per semver §11:
+ * `1.0.0-rc.1 < 1.0.0`, numeric identifiers compare numerically).
  * Returns: 1 if a > b, -1 if a < b, 0 if equal.
  */
-function compareVersions(a: string, b: string): number {
-  const partsA = a.split('.').map(Number);
-  const partsB = b.split('.').map(Number);
+export function compareVersions(a: string, b: string): number {
+  const split = (v: string) => {
+    const [core, ...pre] = v.replace(/^v/, '').split('-');
+    return { nums: core.split('.').map((n) => parseInt(n, 10) || 0), pre: pre.join('-') };
+  };
+  const pa = split(a);
+  const pb = split(b);
   for (let i = 0; i < 3; i++) {
-    const va = partsA[i] ?? 0;
-    const vb = partsB[i] ?? 0;
+    const va = pa.nums[i] ?? 0;
+    const vb = pb.nums[i] ?? 0;
     if (va > vb) return 1;
     if (va < vb) return -1;
   }
+  if (!pa.pre && !pb.pre) return 0;
+  if (!pa.pre) return 1; // a release outranks any prerelease of the same version
+  if (!pb.pre) return -1;
+  const ia = pa.pre.split('.');
+  const ib = pb.pre.split('.');
+  for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
+    const x = ia[i];
+    const y = ib[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const nx = /^\d+$/.test(x);
+    const ny = /^\d+$/.test(y);
+    if (nx && ny) {
+      const d = parseInt(x, 10) - parseInt(y, 10);
+      if (d !== 0) return d > 0 ? 1 : -1;
+    } else if (nx !== ny) {
+      return nx ? -1 : 1; // numeric identifiers sort before alphanumeric
+    } else if (x !== y) {
+      return x > y ? 1 : -1;
+    }
+  }
   return 0;
-}
-
-/**
- * Determines which codemods should run based on version transition.
- * Each codemod has a `minVersion` (when it was introduced) and optional `maxVersion`.
- */
-function getApplicableCodemods(from: string, to: string): string[] {
-  const codemods: Array<{ name: string; minVersion: string; description: string }> = [
-    { name: 'pledgejs-to-pledgestack', minVersion: '0.1.0', description: 'Rename PledgeJS → PledgeStack' },
-    { name: 'next-to-pledge', minVersion: '0.1.0', description: 'Migrate Next.js imports → PledgeStack' },
-    { name: 'use-client-to-pledge-client', minVersion: '0.2.0', description: 'Convert "use client" → "use pledge:client"' },
-    { name: 'api-routes-to-route-handlers', minVersion: '0.2.0', description: 'Convert API routes → route handlers' },
-    { name: 'get-server-side-props-to-server-component', minVersion: '0.3.0', description: 'Convert getServerSideProps → server component' },
-    { name: 'get-static-props-to-generate-static-params', minVersion: '0.3.0', description: 'Convert getStaticProps → generateStaticParams' },
-    { name: 'next-image-to-img', minVersion: '0.3.0', description: 'Convert next/image → native img' },
-    { name: 'next-router-to-pledge-router', minVersion: '0.3.0', description: 'Convert next/router → pledgestack/router' },
-  ];
-
-  return codemods
-    .filter((c) => compareVersions(c.minVersion, from) > 0 && compareVersions(c.minVersion, to) <= 0)
-    .map((c) => c.name);
 }
 
 /**
@@ -138,64 +149,6 @@ async function updatePackageVersion(rootDir: string, newVersion: string): Promis
 }
 
 /**
- * Runs applicable codemods across the project source files.
- */
-async function runUpgradeCodemods(rootDir: string, codemodNames: string[], config: PledgeConfig): Promise<void> {
-  if (codemodNames.length === 0) return;
-
-  const { runCodemod } = await import('./codemod');
-  const { scanAppDir } = await import('pledgestack-core');
-
-  // Collect all source files to transform
-  const appDir = join(config.rootDir, config.appDir);
-  const files: string[] = [];
-
-  if (existsSync(appDir)) {
-    const routeFiles = await scanAppDir(appDir);
-    files.push(...routeFiles.map((f) => f.absolutePath));
-  }
-
-  // Also scan lib/, src/, components/
-  for (const dir of ['src', 'lib', 'components']) {
-    const dirPath = join(rootDir, dir);
-    if (existsSync(dirPath)) {
-      const { readdir } = await import('node:fs/promises');
-      async function walk(d: string) {
-        const entries = await readdir(d, { withFileTypes: true });
-        for (const entry of entries) {
-          const full = join(d, entry.name);
-          if (entry.isDirectory()) await walk(full);
-          else if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) files.push(full);
-        }
-      }
-      await walk(dirPath);
-    }
-  }
-
-  let totalChanges = 0;
-  let filesChanged = 0;
-
-  for (const codemodName of codemodNames) {
-    console.log(`  → Running codemod: ${codemodName}`);
-    for (const file of files) {
-      try {
-        const result = await runCodemod({ name: codemodName, path: file });
-        totalChanges += result.totalChanges;
-        filesChanged += result.filesChanged;
-      } catch {
-        // Codemod may not exist yet — skip
-      }
-    }
-  }
-
-  if (totalChanges > 0) {
-    console.log(`  ✓ ${filesChanged} file(s) changed, ${totalChanges} total transformation(s)\n`);
-  } else {
-    console.log('  ✓ No codemod changes needed\n');
-  }
-}
-
-/**
  * Runs the upgrade command.
  */
 export async function upgradeCommand(opts: UpgradeOptions = {}): Promise<void> {
@@ -208,35 +161,25 @@ export async function upgradeCommand(opts: UpgradeOptions = {}): Promise<void> {
   // Get version info
   const current = await getCurrentVersion(rootDir);
   const latest = getLatestVersion();
-  const updateAvailable = compareVersions(latest, current) > 0;
 
   console.log(`  Current version: ${current}`);
+  if (latest === null) {
+    console.error('  Latest version:  unknown\n');
+    console.error('  ✖ Could not determine the latest version (is the npm registry reachable?).');
+    console.error('    Nothing was changed.\n');
+    process.exitCode = 1;
+    return;
+  }
+  const updateAvailable = compareVersions(latest, current) > 0;
   console.log(`  Latest version:  ${latest}\n`);
 
   if (!updateAvailable && !opts.force) {
     console.log('  ✓ You are on the latest version!\n');
-
-    // Still offer to run codemods if any are applicable
-    const codemods = getApplicableCodemods(current, latest);
-    if (codemods.length > 0 && !opts.skipCodemods) {
-      console.log(`  ${codemods.length} codemod(s) available for your version.`);
-      console.log('  Run with --force to apply them.\n');
-    }
     return;
   }
 
   if (opts.check) {
     console.log('  Update available! Run `pledge upgrade` (without --check) to apply.\n');
-
-    // Show applicable codemods
-    const codemods = getApplicableCodemods(current, latest);
-    if (codemods.length > 0) {
-      console.log('  Breaking changes that will be migrated:');
-      for (const c of codemods) {
-        console.log(`    • ${c}`);
-      }
-      console.log();
-    }
     return;
   }
 
@@ -259,24 +202,15 @@ export async function upgradeCommand(opts: UpgradeOptions = {}): Promise<void> {
   }
   console.log();
 
-  // 2. Run codemods
-  if (!opts.skipCodemods) {
-    const codemods = getApplicableCodemods(current, latest);
-    if (codemods.length > 0) {
-      console.log(`  → Running ${codemods.length} codemod(s)...`);
-      await runUpgradeCodemods(rootDir, codemods, config);
-    } else {
-      console.log('  → No codemods needed for this version.\n');
-    }
+  if (opts.skipCodemods) {
+    console.log('  Note: --skip-codemods is deprecated and has no effect (upgrade no longer runs codemods).\n');
   }
 
-  // 3. Install dependencies
+  // 2. Install dependencies
   if (!opts.skipInstall) {
     console.log('  → Installing dependencies...');
     try {
-      const pm = existsSync(join(rootDir, 'pnpm-lock.yaml')) ? 'pnpm'
-        : existsSync(join(rootDir, 'yarn.lock')) ? 'yarn'
-        : 'npm';
+      const pm = await detectPackageManager(rootDir);
       execSync(`${pm} install`, { cwd: rootDir, stdio: 'inherit', timeout: 120000 });
       console.log('    ✓ Dependencies installed\n');
     } catch {
@@ -285,7 +219,7 @@ export async function upgradeCommand(opts: UpgradeOptions = {}): Promise<void> {
     }
   }
 
-  // 4. Sync aliases and regenerate route types
+  // 3. Sync aliases and regenerate route types
   console.log('  → Syncing tsconfig.json path aliases...');
   try {
     const { syncAliasesCommand } = await import('./sync-aliases');
@@ -305,7 +239,7 @@ export async function upgradeCommand(opts: UpgradeOptions = {}): Promise<void> {
 
   console.log('\n  ✓ Upgrade complete!\n');
   console.log('  Next steps:');
-  console.log('    1. Review any codemod changes with `git diff`');
+  console.log('    1. Review the package.json changes with `git diff`');
   console.log('    2. Run `pledge build` to verify the upgrade');
   console.log('    3. Run `pledge dev` to test in development\n');
 }

@@ -44,12 +44,35 @@ describe('Server Actions (#37)', () => {
     const a = serverAction(impl, { name: 'inc' }) as unknown as { __pledgeActionId: string };
     const b = serverAction(impl, { name: 'inc' }) as unknown as { __pledgeActionId: string };
     expect(a.__pledgeActionId).toBe(b.__pledgeActionId);
-    expect(a.__pledgeActionId.startsWith('action_inc_')).toBe(true);
+    expect(a.__pledgeActionId.startsWith('action_inc')).toBe(true);
   });
 
-  it('distinguishes different implementations that share a name', () => {
-    const a = serverAction(async () => 1, { name: 'dup' }) as unknown as { __pledgeActionId: string };
-    const b = serverAction(async () => 2, { name: 'dup' }) as unknown as { __pledgeActionId: string };
+  it('does NOT depend on function source — same name/id, different source (server vs client bundle) => same id', () => {
+    // Bundlers rewrite fn bodies differently for the server and client
+    // bundles; the id must not change with them.
+    const serverBuild = serverAction(async () => { return 1; }, { name: 'bundleStable' }) as unknown as { __pledgeActionId: string };
+    const clientBuild = serverAction(async () => 1, { name: 'bundleStable' }) as unknown as { __pledgeActionId: string };
+    expect(serverBuild.__pledgeActionId).toBe(clientBuild.__pledgeActionId);
+    const withId1 = serverAction(async () => { return 1; }, { id: 'todos/actions#add' }) as unknown as { __pledgeActionId: string };
+    const withId2 = serverAction(async () => 2, { id: 'todos/actions#add' }) as unknown as { __pledgeActionId: string };
+    expect(withId1.__pledgeActionId).toBe(withId2.__pledgeActionId);
+    expect(withId1.__pledgeActionId).toContain('todos/actions#add');
+  });
+
+  it('distinguishes actions by name / explicit id', () => {
+    const a = serverAction(async () => 1, { name: 'dupA' }) as unknown as { __pledgeActionId: string };
+    const b = serverAction(async () => 1, { name: 'dupB' }) as unknown as { __pledgeActionId: string };
     expect(a.__pledgeActionId).not.toBe(b.__pledgeActionId);
+  });
+
+  it('rejects two different functions sharing an id in production', () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      serverAction(async () => 1, { id: 'clash#x' });
+      expect(() => serverAction(async () => 2, { id: 'clash#x' })).toThrow(/Duplicate RPC id/);
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
   });
 });

@@ -11,6 +11,8 @@
  * - Request-level deduplication (same URL returns same promise)
  */
 
+import { createHash } from 'node:crypto';
+
 export interface CacheEntry {
   data: unknown;
   timestamp: number;
@@ -25,6 +27,29 @@ export interface FetchCacheOptions {
   tags?: string[];
   /** Force no-cache */
   noStore?: boolean;
+}
+
+/**
+ * Cache key for a fetch. Plain GETs keep the bare URL. Anything that can change
+ * the response (non-GET method, body, credentials) gets a digest suffix, so
+ * e.g. two users' Authorization headers never share one cached entry.
+ */
+function computeCacheKey(url: string | URL, options: RequestInit): string {
+  const base = typeof url === 'string' ? url : url.toString();
+  const method = (options.method ?? 'GET').toUpperCase();
+  const headers = new Headers(options.headers);
+  const auth = headers.get('authorization') ?? '';
+  const cookie = headers.get('cookie') ?? '';
+  const proxyAuth = headers.get('proxy-authorization') ?? '';
+  const body = typeof options.body === 'string' ? options.body
+    : options.body instanceof URLSearchParams ? options.body.toString()
+    : options.body ? '[opaque-body]' : '';
+  if (method === 'GET' && !auth && !cookie && !proxyAuth && !body) return base;
+  const digest = createHash('sha256')
+    .update(JSON.stringify([method, auth, cookie, proxyAuth, body]))
+    .digest('hex')
+    .slice(0, 32);
+  return `${base}#${digest}`;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -115,7 +140,7 @@ export async function cachedFetch(
   url: string | URL,
   options: RequestInit & { next?: FetchCacheOptions } = {},
 ): Promise<Response> {
-  const cacheKey = typeof url === 'string' ? url : url.toString();
+  const cacheKey = computeCacheKey(url, options);
   const cacheOpts = options.next ?? {};
   const revalidate = cacheOpts.revalidate ?? 0;
   const tags = cacheOpts.tags ?? [];
@@ -146,9 +171,9 @@ export async function cachedFetch(
   }
 
   if (inflight.has(cacheKey)) {
-    const data = await inflight.get(cacheKey);
-    return new Response(JSON.stringify(data), {
-      status: 200,
+    const shared = (await inflight.get(cacheKey)) as { data: unknown; status: number };
+    return new Response(JSON.stringify(shared.data), {
+      status: shared.status,
       headers: { 'Content-Type': 'application/json' },
     });
   }
@@ -156,13 +181,20 @@ export async function cachedFetch(
   const promise = (async () => {
     const response = await globalThis.fetch(url, options);
     const data = await response.json();
-    return data;
+    return { data, status: response.status, ok: response.ok };
   })();
 
   inflight.set(cacheKey, promise);
 
   try {
-    const data = await promise;
+    const { data, status, ok } = await promise;
+    // Error responses are returned with their real status but never cached.
+    if (!ok) {
+      return new Response(JSON.stringify(data), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
     cache.set(cacheKey, {
       data,
       timestamp: now,
@@ -204,6 +236,10 @@ export function revalidateTag(tag: string): void {
  */
 export function revalidatePath(path: string): void {
   cache.delete(path);
+  // Also drop credential/method-specific variants keyed as `${path}#${digest}`.
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(path + '#')) cache.delete(key);
+  }
   for (const [tag, keys] of tagIndex.entries()) {
     if (keys.has(path)) {
       keys.delete(path);
@@ -410,6 +446,13 @@ export async function cachedFetchWithCookies(
   const response = await globalThis.fetch(url, options);
   const data = await response.json();
 
+  if (!response.ok) {
+    return new Response(JSON.stringify(data), {
+      status: response.status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   cookieVariantCache.set(variantKey, {
     data,
     timestamp: now,
@@ -454,6 +497,8 @@ function revalidateInBackground(
   (async () => {
     try {
       const response = await globalThis.fetch(url, options);
+      // Never replace good stale data with an error payload.
+      if (!response.ok) return;
       const data = await response.json();
       const now = Date.now();
       cache.set(cacheKey, {

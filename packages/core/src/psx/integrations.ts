@@ -48,6 +48,16 @@ function loadNativeAddon<T>(name: string, feature: string): T {
   }
 }
 
+/** True when the compiled native addon `name` can be loaded. */
+function nativeAddonAvailable(name: string): boolean {
+  try {
+    require(`../../native/${name}.node`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ============================================================================
 // #256 — SQLx compile-time queries
 // ============================================================================
@@ -216,7 +226,22 @@ export class SeaOrmDatabase {
   private connection: unknown = null;
   private addon: Record<string, unknown> | null = null;
 
+  /**
+   * @throws at construction (config time) when the config has no `driver` and
+   * the native sea-orm addon is not compiled — there is no backend to run on,
+   * so failing here beats failing on the first query.
+   */
   constructor(config: SeaOrmConfig) {
+    if (!config || typeof config.url !== 'string' || config.url.length === 0) {
+      throw new Error('Sea-ORM: SeaOrmConfig.url is required.');
+    }
+    if (!config.driver && !nativeAddonAvailable('sea-orm')) {
+      throw new Error(
+        'Sea-ORM: no backend available. The native sea-orm addon is not shipped in this release, ' +
+        'so SeaOrmConfig.driver is required — pass a driver object implementing SeaOrmDriver ' +
+        '(connect/find/insert/update/delete, e.g. wrapping pg, mysql2, better-sqlite3 or Prisma).',
+      );
+    }
     this.config = config;
   }
 
@@ -231,7 +256,7 @@ export class SeaOrmDatabase {
     } catch {
       throw new Error(
         'Sea-ORM: no driver configured and native addon not found. ' +
-        'Provide a `driver` in SeaOrmConfig (e.g. a pg/better-sqlite3 wrapper) or run `pledge add sea-orm`.',
+        'Provide a `driver` in SeaOrmConfig (e.g. a pg/better-sqlite3 wrapper).',
       );
     }
   }
@@ -289,7 +314,7 @@ export class SeaOrmDatabase {
   private noBackend(op: string): Error {
     return new Error(
       `Sea-ORM: cannot ${op} — no driver configured and native addon not found. ` +
-      'Provide a `driver` in SeaOrmConfig or run `pledge add sea-orm`.',
+      'Provide a `driver` in SeaOrmConfig.',
     );
   }
 }
@@ -1405,7 +1430,21 @@ export class MlModel {
   private model: unknown = null;
   private addon: Record<string, unknown> | null = null;
 
+  /**
+   * @throws at construction (config time) when the config has no `executor`
+   * and the native ml addon is not compiled.
+   */
   constructor(config: MlModelConfig) {
+    if (!config || typeof config.modelPath !== 'string' || config.modelPath.length === 0) {
+      throw new Error('ML: MlModelConfig.modelPath is required.');
+    }
+    if (!config.executor && !nativeAddonAvailable('ml')) {
+      throw new Error(
+        'ML: no inference backend available. The native candle/ort addon is not shipped in this release, ' +
+        'so MlModelConfig.executor is required — pass an executor implementing MlExecutor ' +
+        '(load/infer, e.g. wrapping onnxruntime-node or @tensorflow/tfjs-node).',
+      );
+    }
     this.config = { backend: 'candle', device: 'cpu', batchSize: 1, ...config };
   }
 
@@ -1419,8 +1458,8 @@ export class MlModel {
       this.model = await (this.addon.loadModel as (c: MlModelConfig) => Promise<unknown>)(this.config);
     } catch {
       throw new Error(
-        `ML: no executor configured and native addon not found. Provide an \`executor\` in MlModelConfig ` +
-        `(e.g. an onnxruntime-node wrapper) or run \`pledge add ${this.config.backend === 'candle' ? 'candle-core' : 'ort'}\`.`,
+        'ML: no executor configured and native addon not found. Provide an `executor` in MlModelConfig ' +
+        '(e.g. an onnxruntime-node wrapper).',
       );
     }
   }

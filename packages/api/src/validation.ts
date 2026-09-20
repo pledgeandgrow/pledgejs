@@ -46,7 +46,13 @@ export function validateRequest(
         }
       }
     } else if (rules.type === 'number') {
-      const num = Number(value);
+      // Number('') === 0 and Number(true) === 1, which would let blank or
+      // boolean input through as valid numbers — only real numbers and
+      // non-blank numeric strings qualify.
+      const isNumeric =
+        (typeof value === 'number' && Number.isFinite(value)) ||
+        (typeof value === 'string' && value.trim() !== '');
+      const num = isNumeric ? Number(value) : NaN;
       if (isNaN(num)) {
         errors.push({ field, message: `${field} must be a number` });
         continue;

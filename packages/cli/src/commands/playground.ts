@@ -99,6 +99,26 @@ async function compileRustToWasm(source: string): Promise<WasmBuildResult> {
   }
 }
 
+/**
+ * The playground compiles and runs arbitrary Rust, so it must only answer the
+ * developer's own browser tab. A wildcard CORS policy plus an all-interfaces
+ * listener let ANY web page (or another host on the LAN) POST source to it.
+ * Require a loopback Host header (defeats DNS rebinding) and, when the browser
+ * sends an Origin, that it matches that same loopback origin.
+ */
+export function isTrustedPlaygroundRequest(
+  headers: { host?: string | undefined; origin?: string | undefined },
+  port: number,
+): boolean {
+  const allowedHosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
+  if (!headers.host || !allowedHosts.has(headers.host.toLowerCase())) return false;
+  if (headers.origin === undefined) return true;
+  return headers.origin.toLowerCase() === `http://${headers.host.toLowerCase()}`;
+}
+
+/** Max request body size accepted by the playground (compile inputs are small). */
+const MAX_BODY_BYTES = 1024 * 1024;
+
 interface PlaygroundOptions {
   port?: number;
   open?: boolean;
@@ -121,10 +141,11 @@ export async function playgroundCommand(opts: PlaygroundOptions = {}): Promise<v
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
     const path = url.pathname;
 
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (!isTrustedPlaygroundRequest({ host: req.headers.host, origin: req.headers.origin }, port)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Forbidden: playground only accepts same-origin loopback requests' }));
+      return;
+    }
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -295,7 +316,8 @@ export async function playgroundCommand(opts: PlaygroundOptions = {}): Promise<v
     }
   });
 
-  server.listen(port, () => {
+  // Loopback only: never expose the compile/execute endpoints on the LAN.
+  server.listen(port, '127.0.0.1', () => {
     console.log(`  ✓ PSX Playground running at http://localhost:${port}\n`);
     console.log('  Features:');
     console.log('    • PSX parser — split Rust/TSX in real-time');
@@ -322,7 +344,16 @@ export async function playgroundCommand(opts: PlaygroundOptions = {}): Promise<v
 function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let body = '';
-    req.on('data', (chunk) => { body += chunk.toString(); });
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('Request body too large'));
+        req.destroy();
+        return;
+      }
+      body += chunk.toString();
+    });
     req.on('end', () => resolve(body));
     req.on('error', reject);
   });

@@ -97,16 +97,17 @@ export interface MDXPageMeta {
  * This is a simple parser — PledgePack's transform pipeline does the full parsing.
  */
 export function extractFrontmatter(source: string): { frontmatter: Record<string, unknown>; content: string } {
-  const match = source.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  // Accept CRLF (Windows checkouts) and a closing fence with no trailing body.
+  const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n([\s\S]*))?$/);
   if (!match) {
     return { frontmatter: {}, content: source };
   }
 
   const frontmatterText = match[1];
-  const content = match[2];
+  const content = match[2] ?? '';
   const frontmatter: Record<string, unknown> = {};
 
-  for (const line of frontmatterText.split('\n')) {
+  for (const line of frontmatterText.split(/\r?\n/)) {
     const colonIdx = line.indexOf(':');
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
@@ -128,6 +129,7 @@ export function extractFrontmatter(source: string): { frontmatter: Record<string
       value = (value as string).replace(/^["']|["']$/g, '');
     }
 
+    if (key === '__proto__') continue;
     frontmatter[key] = value;
   }
 

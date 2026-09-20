@@ -44,6 +44,12 @@ describe('validateConfig', () => {
     expect(errors.some((e) => e.includes('framework'))).toBe(true);
   });
 
+  it('accepts the "pledge" full-stack framework (React UI + Rust backend)', () => {
+    const config = { ...DEFAULT_CONFIG, framework: 'pledge' as const };
+    const errors = validateConfig(config);
+    expect(errors.some((e) => e.includes('framework'))).toBe(false);
+  });
+
   it('detects invalid bundler', () => {
     const config = { ...DEFAULT_CONFIG, bundler: 'parcel' as any };
     const errors = validateConfig(config);

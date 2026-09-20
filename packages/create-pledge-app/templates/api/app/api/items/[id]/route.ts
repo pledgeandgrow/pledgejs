@@ -16,8 +16,17 @@ export async function PATCH(request: Request) {
   const id = getIdFromUrl(request.url);
   const item = items.get(id);
   if (!item) return Response.json({ error: 'Not found' }, { status: 404 });
-  const body = await request.json();
-  const updated = { ...item, ...body };
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return Response.json({ error: 'Body must be a JSON object' }, { status: 400 });
+  }
+  // Keep the stored id immutable — a body "id" must not rewrite it.
+  const updated = { ...item, ...(body as Record<string, unknown>), id: item.id };
   items.set(id, updated);
   return Response.json(updated);
 }

@@ -5,7 +5,7 @@
 
 A full-stack **multi-framework** web framework with file-based routing, SSR/SSG/ISR, React Server Components, API routes, middleware, edge runtime support, and Rust native addons for rendering, compression, search, rate limiting, and more. Supports **React, Vue, Solid, and Svelte** via pluggable renderer adapters. Uses PledgePack (Rust+Zig bundler) to build user apps.
 
-> **112 test files · 1023 tests · 39 packages** — 2 failing in new MDX/server-fn tests, 5 skipped. `pnpm typecheck` runs a real `tsc --noEmit -p` sweep across every package (see `scripts/typecheck-workspace.mjs`).
+> **206 test files · 1697 tests · 36 packages (34 published)** — 1691 passing, 6 skipped, 0 failing (2026-09-20). Release candidate: **1.0.0-rc.0** (all 34 public packages are versioned together; prereleases publish under the `rc` dist-tag). `pnpm typecheck` runs a real `tsc --noEmit -p` sweep across every package (see `scripts/typecheck-workspace.mjs`).
 
 ## Requirements
 
@@ -67,7 +67,7 @@ npx pledge start    # Start production server
 | `pledge bench` | Benchmark Rust addons vs JS fallbacks |
 | `pledge fmt` | Format Rust code (cargo fmt) |
 | `pledge docs` | Generate API reference from TypeScript source |
-| `pledge upgrade` | Upgrade PledgeStack with codemods |
+| `pledge upgrade` | Check for a newer version, update `package.json` and install (no implicit codemods; use `pledge codemod`) |
 | `pledge why <module>` | Trace why a module is in the bundle |
 | `pledge docker [--optimized]` | Generate Dockerfile, .dockerignore, docker-compose.yml. `--optimized` produces a Rust-addon-aware multi-stage build (compiles `packages/core/native`'s crates in a dedicated stage) instead of the plain single-stage default. |
 | `pledge storybook` | Set up Storybook |
@@ -76,6 +76,9 @@ npx pledge start    # Start production server
 | `pledge generate-route-types` | Generate typed route declarations |
 | `pledge check-routes` | Detect route conflicts |
 | `pledge search [query]` | Index pages and search content (embedded full-text search) |
+| `pledge deploy [--project <name>]` | Deploy to Cloudflare/Vercel/Netlify (auto-detected or via config) |
+| `pledge content <list|validate|stats|index>` | Content collections: list, validate, stats, rebuild index |
+| `pledge playground` | Interactive PSX playground (compiles Rust→WASM via real toolchain when available; labeled simulation otherwise) |
 
 ## What's Actually Implemented
 
@@ -151,7 +154,7 @@ npx pledge start    # Start production server
 
 ### Rust Native Addons (PSX)
 
-16 NAPI addon crates in `packages/core/native/` with automatic JS fallback when not compiled:
+17 NAPI addon crates in `packages/core/native/` with automatic JS fallback when not compiled:
 
 **Rendering:**
 - **rust-html** — HTML string renderer with SIMD-accelerated escaping (SSE2 16-byte chunk scanning)
@@ -172,6 +175,7 @@ npx pledge start    # Start production server
 - **rust-search** — Embedded full-text search engine with inverted index (no Elasticsearch needed; `pledge search` CLI)
 - **rust-jit-templates** — JIT hot route template compiler — profiles SSR routes and compiles hot templates to native functions
 - **rust-ws-compression** — Native WebSocket permessage-deflate compression with SIMD acceleration
+- **rust-bench** — NAPI benchmark harness used by `pledge bench --psx` (noop/hash/sort workloads + NAPI overhead measurement)
 
 ### PSX Integrations (15 wrappers with JS fallback)
 
@@ -220,7 +224,7 @@ SQLx, Redis, Auth (Argon2/JWT), Image processing, PDF generation, Background job
 
 ### Testing
 
-112 test files across the monorepo using Vitest (1023 tests, 2 failing in new MDX/server-fn tests, 5 skipped):
+206 test files across the monorepo using Vitest (1697 tests: 1691 passing, 6 skipped — the skips are real-CLI-gated deploy tests that require a Netlify token and similar external credentials):
 
 - **PSX Integration tests** — Fallback behavior for all 15 Rust wrappers
 - **Render tests** — `rust-html`, `rust-ssr`, `rust-rsc`, `rust-dom-renderer`, `rust-html-transformer`, `rust-hydration`, `rust-ssr-profiler`, PPR, JIT templates
@@ -231,12 +235,13 @@ SQLx, Redis, Auth (Argon2/JWT), Image processing, PDF generation, Background job
 - **CLI tests** — Dockerfile generation, codemod transforms (next-to-pledge, next-image, next-router, metadata API)
 - **Package tests** — RSS feed generation, font optimization, MDX plugin, sitemap, image
 
-### Templates (7 + 3 framework-specific)
+### Templates (8 + 3 framework-specific)
 
 `pledge create <name> --template <name> --framework <react|vue|solid|svelte>`
 
 | Template | Description |
 |---|---|
+| `pledge` | Full-stack React + Rust backend (`server/` directory, `.psx` support) |
 | `default` | Starter app with hero, nav, features |
 | `blog` | Blog with SSG, dynamic routes, metadata API |
 | `api` | REST API server with CRUD routes |
@@ -255,61 +260,74 @@ All templates use the metadata export API (`export const metadata`, `export cons
 - **RSC is React-only** — React Server Components require `react-server-dom-webpack`. Vue, Solid, and Svelte use standard SSR with hydration. There are no plans to implement RSC for non-React frameworks.
 - **Streaming for non-React frameworks** — Vue, Solid, and Svelte use async SSR (buffered). True progressive streaming with Suspense-style partial hydration is React-only.
 - **No built-in client-side data fetching hooks** — PledgeStack doesn't provide `useSWR`/`useQuery` equivalents. Use your framework's native data fetching or install a library.
-- **No Storybook integration** — The `pledge storybook` command is a stub. Storybook setup is manual.
+- **Storybook is scaffold-only** — `pledge storybook` generates `.storybook/` config, auto-detects components for story stubs, and wires `package.json` scripts/devDeps — but you still run `pnpm install` and `storybook dev` yourself. It does not run Storybook for you.
 - **No streaming metadata** — `generateMetadata()` is awaited before rendering. Metadata isn't streamed with the response.
 - **Generated route types** — `pledge generate-route-types` generates typed route declarations from the file-based router. Route params are typed as `Record<string, string>` by default; generated types provide per-route param types.
-- **Rust addons are optional** — All 16 NAPI addons have JS fallbacks. Production performance is better with native addons compiled, but the framework works without them. Run `packages/core/native/build.sh` to compile them into `packages/core/native/*.node`; every consumer (including `pledgestack-renderer-react`, which resolves the addon via `pledgestack-core`'s own module resolution rather than a fixed relative path) picks them up automatically once built. The 15 "PSX Integrations" wrappers (SQLx, Redis, Argon2, image/PDF processing, etc.) are a separate, currently JS-fallback-only layer — no corresponding Rust crates ship in this repo yet, so those always run their JS implementation regardless of whether the 16 native addons above are compiled. Several of those JS fallbacks additionally require optional peer packages (`pg`, `sharp`, `argon2`, `puppeteer`, `nodemailer`, `xlsx`) that are not declared dependencies; install the ones you use.
+- **Rust addons are optional** — All 17 NAPI addons have JS fallbacks. Production performance is better with native addons compiled, but the framework works without them. Run `packages/core/native/build.sh` to compile them into `packages/core/native/*.node`; every consumer (including `pledgestack-renderer-react`, which resolves the addon via `pledgestack-core`'s own module resolution rather than a fixed relative path) picks them up automatically once built. The 15 "PSX Integrations" wrappers (SQLx, Redis, Argon2, image/PDF processing, etc.) are a separate, currently JS-fallback-only layer — no corresponding Rust crates ship in this repo yet, so those always run their JS implementation regardless of whether the 17 native addons above are compiled. Several of those JS fallbacks additionally require optional peer packages (`pg`, `sharp`, `argon2`, `puppeteer`, `nodemailer`, `xlsx`) that are not declared dependencies; install the ones you use.
 - **PledgePack binary** — A prebuilt Windows (x64) binary ships in this repo. macOS (x64/arm64) and Linux (x64/arm64) platform packages currently ship without a bundled binary and rely on `postinstall.js` downloading a prebuilt release; if none is published for your platform/version, build from source (`cargo build --release`) in PledgePack's own repository.
 - **MDX compiler is lightweight** — The built-in MDX-to-JSX compiler handles common markdown syntax (headings, lists, bold, italic, code blocks, links) and embedded JSX. For full MDX spec compliance (remark/rehype plugins), use the `pledgestack-mdx` plugin with a custom renderer.
-- **Image optimization endpoint** — The `/__pledge__/image/:path` endpoint currently serves original images with correct content-type and caching headers. Full resize/format conversion requires the `sharp` native module (planned).
+- **Image optimization endpoint** — The `/__pledge__/image/:path` (and `/_pledge/image`) endpoint resizes/converts with the optional `sharp` package when it is installed (`pnpm add sharp`); without it, original images are served with correct content-type and caching headers.
+- **Open Graph images** — `ImageResponse` renders to PNG through a built-in flexbox subset (not full Satori/CSS) using the native addon or `sharp`; without either the server answers `501` with an actionable message. See [docs/limitations.md](./docs/limitations.md).
+- **HMR** — Only where the bundler's own dev server provides it (Vite, webpack-dev-server, Rsbuild, the PledgePack binary); the esbuild fallback servers have no live reload. See [docs/limitations.md](./docs/limitations.md).
 
 ## Monorepo Structure
 
 ```
 pledgestack/
 ├── packages/
-│   ├── shared/              # Shared types, config, constants, renderer interface (private)
-│   ├── core/                # Framework core — routing, rendering, FS scanner, PSX (private)
-│   ├── server/              # Node.js + Edge server runtime (private)
-│   ├── client/              # Client hydration, routing, hooks, state (private)
-│   ├── renderer-react/      # React renderer adapter — SSR, RSC, streaming (private)
-│   ├── renderer-vue/        # Vue 3 renderer adapter — SSR, hydration (private)
-│   ├── renderer-solid/      # Solid.js renderer adapter — SSR, hydration (private)
-│   ├── renderer-svelte/     # Svelte 5 renderer adapter — SSR, hydration (private)
-│   ├── auth/                # Authentication & security (private)
-│   ├── state/               # State management (private)
-│   ├── api/                 # API route utilities (private)
-│   ├── a11y/                # Accessibility audit tools (private)
-│   ├── overlay/             # Error overlay & DevTools (private)
-│   ├── seo/                 # SEO & structured data (private)
-│   ├── sitemap/             # Sitemap & robots.txt generation (private)
-│   ├── image/               # Image optimization (private)
-│   ├── font/                # Font optimization (private)
-│   ├── mdx/                 # MDX support (private)
-│   ├── og/                  # OpenGraph image generation (private)
-│   ├── rss/                 # RSS feed generation (private)
-│   ├── ws/                  # WebSocket support (private)
-│   ├── adapters/            # Cloudflare, Vercel, Deno, AWS, Netlify adapters (private)
-│   ├── privacy/             # GDPR/CCPA compliance, PII, encryption, consent (private)
-│   ├── eslint-plugin-pledge/ # ESLint rules (private)
+│   ├── shared/              # Shared types, config, constants, renderer interface
+│   ├── core/                # Framework core — routing, rendering, FS scanner, PSX
+│   ├── server/              # Node.js + Edge server runtime
+│   ├── client/              # Client hydration, routing, hooks, state
+│   ├── renderer-react/      # React renderer adapter — SSR, RSC, streaming
+│   ├── renderer-vue/        # Vue 3 renderer adapter — SSR, hydration
+│   ├── renderer-solid/      # Solid.js renderer adapter — SSR, hydration
+│   ├── renderer-svelte/     # Svelte 5 renderer adapter — SSR, hydration
+│   ├── auth/                # Authentication & security
+│   ├── state/               # State management
+│   ├── api/                 # API route utilities
+│   ├── a11y/                # Accessibility audit tools
+│   ├── overlay/             # Error overlay & DevTools
+│   ├── seo/                 # SEO & structured data
+│   ├── sitemap/             # Sitemap & robots.txt generation
+│   ├── image/               # Image optimization
+│   ├── font/                # Font optimization
+│   ├── mdx/                 # MDX support
+│   ├── og/                  # OpenGraph image generation
+│   ├── rss/                 # RSS feed generation
+│   ├── ws/                  # WebSocket support
+│   ├── adapters/            # Cloudflare, Vercel, Deno, AWS, Netlify adapters
+│   ├── privacy/             # GDPR/CCPA compliance, PII, encryption, consent
+│   ├── content/             # Content collections — schema validation, markdown, MDX
+│   ├── deploy/              # One-command deploy — Cloudflare/Vercel/Netlify
+│   ├── eslint-plugin-pledge/ # ESLint rules
 │   ├── vscode-extension/    # VS Code extension — highlighting, IntelliSense
 │   ├── vscode-psx/          # VS Code extension — PSX language support
-│   ├── bundler-pledgepack/  # PledgePack bundler adapter (private)
-│   ├── bundler-vite/        # Vite bundler adapter (private)
-│   ├── bundler-rollup/      # Rollup bundler adapter (private)
-│   ├── bundler-turbopack/   # Turbopack bundler adapter (private)
-│   ├── bundler-rsbuild/     # Rsbuild bundler adapter (private)
-│   ├── bundler-webpack/     # Webpack bundler adapter (private)
-│   ├── pledgepack/          # PledgePack npm package wrapper (Rust+Zig bundler)
+│   ├── bundler-pledgepack/  # PledgePack bundler adapter
+│   ├── bundler-vite/        # Vite bundler adapter
+│   ├── bundler-rollup/      # Rollup bundler adapter
+│   ├── bundler-turbopack/   # Turbopack bundler adapter
+│   ├── bundler-rsbuild/     # Rsbuild bundler adapter
+│   ├── bundler-webpack/     # Webpack bundler adapter
 │   ├── cli/                 # CLI tool — published as `pledgestack` on npm
-│   └── create-pledge-app/   # Scaffolding CLI with 7 templates + 3 framework starters
+│   └── create-pledge-app/   # Scaffolding CLI with 8 templates + 3 framework starters
 ├── pledge.config.ts         # Framework config (defineConfig from 'pledgestack')
 ├── vitest.config.ts         # Test configuration
 ├── tsconfig.json            # TypeScript project references
 └── pnpm-workspace.yaml
 ```
 
-> Only the `pledgestack` package (CLI) is published to npm. All sub-packages are bundled into it via esbuild and marked as private. PledgePack is installed from npm (`pledgepack@^0.2.8`) and used to build user apps — the framework itself uses esbuild.
+> **Publishing:** 34 packages are public (everything above except the two VS Code extensions, which ship through the Marketplace) and are released together at one version through [Changesets](https://github.com/changesets/changesets) — see [Releasing](#releasing). The `pledgestack` CLI still bundles every sub-package via esbuild, so it alone is enough to build an app. PledgePack is installed from npm (`pledgepack@^0.3.3`) and used to build user apps — the framework itself uses esbuild.
+
+## Releasing
+
+Releases go through [Changesets](https://github.com/changesets/changesets) and `.github/workflows/release.yml`:
+
+1. Add a changeset with your PR: `pnpm changeset`.
+2. Merging to `main` runs the full gate (typecheck, lint, build, tests, `pnpm check:release`) and opens/updates a **Version Packages** PR (`pnpm version-packages` bumps every public package together and writes each `packages/*/CHANGELOG.md`).
+3. Merging that PR publishes all 34 public packages to npm (`pnpm release`). While `.changeset/pre.json` exists the repo is in prerelease mode (`1.0.0-rc.N`, published under the `rc` dist-tag); run `pnpm changeset pre exit` for the stable 1.0.0.
+
+`pnpm check:release` (also run in CI) verifies package metadata, versions, READMEs, changelogs, declared workspace dependencies and — after `pnpm build:packages` — that every `exports` target exists. The project changelog is [docs/changelog.md](./docs/changelog.md).
 
 ## Getting Started
 
@@ -367,7 +385,8 @@ export default defineConfig({
   publicDir: 'public',
   outDir: '.pledge',
   defaultRuntime: 'node',
-  framework: 'react',          // 'react' | 'vue' | 'solid' | 'svelte' (default: 'react')
+  framework: 'react',          // 'react' | 'vue' | 'solid' | 'svelte' | 'pledge' (default: 'react')
+                               // 'pledge' = React UI + Rust backend (server/ dir, requires PledgePack)
   rsc: true,                   // React Server Components (React only, ignored for other frameworks)
   ppr: false,                  // Partial Prerendering — static shell + streaming dynamic holes
   tailwind: true,

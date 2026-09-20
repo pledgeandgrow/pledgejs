@@ -5,7 +5,10 @@
  * Items 170, 171, 175, 176 of the PledgeStack roadmap.
  */
 
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { InMemorySecurityStore, type SecurityKeyValueStore } from 'pledgestack-auth';
+import { escapeHtml, type PledgeConfig } from 'pledgestack-shared';
 
 
 // ---------------------------------------------------------------------------
@@ -115,7 +118,7 @@ export function captchaChallengePage(action: string): string {
 <html><head><title>Verification Required</title></head>
 <body>
 <h1>Please verify you are human</h1>
-<form method="POST" action="${action}">
+<form method="POST" action="${escapeHtml(action)}">
 <input type="hidden" name="_captcha_challenge" value="${crypto.randomUUID()}" />
 <button type="submit">I am human</button>
 </form>
@@ -225,8 +228,9 @@ export async function checkBruteForce(
   const now = Date.now();
   const entry = await getAttempt(identifier);
 
-  // Reset if window has passed
-  if (entry && now - entry.firstAttemptAt > cfg.windowMs) {
+  // Reset if window has passed — but never while a lockout is still active
+  // (lockoutDurationMs can outlast windowMs; resetting would end it early).
+  if (entry && entry.lockedUntil <= now && now - entry.firstAttemptAt > cfg.windowMs) {
     await attemptStore.delete(bfKey(identifier));
     return {
       allowed: true,
@@ -291,7 +295,7 @@ export async function recordFailedAttempt(
   const now = Date.now();
   let entry = await getAttempt(identifier);
 
-  if (!entry || now - entry.firstAttemptAt > cfg.windowMs) {
+  if (!entry || (entry.lockedUntil <= now && now - entry.firstAttemptAt > cfg.windowMs)) {
     entry = {
       count: 1,
       firstAttemptAt: now,
@@ -538,4 +542,134 @@ export function checkSecurityPatterns(config: {
  */
 export function clearSecurityWarnings(): void {
   warningsEmitted.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Production posture — fail-loud checks wired into `pledge start`/`pledge build`
+// ---------------------------------------------------------------------------
+
+export interface ProductionPostureIssue {
+  severity: 'error' | 'warn';
+  message: string;
+  fix: string;
+}
+
+/**
+ * Audits a resolved config for production-unsafe settings. Unlike the
+ * dev-mode warnings above, this runs in production context (`pledge start`,
+ * `pledge build`) and always emits — the whole point is that disabling a
+ * protection should be a loud, deliberate choice, not a silent default.
+ */
+export function checkProductionPosture(config: PledgeConfig): ProductionPostureIssue[] {
+  const issues: ProductionPostureIssue[] = [];
+
+  if (config.securityHeaders === false) {
+    issues.push({
+      severity: 'error',
+      message: 'securityHeaders is disabled — no CSP, clickjacking, or isolation headers will be sent.',
+      fix: "Remove `securityHeaders: false` from pledge.config.ts",
+    });
+  }
+
+  if (config.csrf === false) {
+    issues.push({
+      severity: 'error',
+      message: 'CSRF protection is disabled — cross-site POSTs to API routes and server actions will not be rejected.',
+      fix: "Remove `csrf: false` from pledge.config.ts",
+    });
+  }
+
+  if (config.cors?.origins?.includes('*')) {
+    issues.push({
+      severity: config.cors.credentials ? 'error' : 'warn',
+      message: config.cors.credentials
+        ? "CORS origins is '*' with credentials: true — any origin can make credentialed requests."
+        : "CORS origins is '*' — any origin can read API responses.",
+      fix: 'Set config.cors.origins to an explicit allowlist',
+    });
+  }
+
+  if (config.rateLimit === false) {
+    issues.push({
+      severity: 'warn',
+      message: 'rateLimit is fully disabled — the server-action RPC endpoint is unthrottled.',
+      fix: "Remove `rateLimit: false` or scope it (the endpoint limit only needs ~100 burst / 2 rps)",
+    });
+  }
+
+  if (!process.env.PLEDGE_SECRET && !process.env.SESSION_SECRET) {
+    issues.push({
+      severity: 'warn',
+      message: 'PLEDGE_SECRET is not set — signed cookies and the action-endpoint token fall back to a per-process secret that does not survive restarts.',
+      fix: 'Set PLEDGE_SECRET to a stable random value in production',
+    });
+  }
+
+  // security.txt: served automatically from public/ when present — this is a
+  // presence check, not an enforcement, since a fake default would be worse.
+  try {
+    const securityTxt = join(config.rootDir, config.publicDir, '.well-known', 'security.txt');
+    if (!existsSync(securityTxt)) {
+      issues.push({
+        severity: 'warn',
+        message: 'No /.well-known/security.txt — security researchers have no documented contact channel.',
+        fix: 'Add public/.well-known/security.txt (served automatically)',
+      });
+    }
+  } catch {
+    // fs unavailable (edge build) — skip the presence check.
+  }
+
+  // Publicly-reachable source maps hand an attacker unobfuscated source for
+  // every shipped bundle. They're legitimate for internal observability, so
+  // this warns rather than errors — the fix is excluding them from public/.
+  try {
+    const publicRoot = join(config.rootDir, config.publicDir);
+    const walk = (dir: string, depth: number): boolean => {
+      if (depth > 4) return false;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isDirectory() && walk(join(dir, entry.name), depth + 1)) return true;
+        if (entry.isFile() && entry.name.endsWith('.map')) return true;
+      }
+      return false;
+    };
+    if (existsSync(publicRoot) && walk(publicRoot, 0)) {
+      issues.push({
+        severity: 'warn',
+        message: '.map source map files found under public/ — they are served verbatim and expose unobfuscated source.',
+        fix: 'Remove *.map from public/ or exclude them from the build output',
+      });
+    }
+  } catch {
+    // fs unavailable — skip.
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    issues.push({
+      severity: 'warn',
+      message: 'NODE_ENV is not "production" — dev-mode error detail and relaxed checks may be active.',
+      fix: 'Run with NODE_ENV=production',
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Prints production posture issues to the console. Returns the issue list so
+ * callers can decide whether to abort (e.g. on severity 'error' under a
+ * future strict mode).
+ */
+export function reportProductionPosture(config: PledgeConfig): ProductionPostureIssue[] {
+  const issues = checkProductionPosture(config);
+  if (issues.length === 0) return issues;
+
+  console.warn('\n  [pledgestack/security] Production posture warnings:\n');
+  for (const issue of issues) {
+    const tag = issue.severity === 'error' ? 'ERROR' : 'WARN ';
+    console.warn(`    ${tag} ${issue.message}`);
+    console.warn(`         Fix: ${issue.fix}`);
+  }
+  console.warn('');
+  return issues;
 }

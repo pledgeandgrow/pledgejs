@@ -33,7 +33,6 @@ const DEFAULT_LIST_MULTIPLIER = 2;
 const INTROSPECTION_FIELDS = new Set([
   '__schema',
   '__type',
-  '__typename',
   '__inputValue',
   '__field',
   '__enumValue',
@@ -219,6 +218,10 @@ export function createGraphQLSecurityMiddleware(config: GraphQLSecurityConfig = 
 
 function tokenizeQuery(query: string): string[] {
   return query
+    // Drop string literals FIRST (block strings, then quoted strings) so braces,
+    // parens or '#' inside argument values can't skew depth/complexity counts
+    // or be mistaken for comments.
+    .replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"/g, '')
     .replace(/#.*/g, '')
     .replace(/"/g, '')
     // Match the `...` spread as a single token (alternation) — inside the

@@ -1,6 +1,6 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 
 /**
  * Common file magic bytes (signatures) for verifying that uploaded file
@@ -76,6 +76,55 @@ export interface UploadResult {
   path: string;
 }
 
+/** Allowance for multipart boundaries, headers and non-file fields. */
+const MULTIPART_OVERHEAD_BYTES = 256 * 1024;
+
+/**
+ * Parses multipart form data while counting bytes as they arrive, aborting
+ * the read (and cancelling the upstream body) once `limit` is exceeded so an
+ * oversized upload is never fully buffered.
+ */
+async function parseFormDataLimited(request: Request, limit: number): Promise<FormData> {
+  if (!request.body) return request.formData();
+
+  let received = 0;
+  const reader = request.body.getReader();
+  const limited = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      received += value.byteLength;
+      if (received > limit) {
+        await reader.cancel().catch(() => undefined);
+        controller.error(new Error(`Upload too large: exceeds ${limit} bytes`));
+        return;
+      }
+      controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  const bounded = new Request(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: limited,
+    // Required by undici for stream request bodies.
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+
+  try {
+    return await bounded.formData();
+  } catch (err) {
+    if (received > limit) throw new Error(`Upload too large: exceeds ${limit} bytes`);
+    throw err;
+  }
+}
+
 export async function handleUpload(
   request: Request,
   options: UploadOptions = {},
@@ -88,7 +137,17 @@ export async function handleUpload(
     maxFiles = 10,
   } = options;
 
-  const formData = await request.formData();
+  // Bound the request body BEFORE parsing. request.formData() buffers the
+  // entire body, so a 5GB upload would be fully read into memory before any
+  // per-file size check ran. The cap covers all allowed files plus multipart
+  // framing overhead; it is enforced on Content-Length up front and again
+  // on the byte stream as it is consumed (Content-Length can lie/be absent).
+  const totalCap = maxSize * maxFiles + MULTIPART_OVERHEAD_BYTES;
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > totalCap) {
+    throw new Error(`Upload too large: exceeds ${totalCap} bytes`);
+  }
+  const formData = await parseFormDataLimited(request, totalCap);
   const files = formData.getAll('file').filter((v): v is File => v instanceof File);
 
   if (files.length === 0) {
@@ -129,7 +188,9 @@ export async function handleUpload(
       // never escape uploadDir.
       const rawExt = file.name.includes('.') ? file.name.split('.').pop() ?? '' : '';
       const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '').slice(0, 16);
-      const hash = createHash('sha256').update(`${file.name}-${Date.now()}`).digest('hex').slice(0, 16);
+      // Random, not derived from name+timestamp: same-named files in one
+      // request (same millisecond) used to collide and overwrite each other.
+      const hash = randomBytes(12).toString('hex');
       filename = ext ? `${hash}.${ext}` : hash;
     } else {
       // Sanitize filename to prevent path traversal

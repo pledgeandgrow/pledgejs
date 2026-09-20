@@ -329,37 +329,59 @@ export class AccountLockoutManager {
     }
   }
 
+  /**
+   * Serializes read-modify-write cycles per identifier. Without it, N
+   * concurrent failed logins all read the same counter and write back
+   * failures+1, so an attacker parallelizing guesses is counted once.
+   * (In-process only — for multi-instance deployments use a store with
+   * atomic semantics, or accept per-worker counting.)
+   */
+  private locks = new Map<string, Promise<unknown>>();
+
+  private serialize<T>(identifier: string, fn: () => Promise<T>): Promise<T> {
+    const key = this.key(identifier);
+    const prev = this.locks.get(key) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.catch(() => undefined);
+    this.locks.set(key, tail);
+    void tail.then(() => {
+      if (this.locks.get(key) === tail) this.locks.delete(key);
+    });
+    return run;
+  }
+
   /** Record a failed attempt for the given identifier. Returns the new lockout state. */
-  async recordFailure(identifier: string): Promise<{ locked: boolean; lockedUntil: number }> {
-    const rec = await this.getRecord(identifier);
-    rec.failures += 1;
-    if (rec.failures >= this.maxAttempts) {
-      // Exponential backoff: base * 2^(failures - maxAttempts), capped
-      const backoff = Math.min(
-        this.baseLockoutSeconds * Math.pow(2, rec.failures - this.maxAttempts),
-        this.maxLockoutSeconds,
-      );
-      rec.lockedUntil = Date.now() + backoff * 1000;
-    }
-    await this.store.set(this.key(identifier), JSON.stringify(rec), this.maxLockoutSeconds * 1000);
-    return { locked: rec.failures >= this.maxAttempts, lockedUntil: rec.lockedUntil };
+  recordFailure(identifier: string): Promise<{ locked: boolean; lockedUntil: number }> {
+    return this.serialize(identifier, async () => {
+      const rec = await this.getRecord(identifier);
+      rec.failures += 1;
+      if (rec.failures >= this.maxAttempts) {
+        // Exponential backoff: base * 2^(failures - maxAttempts), capped
+        const backoff = Math.min(
+          this.baseLockoutSeconds * Math.pow(2, rec.failures - this.maxAttempts),
+          this.maxLockoutSeconds,
+        );
+        rec.lockedUntil = Date.now() + backoff * 1000;
+      }
+      await this.store.set(this.key(identifier), JSON.stringify(rec), this.maxLockoutSeconds * 1000);
+      return { locked: rec.failures >= this.maxAttempts, lockedUntil: rec.lockedUntil };
+    });
   }
 
   /** Record a successful authentication — clears the failure counter. */
-  async recordSuccess(identifier: string): Promise<void> {
-    await this.store.delete(this.key(identifier));
+  recordSuccess(identifier: string): Promise<void> {
+    return this.serialize(identifier, () => this.store.delete(this.key(identifier)));
   }
 
-  /** Check if the identifier is currently locked out. */
+  /**
+   * Check if the identifier is currently locked out. An expired lockout does
+   * NOT clear the failure counter — otherwise every lockout would restart at
+   * the base duration and the exponential backoff would never escalate. The
+   * counter only clears on success or when the record's TTL lapses.
+   */
   async isLocked(identifier: string): Promise<boolean> {
     const rec = await this.getRecord(identifier);
-    if (rec.lockedUntil && rec.lockedUntil > Date.now()) return true;
-    // Lockout expired — reset
-    if (rec.lockedUntil && rec.lockedUntil <= Date.now()) {
-      await this.store.delete(this.key(identifier));
-      return false;
-    }
-    return false;
+    return rec.lockedUntil > Date.now();
   }
 
   /** Get remaining attempts before lockout. */
@@ -442,7 +464,7 @@ export { generateTrustedTypesCSP, generateTrustedTypesCSPHeader, createTrustedTy
 export { generateCrossOriginHeaders, generateCORPHeader, generateRouteCrossOriginHeaders, crossOriginMiddleware, corpMiddleware, isCrossOriginIsolated, enableSharedArrayBuffer, type CrossOriginConfig } from './cross-origin';
 export { generateReferrerPolicy, generateReferrerPolicyHeaders, referrerPolicyMiddleware, getDefaultReferrerPolicy, type ReferrerPolicyValue, type ReferrerPolicyConfig } from './referrer-policy';
 export { generatePermissionPolicy, generatePermissionPolicyHeaders, generatePermissionPolicyValue, permissionPolicyMiddleware, getRestrictedFeatures, getDefaultDisabledPermissions, allowPermission, type PermissionPolicyConfig, type PermissionPolicyDirective } from './permissions-policy';
-export { generatePKCE, createOAuthStateParam, verifyOAuthStateParam, buildAuthorizeUrl, exchangeCodeForTokens, refreshAccessToken, fetchUserInfo, needsRefresh, ensureValidTokens, OAuthManager, type OAuthProviderConfig, type OAuthTokens, type OAuthUserInfo, type PKCEChallenge } from './oauth';
+export { generatePKCE, createOAuthStateParam, verifyOAuthStateParam, buildAuthorizeUrl, exchangeCodeForTokens, refreshAccessToken, fetchUserInfo, needsRefresh, ensureValidTokens, OAuthManager, OAUTH_BINDING_COOKIE, type OAuthProviderConfig, type OAuthTokens, type OAuthUserInfo, type PKCEChallenge } from './oauth';
 export { signJWT, verifyJWT, decodeJWT, generateKeyPair, generateECKeyPair, JWKSManager, createTokenPair, type JWTAlgorithm, type JWTPayload, type JWTSignOptions, type JWTVerifyOptions, type KeyPair } from './jwt';
 export { generateTOTPSecret, generateTOTPCode, verifyTOTP, generateTOTPURI, enrollTOTP, generateBackupCodes, verifyBackupCode, consumeBackupCode, TotpReplayGuard, type TOTPConfig, type TOTPEnrollment } from './totp';
 export { generateChallenge, generateRegistrationOptions, generateAuthenticationOptions, verifyRegistrationResponse, verifyAuthenticationResponse, getConditionalUIOptions, isWebAuthnSupported, isConditionalUISupported, type WebAuthnConfig, type WebAuthnCredential } from './webauthn';

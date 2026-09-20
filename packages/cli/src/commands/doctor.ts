@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { scanAppDir, resolveRoutes } from 'pledgestack-core';
 import type { PledgeConfig, ResolvedRoute } from 'pledgestack-shared';
 
@@ -514,7 +514,7 @@ function checkDebugSymbols(config: PledgeConfig, diags: Diagnostic[]): void {
           } else {
             // On Unix, use `file` command
             try {
-              const output = execSync(`file ${fullPath}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+              const output = execFileSync('file', [fullPath], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
               if (output.includes('not stripped') || output.includes('with debug_info')) {
                 foundDebugSymbols = true;
                 diags.push({

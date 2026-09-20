@@ -23,7 +23,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, escapeHtml } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, escapeHtml, applyScriptSecurity, escapeJsonForScript, scriptSecurityAttrs } from 'pledgestack-shared';
 import type { RouteTree } from 'pledgestack-shared';
 import { getLayoutChain } from './layout-chain';
 import { renderHeadTags, renderViewportTags, mergeMetadata } from './head-tags';
@@ -466,11 +466,11 @@ export class ReactRendererAdapter implements RendererAdapter {
 <body>
   <div id="__pledge_root__">`;
 
-  const shellAfter = `</div>
-  <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>
+  const shellAfter = applyScriptSecurity(`</div>
+  <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${escapeJsonForScript(JSON.stringify(manifest))}</script>
   <script type="module" src="/__pledge__/client.js"></script>
 </body>
-</html>`;
+</html>`, ctx.security);
 
     const element = buildElementTree(ctx);
 
@@ -597,13 +597,19 @@ export class ReactRendererAdapter implements RendererAdapter {
 
         // Also render the HTML for initial paint (SSR + RSC flight data)
         const htmlContent = renderToString(createElement(() => element as ReactNode));
-        const clientRefs = JSON.stringify(this.extractClientReferences(ctx));
-        const serializedManifest = JSON.stringify(ctx.clientManifest ?? {});
+        const clientRefs = escapeJsonForScript(JSON.stringify(this.extractClientReferences(ctx)));
+        const serializedManifest = escapeJsonForScript(JSON.stringify(ctx.clientManifest ?? {}));
 
-        const rscScripts = `<script id="__pledge_rsc_data__" type="application/json">${escapeHtml(flightData)}</script>
-  <script id="__pledge_manifest__" type="application/json">${serializedManifest}</script>
-  <script id="__pledge_client_refs__" type="application/json">${clientRefs}</script>
-  <script type="module" src="/__pledge__/rsc-client.js"></script>`;
+        // The flight payload is delivered exactly like renderRSCStream's chunks:
+        // an inline script pushing a JS string literal. HTML-entity-escaping it
+        // (the previous approach) corrupted the payload — script bodies are raw
+        // text, so the client saw `&quot;` instead of `"`. `<` is emitted as
+        // \u003c so data can never close the tag or open `<!--`.
+        const flightLiteral = JSON.stringify(flightData).replace(/</g, '\\u003c');
+        const rscScripts = `<script${scriptSecurityAttrs(ctx.security)}>(self.__pledge_rsc_chunks__=self.__pledge_rsc_chunks__||[]).push(${flightLiteral});</script>
+  <script id="__pledge_manifest__" type="application/json">${escapeJsonForScript(serializedManifest)}</script>
+  <script id="__pledge_client_refs__" type="application/json">${escapeJsonForScript(clientRefs)}</script>
+  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/rsc-client.js')} src="/__pledge__/rsc-client.js"></script>`;
 
         return wrapHtml(htmlContent, match.route, metadata, headHtml, viewport, rscScripts);
       }
@@ -641,8 +647,8 @@ export class ReactRendererAdapter implements RendererAdapter {
     const headTags = headHtml ?? renderHeadTags(metadata, match.route);
     const viewportTags = renderViewportTags(viewport);
     const manifest: PledgeManifest = { pledges: [] };
-    const serializedManifest = JSON.stringify(ctx.clientManifest ?? {});
-    const clientRefs = JSON.stringify(this.extractClientReferences(ctx));
+    const serializedManifest = escapeJsonForScript(JSON.stringify(ctx.clientManifest ?? {}));
+    const clientRefs = escapeJsonForScript(JSON.stringify(this.extractClientReferences(ctx)));
 
     const element = buildElementTree(ctx);
     // Render the initial HTML for first paint. The flight stream (read below)
@@ -663,12 +669,12 @@ export class ReactRendererAdapter implements RendererAdapter {
 </head>
 <body>
   <div id="__pledge_root__">${htmlContent}</div>
-  <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>
+  <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${escapeJsonForScript(JSON.stringify(manifest))}</script>
   <script id="__pledge_manifest__" type="application/json">${serializedManifest}</script>
   <script id="__pledge_client_refs__" type="application/json">${clientRefs}</script>
 `;
 
-    const shellAfter = `  <script type="module" src="/__pledge__/rsc-client.js"></script>
+    const shellAfter = `  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/rsc-client.js')} src="/__pledge__/rsc-client.js"></script>
 </body>
 </html>`;
 
@@ -682,9 +688,11 @@ export class ReactRendererAdapter implements RendererAdapter {
             const chunkText = flightDecoder.decode(value, { stream: true });
             // Escape "</script" so a flight chunk can never prematurely close
             // the inline <script> tag it's embedded in.
-            const escapedChunk = JSON.stringify(chunkText).replace(/<\//g, '<\\/');
+            const escapedChunk = JSON.stringify(chunkText).replace(/</g, '\\u003c');
+            // These per-chunk inline scripts execute — they need the request's
+            // CSP nonce to run under the strict script-src policy.
             controller.enqueue(
-              encoder.encode(`  <script>(self.__pledge_rsc_chunks__=self.__pledge_rsc_chunks__||[]).push(${escapedChunk});</script>\n`),
+              encoder.encode(`  <script${scriptSecurityAttrs(ctx.security)}>(self.__pledge_rsc_chunks__=self.__pledge_rsc_chunks__||[]).push(${escapedChunk});</script>\n`),
             );
           }
         } catch (err) {

@@ -14,11 +14,12 @@
 import { renderToPipeableStream } from 'react-dom/server';
 import { createElement, Suspense, Component, type ReactNode, type ComponentType } from 'react';
 import { Writable } from 'node:stream';
-import type { RouteMatch, ResolvedRoute, PledgeConfig } from 'pledgestack-shared';
+import type { RouteMatch, ResolvedRoute, PledgeConfig, RenderSecurity } from 'pledgestack-shared';
 import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
+import { applyScriptSecurity, scriptSecurityAttrs } from './security';
 
 export interface PPRContext {
   config: PledgeConfig;
@@ -31,6 +32,8 @@ export interface PPRContext {
   searchParams?: Record<string, string>;
   /** Whether this is the build-time prerender or request-time fill */
   isPrerender: boolean;
+  /** Per-request CSP nonce + SRI hashes stamped on emitted <script> tags */
+  security?: RenderSecurity;
 }
 
 /**
@@ -132,7 +135,7 @@ export async function prerenderStaticShell(ctx: PPRContext): Promise<string> {
         pipe(writable);
       },
       onAllReady() {
-        const wrapped = wrapPPRHtml(html, match.route, metadata, headHtml, viewportTags);
+        const wrapped = wrapPPRHtml(html, match.route, metadata, headHtml, viewportTags, ctx.security);
         resolve(wrapped);
       },
       onShellError(error) {
@@ -255,6 +258,13 @@ export async function renderDynamicHoles(ctx: PPRContext): Promise<ReadableStrea
       }
     }
   }
+
+  // The envelope (built-in or a reused prerendered shell) is streamed, so it
+  // can't be post-processed — stamp nonce/integrity at emit time. The reused
+  // staticShell has no nonce frozen into it, so stamping here keeps the
+  // per-request CSP nonce intact.
+  shellBefore = applyScriptSecurity(shellBefore, ctx.security);
+  shellAfter = applyScriptSecurity(shellAfter, ctx.security);
 
   return new Promise<ReadableStream<Uint8Array>>((resolve, reject) => {
     let shellReady = false;
@@ -406,6 +416,7 @@ function wrapPPRHtml(
   metadata: HeadMetadata,
   headHtml: string | undefined,
   viewportTags: string,
+  security?: RenderSecurity,
 ): string {
   const headTags = headHtml ?? renderHeadTags(metadata, route);
   const manifest: PledgeManifest = { pledges: [] };
@@ -422,7 +433,7 @@ function wrapPPRHtml(
 <body>
   <div id="__pledge_root__" data-ppr="1">${content}</div>
   ${manifestScript}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module"${scriptSecurityAttrs(security, '/__pledge__/client.js')} src="/__pledge__/client.js"></script>
 </body>
 </html>`;
 }

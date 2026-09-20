@@ -1,7 +1,28 @@
 {
   "name": "pledgestack-core",
-  "version": "0.1.4",
+  "version": "1.0.0-rc.0",
   "description": "Core framework for PledgeStack — routing, rendering, and build pipeline",
+  "keywords": [
+    "pledgestack",
+    "react",
+    "framework",
+    "core",
+    "routing",
+    "rendering",
+    "rsc",
+    "ssr"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/core"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,13 +42,21 @@
     "./fs": {
       "types": "./dist/fs/index.d.ts",
       "import": "./dist/fs/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
     "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "pledgestack-shared": "workspace:*"
@@ -36,10 +65,9 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
-  "comment:optionalRuntimeDeps": "The PSX integration JS fallbacks use optional runtime packages (pg, mysql2, redis, ioredis, argon2, bcryptjs, jsonwebtoken, sharp, puppeteer, nodemailer, xlsx). They are intentionally NOT declared as peerDependencies or optionalDependencies — pnpm auto-installs optional peers and npm/pnpm would install ~200MB of heavy native modules (puppeteer's Chromium, argon2's compiled addon, sharp's platform binaries) that most users never use. Install only the ones you use; each integration imports its package dynamically and throws a clear error with the exact install command if it is missing.",
   "devDependencies": {
-    "typescript": "^5.7.0",
     "rimraf": "^6.0.0",
+    "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -47,26 +75,11 @@
     "react-dom": "^19.2.8",
     "react-server-dom-webpack": "^19.2.8"
   },
-  "license": "MIT",
-  "author": "PledgeStack Contributors",
-  "homepage": "https://github.com/pledgeandgrow/pledgejs#readme",
-  "bugs": {
-    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  "engines": {
+    "node": ">=20.0.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/pledgeandgrow/pledgejs.git",
-    "directory": "packages/core"
+  "publishConfig": {
+    "access": "public"
   },
-  "keywords": [
-    "pledgestack",
-    "react",
-    "framework",
-    "core",
-    "routing",
-    "rendering",
-    "rsc",
-    "ssr"
-  ],
-  "private": true
+  "comment:optionalRuntimeDeps": "The PSX integration JS fallbacks use optional runtime packages (pg, mysql2, redis, ioredis, argon2, bcryptjs, jsonwebtoken, sharp, puppeteer, nodemailer, xlsx). They are intentionally NOT declared as peerDependencies or optionalDependencies — pnpm auto-installs optional peers and npm/pnpm would install ~200MB of heavy native modules (puppeteer's Chromium, argon2's compiled addon, sharp's platform binaries) that most users never use. Install only the ones you use; each integration imports its package dynamically and throws a clear error with the exact install command if it is missing."
 }

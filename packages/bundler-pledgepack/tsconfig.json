@@ -4,14 +4,30 @@
     "outDir": "dist",
     "rootDir": "src",
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "composite": true
+    "declarationMap": false,
+    "sourceMap": false,
+    "composite": true,
+    "emitDeclarationOnly": true
   },
-  "include": ["src/**/*.ts"],
-  "references": [
-    { "path": "../shared" },
-    { "path": "../core" }
+  "include": [
+    "src/**/*.ts"
   ],
-  "exclude": ["dist", "node_modules"]
+  "references": [
+    {
+      "path": "../shared"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../server"
+    }
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts"
+  ]
 }

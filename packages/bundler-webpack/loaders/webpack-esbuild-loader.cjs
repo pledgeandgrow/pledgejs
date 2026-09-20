@@ -6,8 +6,11 @@ const { transform } = require('esbuild');
 module.exports = function webpackEsbuildLoader(source) {
   const callback = this.async();
   const resourcePath = this.resourcePath;
-  const ext = resourcePath.endsWith('.tsx') ? 'tsx' : resourcePath.endsWith('.jsx') ? 'jsx' : 'ts';
-  const isDev = this.getOptions().isDev ?? false;
+  const options = this.getOptions();
+  // `options.loader` lets a rule force the esbuild loader (e.g. `tsx` for .psx,
+  // whose extension would otherwise select `ts` and reject JSX).
+  const ext = options.loader ?? (resourcePath.endsWith('.tsx') ? 'tsx' : resourcePath.endsWith('.jsx') ? 'jsx' : 'ts');
+  const isDev = options.isDev ?? false;
 
   transform(source, {
     loader: ext,

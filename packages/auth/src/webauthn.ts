@@ -97,6 +97,15 @@ export function generateChallenge(length = 32): string {
   return randomBytes(length).toString('base64url');
 }
 
+function decodeUserHandle(handle: unknown): string | undefined {
+  if (typeof handle !== 'string' || handle.length === 0) return undefined;
+  try {
+    return Buffer.from(handle, 'base64url').toString('utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Generate registration options for navigator.credentials.create().
  */
@@ -186,6 +195,7 @@ export function verifyRegistrationResponse(
   response: any,
   expectedChallenge: string,
   config: WebAuthnConfig,
+  options: { userId?: string } = {},
 ): WebAuthnCredential | null {
   if (!response || !response.id || !response.response) return null;
 
@@ -217,6 +227,11 @@ export function verifyRegistrationResponse(
   const expectedRpIdHash = createHash('sha256').update(config.rpId).digest();
   if (authData.length < 37 || !authData.subarray(0, 32).equals(expectedRpIdHash)) return null;
   if ((authData[32] & 0x01) === 0) return null;
+  // When the RP requires user verification, the authenticator must have
+  // actually performed it (UV flag, bit 2) — not merely been asked to.
+  if ((config.userVerification ?? DEFAULT_USER_VERIFICATION) === 'required' && (authData[32] & 0x04) === 0) {
+    return null;
+  }
 
   const cose = parseCredentialPublicKey(authData);
   if (!cose) return null;
@@ -230,7 +245,11 @@ export function verifyRegistrationResponse(
     algorithm: cose.get(3) as number,
     counter: parseCounter(authData),
     transports: response.response.getTransports?.() ?? [],
-    userId: response.response.userHandle ?? '',
+    // Registration responses carry no userHandle, so the real user id is
+    // supplied by the caller (the same `userId` given to
+    // generateRegistrationOptions). A userHandle, when present, is decoded from
+    // base64url as a fallback.
+    userId: options.userId ?? decodeUserHandle(response.response.userHandle) ?? '',
     createdAt: Date.now(),
   };
 }
@@ -278,6 +297,10 @@ export function verifyAuthenticationResponse(
   const expectedRpIdHash = createHash('sha256').update(config.rpId).digest();
   if (authData.length < 37 || !authData.subarray(0, 32).equals(expectedRpIdHash)) return false;
   if ((authData[32] & 0x01) === 0) return false;
+  // UV flag (bit 2) must be set when the RP requires user verification.
+  if ((config.userVerification ?? DEFAULT_USER_VERIFICATION) === 'required' && (authData[32] & 0x04) === 0) {
+    return false;
+  }
 
   // Reconstruct the signed data and verify the signature against the stored key.
   const hash = hashForAlgorithm(credential.algorithm);

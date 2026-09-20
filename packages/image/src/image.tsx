@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react';
 import {
+  cssUrl,
   type ImageProps,
   generateSources,
   optimizeUrl,
@@ -43,7 +44,7 @@ export function Image({
     height: '100%',
     objectFit: fit,
     ...(placeholder === 'blur' && blurDataURL
-      ? { background: `url(${blurDataURL}) center/cover no-repeat` }
+      ? { background: `${cssUrl(blurDataURL)} center/cover no-repeat` }
       : {}),
   };
 

@@ -23,14 +23,24 @@
     "languages": [
       {
         "id": "psx",
-        "aliases": ["PledgeStack PSX", "psx"],
-        "extensions": [".psx"],
+        "aliases": [
+          "PledgeStack PSX",
+          "psx"
+        ],
+        "extensions": [
+          ".psx"
+        ],
         "configuration": "./language-configuration.json"
       },
       {
         "id": "ps",
-        "aliases": ["PledgeStack PS", "ps"],
-        "extensions": [".ps"],
+        "aliases": [
+          "PledgeStack PS",
+          "ps"
+        ],
+        "extensions": [
+          ".ps"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -94,17 +104,26 @@
       }
     },
     "breakpoints": [
-      { "language": "psx" },
-      { "language": "ps" }
+      {
+        "language": "psx"
+      },
+      {
+        "language": "ps"
+      }
     ],
     "debuggers": [
       {
         "type": "pledgestack",
         "label": "PledgeStack PSX Debugger",
-        "languages": ["psx", "ps"],
+        "languages": [
+          "psx",
+          "ps"
+        ],
         "configurationAttributes": {
           "launch": {
-            "required": ["program"],
+            "required": [
+              "program"
+            ],
             "properties": {
               "program": {
                 "type": "string",
@@ -116,7 +135,9 @@
               },
               "runtimeArgs": {
                 "type": "array",
-                "items": { "type": "string" },
+                "items": {
+                  "type": "string"
+                },
                 "description": "Arguments passed to the runtime program"
               },
               "stopAtEntry": {
@@ -151,5 +172,6 @@
     "@types/vscode": "^1.80.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0"
-  }
+  },
+  "private": true
 }

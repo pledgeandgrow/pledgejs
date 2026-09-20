@@ -44,9 +44,15 @@ export function createEdgeHandler(options: EdgeServerOptions) {
     try {
       const result = await handler({ url, method, headers, body });
 
-      // Apply security headers to edge responses
-      const isHttps = url.protocol === 'https:' || headers['x-forwarded-proto'] === 'https';
-      const finalHeaders = new Headers(applySecurityHeaders({ ...result.headers }, config, isHttps));
+      // Apply security headers to edge responses. On edge platforms
+      // request.url is the real URL — don't honor a client-supplied
+      // x-forwarded-proto claim.
+      const isHttps = url.protocol === 'https:';
+      const finalHeaders = new Headers(applySecurityHeaders({ ...result.headers }, config, isHttps, {
+        cspNonce: result.cspNonce,
+        reportOnly: config.cspReportOnly === true,
+        reportUri: '/__pledge__/csp-report',
+      }));
       // Append each Set-Cookie individually (a Headers object preserves multiple).
       if (result.cookies) {
         for (const cookie of result.cookies) finalHeaders.append('Set-Cookie', cookie);

@@ -45,3 +45,14 @@ describe('resolveRouteElement (#3 client hydration tree)', () => {
     expect(tree.type).toBe(Page);
   });
 });
+
+describe('resolveRouteElement with collision-free keys', () => {
+  it('finds a root layout stored under layout:/ alongside a root page at /', () => {
+    const routes = {
+      '/': { type: 'page', component: Page },
+      'layout:/': { type: 'layout', component: RootLayout },
+    };
+    const tree = resolveRouteElement(routes, { pattern: '/', params: {}, searchParams: {} }) as ReactElement;
+    expect(tree.type).toBe(RootLayout);
+  });
+});

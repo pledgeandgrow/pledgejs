@@ -72,6 +72,9 @@ export class ConnectionPool<T> {
   private waitQueue: Array<{ resolve: (conn: T) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
   private healthCheckTimer?: ReturnType<typeof setInterval>;
   private draining = false;
+  private drainWaiters: Array<() => void> = [];
+  /** Connections currently being created (count toward `max` before they land in `pool`). */
+  private creating = 0;
   private _totalAcquired = 0;
   private _totalReleased = 0;
   private _totalCreated = 0;
@@ -94,7 +97,12 @@ export class ConnectionPool<T> {
       await this.createConnection();
     }
     if (this.config.healthChecks) {
-      this.healthCheckTimer = setInterval(() => this.runHealthChecks(), this.config.healthCheckInterval * 1000);
+      this.healthCheckTimer = setInterval(() => {
+        // A rejected factory.destroy/create must not become an unhandled rejection.
+        this.runHealthChecks().catch(() => {});
+      }, this.config.healthCheckInterval * 1000);
+      // Don't keep the process alive just for health checks.
+      (this.healthCheckTimer as { unref?: () => void }).unref?.();
     }
   }
 
@@ -109,10 +117,11 @@ export class ConnectionPool<T> {
       return free.connection;
     }
 
-    if (this.pool.length < this.config.max) {
-      const conn = await this.createConnection();
-      const entry = this.pool[this.pool.length - 1];
-      entry.inUse = true;
+    // Count in-flight creations so concurrent acquirers can't overshoot `max`.
+    if (this.pool.length + this.creating < this.config.max) {
+      // Created already marked in-use: after the await, `pool[length-1]` is not
+      // necessarily this connection's entry when several creations overlap.
+      const conn = await this.createConnection(true);
       this._totalAcquired++;
       return conn;
     }
@@ -136,6 +145,12 @@ export class ConnectionPool<T> {
     entry.lastUsedAt = Date.now();
     this._totalReleased++;
 
+    // Draining: the released connection is closed instead of being reused.
+    if (this.draining) {
+      await this.destroyEntry(entry).catch(() => {});
+      return;
+    }
+
     const waiter = this.waitQueue.shift();
     if (waiter) {
       clearTimeout(waiter.timer);
@@ -144,7 +159,14 @@ export class ConnectionPool<T> {
     }
   }
 
-  async drain(): Promise<void> {
+  /**
+   * Graceful shutdown: stops handing out connections, destroys idle ones
+   * immediately, and WAITS for in-use connections to be released (each is
+   * destroyed on release) so in-flight queries aren't cut off. After
+   * `timeoutMs` (default 30s) any connection still checked out is destroyed
+   * forcibly and drain resolves.
+   */
+  async drain(timeoutMs = 30_000): Promise<void> {
     this.draining = true;
     if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
 
@@ -154,11 +176,37 @@ export class ConnectionPool<T> {
     }
     this.waitQueue = [];
 
-    const destroyPromises = this.pool.map((entry) => this.factory.destroy(entry.connection));
-    await Promise.allSettled(destroyPromises);
+    // Idle connections go now; in-use ones are destroyed as they're released.
+    await Promise.allSettled(
+      this.pool.filter((e) => !e.inUse).map((e) => this.destroyEntry(e)),
+    );
 
-    this._totalDestroyed += this.pool.length;
-    this.pool = [];
+    if (this.pool.length > 0) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, timeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+        const done = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        this.drainWaiters.push(done);
+      });
+    }
+
+    // Timed out: force-close whatever is still checked out.
+    await Promise.allSettled([...this.pool].map((e) => this.destroyEntry(e)));
+    this.drainWaiters = [];
+  }
+
+  private async destroyEntry(entry: PooledConnection<T>): Promise<void> {
+    if (!this.removeEntry(entry)) return;
+    try {
+      await this.factory.destroy(entry.connection);
+    } finally {
+      if (this.draining && this.pool.length === 0) {
+        for (const w of this.drainWaiters) w();
+      }
+    }
   }
 
   getStats() {
@@ -178,13 +226,19 @@ export class ConnectionPool<T> {
     return this.draining;
   }
 
-  private async createConnection(): Promise<T> {
-    const connection = await this.factory.create();
+  private async createConnection(inUse = false): Promise<T> {
+    this.creating++;
+    let connection: T;
+    try {
+      connection = await this.factory.create();
+    } finally {
+      this.creating--;
+    }
     const entry: PooledConnection<T> = {
       connection,
       createdAt: Date.now(),
       lastUsedAt: Date.now(),
-      inUse: false,
+      inUse,
       healthy: true,
     };
     this.pool.push(entry);
@@ -192,18 +246,26 @@ export class ConnectionPool<T> {
     return connection;
   }
 
+  private removeEntry(entry: PooledConnection<T>): boolean {
+    // Indices captured before an await go stale (acquire/drain mutate the pool),
+    // so always locate the entry again.
+    const idx = this.pool.indexOf(entry);
+    if (idx === -1) return false;
+    this.pool.splice(idx, 1);
+    this._totalDestroyed++;
+    return true;
+  }
+
   private async runHealthChecks(): Promise<void> {
     const now = Date.now();
     const idleTimeoutMs = this.config.idleTimeout * 1000;
 
-    for (let i = this.pool.length - 1; i >= 0; i--) {
-      const entry = this.pool[i];
+    for (const entry of [...this.pool].reverse()) {
+      if (!this.pool.includes(entry)) continue;
 
       if (!entry.inUse) {
         if (now - entry.lastUsedAt > idleTimeoutMs && this.pool.length > this.config.min) {
-          await this.factory.destroy(entry.connection);
-          this.pool.splice(i, 1);
-          this._totalDestroyed++;
+          if (this.removeEntry(entry)) await this.factory.destroy(entry.connection).catch(() => {});
           continue;
         }
 
@@ -214,10 +276,9 @@ export class ConnectionPool<T> {
             entry.healthy = false;
           }
 
-          if (!entry.healthy) {
-            await this.factory.destroy(entry.connection);
-            this.pool.splice(i, 1);
-            this._totalDestroyed++;
+          // The entry may have been acquired while validate() was pending.
+          if (!entry.healthy && !entry.inUse && this.removeEntry(entry)) {
+            await this.factory.destroy(entry.connection).catch(() => {});
           }
         }
       }

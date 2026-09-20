@@ -43,6 +43,7 @@ export function createStreamingMetadata(
   metadataPromise: Promise<HeadMetadata> | HeadMetadata,
   route: ResolvedRoute,
   timeoutMs: number = 50,
+  cspNonce?: string,
 ): StreamingMetadataResult {
   // If metadata is already resolved (sync), return real tags
   if (!(metadataPromise instanceof Promise)) {
@@ -72,13 +73,13 @@ export function createStreamingMetadata(
     if (!result.timedOut && result.metadata) {
       // Metadata resolved in time — no injection needed, placeholder was already correct
       // But we used a placeholder, so we need to inject the real tags
-      return createMetadataInjectorScript(result.metadata);
+      return createMetadataInjectorScript(result.metadata, cspNonce);
     }
 
     // Timed out — wait for the real metadata and inject when ready
     try {
       const metadata = await metadataPromise;
-      return createMetadataInjectorScript(metadata);
+      return createMetadataInjectorScript(metadata, cspNonce);
     } catch {
       return '';
     }
@@ -107,7 +108,7 @@ export function renderPlaceholderHead(route: ResolvedRoute): string {
  * Creates an inline <script> that replaces placeholder title/meta tags
  * with the real metadata values. Runs immediately when parsed.
  */
-export function createMetadataInjectorScript(metadata: HeadMetadata): string {
+export function createMetadataInjectorScript(metadata: HeadMetadata, cspNonce?: string): string {
   const updates: string[] = [];
 
   if (metadata.title) {
@@ -197,7 +198,10 @@ export function createMetadataInjectorScript(metadata: HeadMetadata): string {
 
   if (scriptLines.length === 0) return '';
 
-  return `<script>(function(){${scriptLines.join('\n')}})();</script>`;
+  // Inline executable script — needs the request's CSP nonce to run under a
+  // strict script-src policy (no 'unsafe-inline').
+  const nonceAttr = cspNonce ? ` nonce="${cspNonce}"` : '';
+  return `<script${nonceAttr}>(function(){${scriptLines.join('\n')}})();</script>`;
 }
 
 function escapeHtml(str: string): string {

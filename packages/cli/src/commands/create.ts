@@ -58,14 +58,13 @@ export async function createCommand(
 function tryResolveCreateApp(): string | null {
   try {
     const req = createRequire(import.meta.url);
-    // Resolve to the bin entry of create-pledge-app
+    // Resolve to the bin entry of create-pledge-app — bin/create-pledge-app.js
+    // actually invokes createApp(); dist/index.js only exports it, so spawning
+    // the library entry would exit 0 without scaffolding anything.
     const pkgPath = req.resolve('create-pledge-app/package.json');
     const pkgDir = dirname(pkgPath);
-    const binPath = join(pkgDir, 'dist', 'index.js');
+    const binPath = join(pkgDir, 'bin', 'create-pledge-app.js');
     if (existsSync(binPath)) return binPath;
-    // Try alternative bin locations
-    const altBinPath = join(pkgDir, 'bin', 'index.js');
-    if (existsSync(altBinPath)) return altBinPath;
     return null;
   } catch {
     return null;

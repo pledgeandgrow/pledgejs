@@ -1,87 +1,110 @@
 {
   "name": "pledgestack",
-  "version": "0.1.12",
+  "version": "1.0.0-rc.0",
   "description": "A full-stack React framework with file-based routing, SSR, SSG, RSC, API routes, and edge runtime support.",
-  "type": "module",
-  "bin": {
-    "pledge": "dist/bin.js"
+  "keywords": [
+    "pledgestack",
+    "react",
+    "framework",
+    "ssr",
+    "ssg",
+    "rsc",
+    "file-based-routing",
+    "edge",
+    "fullstack",
+    "nextjs-alternative"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
   },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/cli"
+  },
+  "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./server": {
-      "import": "./dist/server.js",
-      "types": "./dist/server.d.ts"
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
     },
     "./client": {
-      "import": "./dist/client.js",
-      "types": "./dist/client.d.ts"
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
     },
     "./auth": {
-      "import": "./dist/auth.js",
-      "types": "./dist/auth.d.ts"
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js"
     },
     "./state": {
-      "import": "./dist/state.js",
-      "types": "./dist/state.d.ts"
+      "types": "./dist/state.d.ts",
+      "import": "./dist/state.js"
     },
     "./api": {
-      "import": "./dist/api.js",
-      "types": "./dist/api.d.ts"
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
     },
     "./a11y": {
-      "import": "./dist/a11y.js",
-      "types": "./dist/a11y.d.ts"
+      "types": "./dist/a11y.d.ts",
+      "import": "./dist/a11y.js"
     },
     "./overlay": {
-      "import": "./dist/overlay.js",
-      "types": "./dist/overlay.d.ts"
+      "types": "./dist/overlay.d.ts",
+      "import": "./dist/overlay.js"
     },
     "./seo": {
-      "import": "./dist/seo.js",
-      "types": "./dist/seo.d.ts"
+      "types": "./dist/seo.d.ts",
+      "import": "./dist/seo.js"
     },
     "./image": {
-      "import": "./dist/image.js",
-      "types": "./dist/image.d.ts"
+      "types": "./dist/image.d.ts",
+      "import": "./dist/image.js"
     },
     "./font": {
-      "import": "./dist/font.js",
-      "types": "./dist/font.d.ts"
+      "types": "./dist/font.d.ts",
+      "import": "./dist/font.js"
     },
     "./mdx": {
-      "import": "./dist/mdx.js",
-      "types": "./dist/mdx.d.ts"
+      "types": "./dist/mdx.d.ts",
+      "import": "./dist/mdx.js"
     },
     "./og": {
-      "import": "./dist/og.js",
-      "types": "./dist/og.d.ts"
+      "types": "./dist/og.d.ts",
+      "import": "./dist/og.js"
     },
     "./sitemap": {
-      "import": "./dist/sitemap.js",
-      "types": "./dist/sitemap.d.ts"
+      "types": "./dist/sitemap.d.ts",
+      "import": "./dist/sitemap.js"
     },
     "./rss": {
-      "import": "./dist/rss.js",
-      "types": "./dist/rss.d.ts"
+      "types": "./dist/rss.d.ts",
+      "import": "./dist/rss.js"
     },
     "./ws": {
-      "import": "./dist/ws.js",
-      "types": "./dist/ws.d.ts"
+      "types": "./dist/ws.d.ts",
+      "import": "./dist/ws.js"
     },
     "./adapters": {
-      "import": "./dist/adapters.js",
-      "types": "./dist/adapters.d.ts"
+      "types": "./dist/adapters.d.ts",
+      "import": "./dist/adapters.js"
     },
     "./privacy": {
-      "import": "./dist/privacy.js",
-      "types": "./dist/privacy.d.ts"
+      "types": "./dist/privacy.d.ts",
+      "import": "./dist/privacy.js"
     },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "pledge": "dist/bin.js"
   },
   "files": [
     "dist",
@@ -89,9 +112,6 @@
     "README.md",
     "LICENSE"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
@@ -101,13 +121,18 @@
     "prepublishOnly": "pnpm clean && pnpm build && node scripts/prepublish.mjs"
   },
   "dependencies": {
-    "pledgepack": "^0.3.2",
+    "create-pledge-app": "workspace:*",
+    "pledgepack": "^0.3.3",
     "jiti": "^2.4.0",
     "esbuild": "^0.24.0",
     "tailwindcss": "^4.0.0",
     "@tailwindcss/postcss": "^4.0.0",
     "postcss": "^8.4.0",
     "autoprefixer": "^10.4.0"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
@@ -141,34 +166,10 @@
     "pledgestack-deploy": "workspace:*",
     "pledgestack-content": "workspace:*"
   },
-  "peerDependencies": {
-    "react": ">=19.0.0",
-    "react-dom": ">=19.0.0"
-  },
   "engines": {
     "node": ">=20.0.0"
   },
-  "license": "MIT",
-  "author": "PledgeStack Contributors",
-  "homepage": "https://github.com/pledgeandgrow/pledgejs#readme",
-  "bugs": {
-    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/pledgeandgrow/pledgejs.git",
-    "directory": "packages/cli"
-  },
-  "keywords": [
-    "pledgestack",
-    "react",
-    "framework",
-    "ssr",
-    "ssg",
-    "rsc",
-    "file-based-routing",
-    "edge",
-    "fullstack",
-    "nextjs-alternative"
-  ]
+  "publishConfig": {
+    "access": "public"
+  }
 }

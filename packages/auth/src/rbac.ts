@@ -67,14 +67,17 @@ export class RBACManager {
   /**
    * Get all permissions for a role, including inherited ones.
    */
-  getRolePermissions(roleName: string): string[] {
+  getRolePermissions(roleName: string, visited: Set<string> = new Set()): string[] {
+    // Guard against circular `inherits` chains (a -> b -> a).
+    if (visited.has(roleName)) return [];
+    visited.add(roleName);
     const role = this.roles.get(roleName);
     if (!role) return [];
 
     const permissions = new Set<string>(role.permissions ?? []);
 
     if (role.inherits) {
-      for (const p of this.getRolePermissions(role.inherits)) {
+      for (const p of this.getRolePermissions(role.inherits, visited)) {
         permissions.add(p);
       }
     }

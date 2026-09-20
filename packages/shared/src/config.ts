@@ -61,12 +61,32 @@ export interface PledgeConfig {
   csrf?: boolean;
   /** Partial Prerendering — prerender static shell at build time, stream dynamic holes at request time (default: false) */
   ppr?: boolean;
-  /** Bot detection — auto-detect and challenge bots (default: false) */
+  /** Bot detection — auto-detect and challenge bots (default: false — UA heuristics false-positive too easily for a safe default) */
   botDetection?: boolean;
-  /** Rate limiting — auto-apply rate limiting to all requests (default: false) */
+  /**
+   * Rate limiting. `true`/object enables limiting on ALL requests; the object
+   * sets maxTokens/refillRate. Regardless of this setting, the server-action
+   * RPC endpoint is always rate limited (default 100 burst / 2 per second per
+   * client) unless `rateLimit: false` disables that too.
+   */
   rateLimit?: boolean | { maxTokens?: number; refillRate?: number };
-  /** Brute force protection — auto-protect auth endpoints (default: false) */
+  /** Brute force protection — auto-protect auth endpoints (/login, /auth/*). Default: true. */
   bruteForceProtection?: boolean;
+  /**
+   * Trusted reverse-proxy addresses (IPs or IPv4 CIDRs, e.g.
+   * `['10.0.0.0/8', '203.0.113.10']`). Client-supplied forwarding headers
+   * (`X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto`) are only honored
+   * when the direct peer is trusted — when unset, only private/loopback
+   * peers are trusted. Set this when running behind Cloudflare, a public
+   * load balancer, or an ingress whose address isn't in a private range.
+   */
+  trustedProxies?: string[];
+  /**
+   * Supply-chain audit at `pledge build` time: 'warn' (default) scans for
+   * leaked secrets and license violations and prints warnings; 'strict'
+   * fails the build on findings; 'off' disables the scan.
+   */
+  supplyChain?: 'off' | 'warn' | 'strict';
   /** CDN cache purge — run after a successful `pledge build` if configured */
   cdn?: CdnConfig;
   /** Geo-restriction — block or allow requests by country at the edge (Cloudflare/Vercel/Deno adapters) */
@@ -80,6 +100,40 @@ export interface PledgeConfig {
    * built-in default policy when omitted.
    */
   csp?: Record<string, string>;
+  /**
+   * Emit the framework CSP as `Content-Security-Policy-Report-Only` instead
+   * of enforcing it (default: false). Violation reports are collected by the
+   * built-in `/__pledge__/csp-report` endpoint — use this to trial strict CSP
+   * on an existing app before enforcing.
+   */
+  cspReportOnly?: boolean;
+  /**
+   * External hosts `redirect()` may send users to. Relative paths and
+   * same-origin absolute URLs are always allowed; anything else requires an
+   * explicit host entry (e.g. `['accounts.google.com']` for an OAuth flow).
+   * Prevents open-redirect abuse of `redirect(searchParams.get('next'))`.
+   */
+  allowedRedirects?: string[];
+  /**
+   * Additional paths covered by brute-force protection, beyond the built-in
+   * auth endpoints (/login, /auth/*, /signup, /register, /reset*,
+   * /forgot-password, /verify, /otp). Matched exactly or as a path prefix
+   * (entry + '/').
+   */
+  authPaths?: string[];
+  /**
+   * Mask 403 responses as 404 (default: false). Prevents attackers from
+   * enumerating protected resources by probing — the existence of a route
+   * is not revealed by a different status code.
+   */
+  maskForbidden?: boolean;
+  /**
+   * HTTP-level response compression (default: true). Responses that mutate
+   * credentials (any Set-Cookie) always skip compression regardless — the
+   * BREACH side-channel leaks body secrets via compressed length. Set to
+   * false to disable compression entirely.
+   */
+  compression?: boolean;
   /**
    * Environment variable validation schema. When set, `pledge build` and
    * `pledge start` validate required env vars before proceeding, failing
@@ -433,7 +487,10 @@ export function validateConfig(config: PledgeConfig): string[] {
   }
 
   if (config.framework) {
-    const validFrameworks: Framework[] = ['react', 'vue', 'solid', 'svelte'];
+    // 'pledge' is the full-stack React + Rust backend mode (PledgePack's
+    // adapter-pledgestack scans server/api/*.rs); its UI renders via the
+    // React adapter.
+    const validFrameworks: Framework[] = ['react', 'vue', 'solid', 'svelte', 'pledge'];
     if (!validFrameworks.includes(config.framework)) {
       errors.push(`config.framework must be one of: ${validFrameworks.join(', ')} (got: "${config.framework}")`);
     }
@@ -479,6 +536,43 @@ export function validateConfig(config: PledgeConfig): string[] {
       }
     } else if (typeof config.rateLimit !== 'boolean') {
       errors.push('config.rateLimit must be a boolean or an object with maxTokens/refillRate');
+    }
+  }
+
+  // Trusted proxies must be an array of IP/CIDR strings
+  if (config.trustedProxies !== undefined) {
+    if (!Array.isArray(config.trustedProxies)) {
+      errors.push('config.trustedProxies must be an array of IP or CIDR strings');
+    } else {
+      for (const proxy of config.trustedProxies) {
+        if (typeof proxy !== 'string' || proxy.length === 0) {
+          errors.push('config.trustedProxies entries must be non-empty strings');
+          break;
+        }
+      }
+    }
+  }
+
+  // Supply-chain mode
+  if (config.supplyChain !== undefined && !['off', 'warn', 'strict'].includes(config.supplyChain)) {
+    errors.push(`config.supplyChain must be one of: off, warn, strict (got: "${config.supplyChain}")`);
+  }
+
+  // Newer security options
+  if (config.cspReportOnly !== undefined && typeof config.cspReportOnly !== 'boolean') {
+    errors.push('config.cspReportOnly must be a boolean if provided');
+  }
+  if (config.maskForbidden !== undefined && typeof config.maskForbidden !== 'boolean') {
+    errors.push('config.maskForbidden must be a boolean if provided');
+  }
+  if (config.compression !== undefined && typeof config.compression !== 'boolean') {
+    errors.push('config.compression must be a boolean if provided');
+  }
+  for (const [field, value] of [['allowedRedirects', config.allowedRedirects], ['authPaths', config.authPaths]] as const) {
+    if (value !== undefined) {
+      if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || v.length === 0)) {
+        errors.push(`config.${field} must be an array of non-empty strings`);
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server, request as httpRequest } from 'node:http';
 import { join, extname, sep } from 'node:path';
 import { createHash } from 'node:crypto';
+import { timingSafeEqualStr } from 'pledgestack-shared';
 import type { PledgeConfig, BundlerAdapter } from 'pledgestack-shared';
 import { createRequestHandler } from './handler';
 import { tryServePledgeVirtual, tryServeRouterModule } from './virtual-modules';
@@ -11,7 +12,10 @@ import { staticAssetHeaders } from './mime-types';
 import { createHealthCheck } from './health';
 import { createMetricsCollector, createMetricsMiddleware } from './metrics';
 import { validateHost } from './dns-rebinding';
+import { isRemoteTrusted } from './trusted-proxy';
 import { setupGracefulShutdown } from './graceful-shutdown';
+import { createWsUpgradeHandler, type WsRouteHandler, type WsUpgradeOptions } from './ws-upgrade';
+import { createHMRWatcher, type HMRWatcher } from './hmr';
 
 export interface NodeServerOptions {
   config: PledgeConfig;
@@ -22,6 +26,16 @@ export interface NodeServerOptions {
   pledgepackPort?: number;
   /** Optional bundler adapter — if provided, used for module transforms instead of legacy transformFile */
   adapter?: BundlerAdapter;
+  /**
+   * App WebSocket routes keyed by exact pathname (e.g. `/ws/chat`), served on
+   * upgrade using the optional `ws` peer dependency. Handlers are
+   * `pledgestack-ws` WebSocketRoute objects (createAuthenticatedWSRoute works).
+   */
+  wsRoutes?: Record<string, WsRouteHandler>;
+  /** Optional pre-upgrade auth; null/throw => 401 and the socket is destroyed. */
+  wsAuthenticate?: WsUpgradeOptions['authenticate'];
+  /** @internal test hook: override the lazy `ws` loader. */
+  wsLoader?: WsUpgradeOptions['loadWs'];
 }
 
 /**
@@ -35,9 +49,63 @@ export interface NodeServerOptions {
  * In production mode:
  *   - All requests handled by Node.js from pre-bundled output
  */
+
+/**
+ * Whether a public/ pathname contains a dotfile segment that must not be
+ * served. Everything under /.well-known/ stays public (security.txt, ACME
+ * challenges); any other `.` segment (.env, .git, .htaccess, .DS_Store) is
+ * blocked — these files land in public/ by accident, not intent.
+ */
+export function isBlockedDotPath(pathname: string): boolean {
+  const segments = pathname.split('/').filter(Boolean);
+  if (!segments.some((s) => s.startsWith('.'))) return false;
+  return segments[0] !== '.well-known';
+}
+
+/**
+ * Write an error response with baseline security headers. Raw adapter
+ * writeHead paths bypass the handler's security pipeline, so error bodies
+ * (which can echo request-derived text) must still carry nosniff/no-store.
+ */
+function writeError(
+  res: ServerResponse,
+  status: number,
+  body: string,
+  contentType = 'text/plain',
+): void {
+  res.writeHead(status, {
+    'Content-Type': contentType,
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
 export function startNodeServer(options: NodeServerOptions) {
-  const { config, port = 3000, hostname = 'localhost', isDev = false, pledgepackPort, adapter } = options;
-  const { handler } = createRequestHandler({ config, isDev, pledgepackPort, adapter });
+  const { config, port = 3000, hostname = 'localhost', isDev = false, pledgepackPort, adapter, wsRoutes = {}, wsAuthenticate, wsLoader } = options;
+  const { handler, invalidate } = createRequestHandler({ config, isDev, pledgepackPort, adapter });
+
+  // Dev-mode SSR invalidation: the handler's module loader caches transformed
+  // modules per request context, but nothing cleared it on file change — edits
+  // were invisible until server restart. The bundler's own watcher covers
+  // client HMR; this covers the Node-side SSR module graph. Watches rootDir
+  // (not just appDir) so routes importing lib/, components/, or config files
+  // outside the app dir also invalidate; createHMRWatcher ignores
+  // .pledge-cache writes so transform output doesn't retrigger invalidation.
+  let devWatcher: HMRWatcher | null = null;
+  if (isDev) {
+    try {
+      devWatcher = createHMRWatcher({
+        watchDir: config.rootDir,
+        onChange: () => invalidate(),
+      });
+      devWatcher.start();
+    } catch {
+      // Recursive fs.watch unavailable (unsupported platform/fs) — dev SSR
+      // serves stale modules until restart; client HMR still works.
+      devWatcher = null;
+    }
+  }
 
   const proxyTarget = pledgepackPort ? `http://${hostname}:${pledgepackPort}` : null;
 
@@ -66,8 +134,7 @@ export function startNodeServer(options: NodeServerOptions) {
       if (isDev) {
         const host = req.headers['host'];
         if (!validateHost(host)) {
-          res.writeHead(403, { 'Content-Type': 'text/plain' });
-          res.end('DNS rebinding detected');
+          writeError(res, 403, 'DNS rebinding detected');
           return;
         }
       }
@@ -86,9 +153,8 @@ export function startNodeServer(options: NodeServerOptions) {
         const metricsToken = process.env.PLEDGE_METRICS_TOKEN;
         if (metricsToken) {
           const auth = req.headers['authorization'];
-          if (auth !== `Bearer ${metricsToken}`) {
-            res.writeHead(401, { 'Content-Type': 'text/plain' });
-            res.end('Unauthorized');
+          if (typeof auth !== 'string' || !timingSafeEqualStr(auth, `Bearer ${metricsToken}`)) {
+            writeError(res, 401, 'Unauthorized');
             return;
           }
         }
@@ -124,8 +190,7 @@ export function startNodeServer(options: NodeServerOptions) {
         for await (const chunk of req) {
           totalSize += (chunk as Buffer).length;
           if (totalSize > MAX_BODY_SIZE) {
-            res.writeHead(413, { 'Content-Type': 'text/plain' });
-            res.end('Request body too large');
+            writeError(res, 413, 'Request body too large');
             return;
           }
           chunks.push(chunk as Buffer);
@@ -134,12 +199,42 @@ export function startNodeServer(options: NodeServerOptions) {
       }
 
       const metricsStartTime = metricsMiddleware.requestStart(req.method ?? 'GET', url.pathname);
-      const response = await handler({ url, method: req.method ?? 'GET', headers: req.headers as Record<string, string>, body });
+      const remoteAddress = req.socket.remoteAddress;
+      const response = await handler({ url, method: req.method ?? 'GET', headers: req.headers as Record<string, string>, body, remoteAddress });
       metricsMiddleware.requestEnd(req.method ?? 'GET', url.pathname, response.status, metricsStartTime);
 
-      // Auto-apply security headers to all responses
-      const isHttps = req.headers['x-forwarded-proto'] === 'https' || (req.socket as { encrypted?: boolean }).encrypted === true;
-      const headers: Record<string, string | string[]> = applySecurityHeaders({ ...response.headers }, config, isHttps);
+      // Auto-apply security headers to all responses. x-forwarded-proto is
+      // honored only from a trusted peer — otherwise any client could claim
+      // HTTPS and (worse) influence Secure-cookie decisions downstream.
+      const remoteTrusted = isRemoteTrusted(remoteAddress, config.trustedProxies);
+      const isHttps = (req.socket as { encrypted?: boolean }).encrypted === true
+        || (remoteTrusted && req.headers['x-forwarded-proto'] === 'https');
+      // In dev, the bundler dev server serves module/HMR assets from its own
+      // origin — allow it in CSP so strict script-src doesn't break HMR.
+      const cspExtras = isDev && pledgepackPort
+        ? {
+            scriptSrc: [`http://${hostname}:${pledgepackPort}`, `http://localhost:${pledgepackPort}`],
+            connectSrc: [
+              `http://${hostname}:${pledgepackPort}`, `http://localhost:${pledgepackPort}`,
+              `ws://${hostname}:${pledgepackPort}`, `ws://localhost:${pledgepackPort}`,
+            ],
+            allowEval: true,
+          }
+        : { allowEval: isDev };
+      const headers: Record<string, string | string[]> = applySecurityHeaders(
+        { ...response.headers },
+        config,
+        isHttps,
+        {
+          cspNonce: response.cspNonce,
+          reportOnly: config.cspReportOnly === true,
+          reportUri: '/__pledge__/csp-report',
+          ...cspExtras,
+        },
+      );
+      // Dev servers are discoverable — keep them out of search indexes even
+      // if the port leaks to the public internet.
+      if (isDev) headers['X-Robots-Tag'] = 'noindex, nofollow';
       // Emit each Set-Cookie as its own header (Node's writeHead accepts an
       // array value for a header field).
       if (response.cookies && response.cookies.length > 0) {
@@ -155,7 +250,20 @@ export function startNodeServer(options: NodeServerOptions) {
           responseBody = Buffer.from(response.body, 'base64');
         } else {
           const acceptEncoding = req.headers['accept-encoding'] as string | undefined;
-          if (acceptEncoding) {
+          // BREACH mitigation: HTTP-level compression of a body containing a
+          // secret + attacker-reflected input leaks the secret via length
+          // side-channel. Responses that mutate credentials (Set-Cookie) are
+          // the riskiest class — they're the moments apps also render
+          // token-bearing HTML — so they skip compression entirely. The
+          // framework's own `pledge_at` action-token cookie is exempt: it is
+          // a constant anti-CSRF marker, not a user credential. Steady pages
+          // without credential Set-Cookie still compress.
+          // config.compression === false is the global opt-out.
+          const credentialMutation = (response.cookies ?? []).some(
+            (c) => !c.startsWith('pledge_at='),
+          );
+          const compressionEnabled = config.compression !== false && !credentialMutation;
+          if (acceptEncoding && compressionEnabled) {
             const { body: compressed, encoding } = compressResponse(response.body, acceptEncoding);
             if (encoding) {
               responseBody = compressed;
@@ -171,7 +279,11 @@ export function startNodeServer(options: NodeServerOptions) {
       }
 
       res.writeHead(response.status, headers);
-      if (responseBody !== null) {
+      if (req.method === 'HEAD') {
+        // HEAD must return headers only — Content-Length still reflects the
+        // would-be body, but nothing is written to the socket.
+        res.end();
+      } else if (responseBody !== null) {
         res.end(responseBody);
       } else if (response.body && typeof response.body !== 'string') {
         // ReadableStream body — pipe it through with backpressure handling.
@@ -224,9 +336,15 @@ export function startNodeServer(options: NodeServerOptions) {
   </div>
 </body>
 </html>`;
-      res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(errorHtml);
+      writeError(res, 500, errorHtml, 'text/html; charset=utf-8');
     }
+  });
+
+  const wsUpgrade = createWsUpgradeHandler({
+    routes: wsRoutes,
+    allowedOrigins: config.cors?.origins ?? [],
+    authenticate: wsAuthenticate,
+    loadWs: wsLoader,
   });
 
   // WebSocket upgrade handler — supports HMR proxy and app WebSocket routes
@@ -235,41 +353,22 @@ export function startNodeServer(options: NodeServerOptions) {
     // PledgePack HMR
     if (upgradeUrl.includes('/__pledge_hmr')) {
       if (proxyTarget) proxyUpgrade(req, socket, head, proxyTarget);
+      else socket.destroy();
       return;
     }
     // Vite HMR
     if (upgradeUrl.includes('/__vite') || upgradeUrl.includes('/__vite_hmr')) {
       if (proxyTarget) proxyUpgrade(req, socket, head, proxyTarget);
+      else socket.destroy();
       return;
     }
     // App WebSocket routes (ws://host/ws/*)
     if (upgradeUrl.startsWith('/ws/')) {
-      // WebSocket route handling is done via the pledgestack-ws plugin
-      // The actual WebSocket server is created by the plugin's configureServer hook.
-      // Validate Origin header to prevent CSRF-WS attacks — any origin should
-      // not be able to initiate a WebSocket connection.
-      const origin = req.headers['origin'];
-      if (origin) {
-        try {
-          const originUrl = new URL(origin);
-          const host = req.headers['host'];
-          // Reject cross-origin WebSocket upgrades unless explicitly allowed.
-          if (host && originUrl.host !== host) {
-            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-            socket.destroy();
-            return;
-          }
-        } catch {
-          socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-          socket.destroy();
-          return;
-        }
-      }
-      // If no WS plugin is configured, close the connection gracefully.
-      socket.write('HTTP/1.1 501 Not Implemented\r\n\r\n');
-      socket.destroy();
+      void wsUpgrade(req, socket, head);
       return;
     }
+    // Unknown upgrade target — don't leave the socket dangling.
+    socket.destroy();
   });
 
   server.listen(port, hostname, async () => {
@@ -303,6 +402,11 @@ export function startNodeServer(options: NodeServerOptions) {
   // Register server with graceful shutdown (push to array captured by closure)
   shutdownServers.push(server);
 
+  if (devWatcher) {
+    const w = devWatcher;
+    server.on('close', () => w.stop());
+  }
+
   return server;
 }
 
@@ -333,16 +437,14 @@ function proxyRequest(req: IncomingMessage, res: ServerResponse, target: string)
   proxyReq.on('error', (err) => {
     console.error('[pledgestack] Proxy error:', err);
     if (!res.headersSent) {
-      res.writeHead(502, { 'Content-Type': 'text/plain' });
-      res.end('Bad Gateway — bundler dev server unavailable');
+      writeError(res, 502, 'Bad Gateway — bundler dev server unavailable');
     }
   });
   proxyReq.on('timeout', () => {
     console.error('[pledgestack] Proxy timeout — bundler dev server not responding');
     proxyReq.destroy();
     if (!res.headersSent) {
-      res.writeHead(504, { 'Content-Type': 'text/plain' });
-      res.end('Gateway Timeout — bundler dev server not responding');
+      writeError(res, 504, 'Gateway Timeout — bundler dev server not responding');
     }
   });
   req.pipe(proxyReq);
@@ -395,12 +497,27 @@ async function tryServeStatic(
   const rawUrl = _req.url ?? '/';
   if (rawUrl === '/' || rawUrl.includes('/__pledge__/')) return false;
 
-  const pathname = decodeURIComponent(new URL(rawUrl, 'http://localhost').pathname);
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(new URL(rawUrl, 'http://localhost').pathname);
+  } catch {
+    // Malformed percent-escape — a client error, not a server fault.
+    writeError(res, 400, 'Bad Request');
+    return true;
+  }
 
   // Path traversal protection — reject paths containing .. or null bytes
   if (pathname.includes('..') || pathname.includes('\0')) {
-    res.writeHead(403, { 'Content-Type': 'text/plain' });
-    res.end('Forbidden');
+    writeError(res, 403, 'Forbidden');
+    return true;
+  }
+
+  // Dotfile protection — public/ contents are addressable verbatim, so a
+  // stray .env/.git/.htaccess dropped into the directory would be served
+  // raw. Deny every dot-segment except the standardized /.well-known/
+  // (security.txt, ACME challenges), which is deliberately public.
+  if (isBlockedDotPath(pathname)) {
+    writeError(res, 404, 'Not Found');
     return true;
   }
 
@@ -436,6 +553,15 @@ async function tryServeStatic(
       Object.assign(headers, staticAssetHeaders(extname(filePath)));
     }
 
+    // SVG can carry <script> — served as image/svg+xml from our origin it
+    // executes in first-party context when navigated to directly. Public
+    // dirs accumulate uploaded/committed files, so neutralize scripting on
+    // the response itself. Embedded <img> use is unaffected (SVG in image
+    // context never runs scripts anyway).
+    if (ext === '.svg') {
+      headers['Content-Security-Policy'] = "script-src 'none'; object-src 'none'";
+    }
+
     // Cache-Control: immutable for hashed assets, short cache for HTML
     if (ext === '.html' || ext === '') {
       headers['Cache-Control'] = 'no-cache, must-revalidate';
@@ -468,6 +594,9 @@ function getContentType(ext: string): string {
     '.ico': 'image/x-icon',
     '.woff': 'font/woff',
     '.woff2': 'font/woff2',
+    // Plain text (incl. /.well-known/security.txt) — was octet-stream, which
+    // some clients download instead of displaying.
+    '.txt': 'text/plain; charset=utf-8',
   };
   return types[ext] ?? 'application/octet-stream';
 }

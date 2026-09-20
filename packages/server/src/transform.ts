@@ -2,26 +2,19 @@ import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, dirname, basename, extname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import {
-  transformPSX,
-  detectCratesFromImports,
-  generateModuleCargoToml,
-  ensureRootCargoToml,
-  serializeSourceMap,
-  mapRustErrors,
-  formatMappedError,
+  compilePSXModule,
   mapPanicToOriginal,
-  captureRustOutput,
-  formatCapturedOutput,
 } from 'pledgestack-core';
 import type { CargoConfig } from 'pledgestack-shared';
+import { generateVueModule } from './vue-script-setup';
 import {
   PLEDGEPACK_DEFAULT_PORT,
   fetchFromPledgepack,
   transformLocally,
   transformTsxLocally,
-  generateRustFallback,
   clearTransformCacheDir,
   BoundedLRUMap,
   MAX_TRANSFORM_CACHE_ENTRIES,
@@ -31,19 +24,6 @@ const TRANSFORM_CACHE = new BoundedLRUMap<string, string>(MAX_TRANSFORM_CACHE_EN
 
 /** Cache for source maps: moduleName → { entries, sourceFilePath } */
 const SOURCE_MAP_CACHE = new Map<string, { entries: import('pledgestack-core').SourceMapEntry[]; sourceFilePath: string }>();
-
-/** Track cargo compilation state for incremental builds */
-interface CompilationState {
-  /** Content hash of the last compiled Rust source */
-  hash: string;
-  /** Timestamp of last compilation */
-  compiledAt: number;
-  /** Whether the addon is currently compiling */
-  compiling: boolean;
-  /** Pending recompilation after current one finishes */
-  pendingRecompile: boolean;
-}
-const COMPILATION_STATE = new Map<string, CompilationState>();
 
 /**
  * Transforms a TypeScript/TSX file to JavaScript using PledgePack's Rust compiler (Oxc).
@@ -98,7 +78,9 @@ export async function transformFile(
   let transformedCode: string;
 
   if (isDev && port > 0) {
-    transformedCode = await fetchFromPledgepack(sourcePath, port, projectRoot, hostname);
+    transformedCode = stripBrowserHmr(
+      await fetchFromPledgepack(sourcePath, port, projectRoot, hostname),
+    );
   } else {
     transformedCode = await transformLocally(sourcePath, ext);
   }
@@ -122,6 +104,22 @@ export async function transformFile(
   const fileUrl = pathToFileURL(outPath).href;
   TRANSFORM_CACHE.set(cacheKey, fileUrl);
   return fileUrl;
+}
+
+/**
+ * Removes the browser-only HMR polyfill PledgePack's dev server prepends to
+ * every transformed module. The polyfill registers `import.meta.hot`
+ * callbacks on `window`, which doesn't exist when the module is imported
+ * for SSR — dev mode loads these modules in Node.
+ *
+ * The block is dead-coded rather than deleted: replacing the guard keeps the
+ * transform byte-identical in shape, and the trailing
+ * `if (import.meta.hot) { import.meta.hot.accept(); }` is already a no-op in
+ * Node (import.meta.hot is undefined).
+ */
+function stripBrowserHmr(code: string): string {
+  if (!code.includes('// Pledge HMR polyfill')) return code;
+  return code.replace('if (!import.meta.hot)', 'if (false)');
 }
 
 /**
@@ -154,63 +152,30 @@ async function transformPSXFile(
 ): Promise<string> {
   const projectRoot = rootDir ?? process.cwd();
   const ext = format === 'ps' ? '.ps' : '.psx';
-  const source = await readFile(sourcePath, 'utf-8');
   const moduleName = basename(sourcePath, ext);
-  const cacheDir = join(dirname(sourcePath), '.pledge-cache');
-  await mkdir(cacheDir, { recursive: true });
 
-  // Parse and generate artifacts
-  const result = transformPSX(source, {
-    moduleName,
-    compileRust: true,
-    addonPath: `./${moduleName}.node`,
+  // Shared pipeline (also used by the bundler load hooks): parse, write
+  // artifacts, cargo-build the addon (serialized + isolated per source file)
+  // and write the NAPI wrapper or the fallback stub.
+  const compiled = await compilePSXModule({
+    sourcePath,
     format,
+    isDev,
+    projectRoot,
+    cargoConfig,
+    // The transformed module is emitted next to the wrapper (<name>.napi.js).
+    wrapperImportPath: `./${moduleName}.napi.js`,
+    // #208 HMR: notify connected clients that the addon was recompiled.
+    onAddonBuilt: ({ moduleName: m, sourcePath: sp }) => notifyRustAddonReload(m, sp),
   });
+  const { result, cacheDir } = compiled;
 
-  // Write generated type definitions
-  if (result.types) {
-    const typesPath = join(cacheDir, `${moduleName}.d.ts`);
-    await writeFile(typesPath, result.types, 'utf-8');
-  }
-
-  // Write source map for error mapping (#207)
+  // Keep the source map for #210 error mapping
   if (result.sourceMap && result.sourceMap.length > 0) {
-    const sourceMapPath = join(cacheDir, `${moduleName}.psx.map.json`);
-    await writeFile(sourceMapPath, serializeSourceMap(result.sourceMap, moduleName), 'utf-8');
     SOURCE_MAP_CACHE.set(moduleName, {
       entries: result.sourceMap,
       sourceFilePath: sourcePath,
     });
-  }
-
-  // Write Rust source for cargo compilation
-  let addonReady = false;
-  if (result.needsRustCompile && result.rustSource) {
-    const rustDir = join(cacheDir, 'rust', moduleName);
-    await mkdir(rustDir, { recursive: true });
-    await writeFile(join(rustDir, 'lib.rs'), result.rustSource, 'utf-8');
-
-    // Ensure root Cargo.toml workspace exists (with profile config #213)
-    await ensureRootCargoToml(projectRoot, cargoConfig?.dev, cargoConfig?.release);
-
-    // Detect which crates this .psx file uses and generate workspace-inheriting Cargo.toml
-    const detectedCrates = detectCratesFromImports(result.parse.allImports);
-    const moduleCargoToml = generateModuleCargoToml(moduleName, detectedCrates);
-    await writeFile(join(rustDir, 'Cargo.toml'), moduleCargoToml, 'utf-8');
-
-    // Compile Rust to native addon (.node) with incremental cache (#214) and error mapping (#210)
-    addonReady = await compileRustAddon(rustDir, moduleName, cacheDir, isDev, sourcePath, cargoConfig, projectRoot);
-  }
-
-  // Write NAPI wrapper JS — point to compiled addon or fallback stub
-  if (result.napiWrapper) {
-    const wrapperPath = join(cacheDir, `${moduleName}.napi.js`);
-    if (addonReady) {
-      await writeFile(wrapperPath, result.napiWrapper, 'utf-8');
-    } else {
-      // Fallback stub — throws helpful error if Rust isn't compiled
-      await writeFile(wrapperPath, generateRustFallback(moduleName), 'utf-8');
-    }
   }
 
   // For .ps files (pure Rust), there's no TSX to transform — just use the NAPI wrapper
@@ -230,7 +195,9 @@ async function transformPSXFile(
     // Write TSX to temp file and fetch from PledgePack
     const tsxTempPath = join(cacheDir, `${moduleName}.tsx`);
     await writeFile(tsxTempPath, result.tsx, 'utf-8');
-    transformedCode = await fetchFromPledgepack(tsxTempPath, port, projectRoot, hostname);
+    transformedCode = stripBrowserHmr(
+      await fetchFromPledgepack(tsxTempPath, port, projectRoot, hostname),
+    );
   } else {
     transformedCode = await transformTsxLocally(result.tsx, isDev);
   }
@@ -244,221 +211,6 @@ async function transformPSXFile(
   const cacheKey = isDev ? `${sourcePath}:${Date.now()}` : sourcePath;
   TRANSFORM_CACHE.set(cacheKey, fileUrl);
   return fileUrl;
-}
-
-/**
- * Compiles a Rust crate to a NAPI native addon (.node) using cargo.
- *
- * Implements:
- * - #214: Incremental compilation cache — persistent cargo target dir across
- *   dev server restarts, content-hash invalidation, sccache integration
- * - #210: Rust→JS error mapping — cargo stderr parsed and mapped to .psx lines
- * - #211: println! → console.log bridge — stdout captured and attributed
- *
- * In dev mode, uses debug profile for faster compilation.
- * In production, uses release profile with LTO for maximum performance.
- *
- * Returns true if the addon was successfully compiled (or already up-to-date).
- */
-async function compileRustAddon(
-  rustDir: string,
-  moduleName: string,
-  cacheDir: string,
-  isDev: boolean,
-  sourceFilePath: string,
-  cargoConfig?: CargoConfig,
-  rootDir?: string,
-): Promise<boolean> {
-  const projectRoot = rootDir ?? process.cwd();
-  const { spawn } = await import('node:child_process');
-
-  // Check if cargo is available
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('cargo', ['--version'], { stdio: 'ignore' });
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`cargo exited with ${code}`));
-      });
-    });
-  } catch {
-    return false;
-  }
-
-  // ── #214: Incremental compilation cache ──────────────────────────────
-  // Use persistent cargo target directory across dev server restarts.
-  // The target dir is shared across all modules via the workspace.
-  // ── #213: Configurable via cargoConfig.targetDir ─────────────────────
-  const sharedTargetDir = cargoConfig?.targetDir ?? join(projectRoot, 'target');
-
-  // Check if addon already exists and is up-to-date (content hash)
-  const addonPath = join(cacheDir, `${moduleName}.node`);
-  const hashFile = join(cacheDir, `${moduleName}.node.hash`);
-  const currentHash = createHash('sha256')
-    .update(await readFile(join(rustDir, 'lib.rs'), 'utf-8'))
-    .digest('hex');
-
-  // Check compilation state — avoid duplicate concurrent compilations (#214)
-  const state = COMPILATION_STATE.get(moduleName);
-  if (state?.compiling) {
-    // Mark pending recompile — will be picked up after current compilation finishes
-    if (state.hash !== currentHash) {
-      state.pendingRecompile = true;
-    }
-    // Return existing addon if available, otherwise fallback
-    return existsSync(addonPath);
-  }
-
-  if (existsSync(addonPath) && existsSync(hashFile)) {
-    const savedHash = await readFile(hashFile, 'utf-8');
-    if (savedHash === currentHash) {
-      // Addon is up-to-date — skip compilation
-      return true;
-    }
-  }
-
-  // Mark as compiling
-  COMPILATION_STATE.set(moduleName, {
-    hash: currentHash,
-    compiledAt: 0,
-    compiling: true,
-    pendingRecompile: false,
-  });
-
-  // Compile with cargo
-  const profile = isDev ? 'dev' : 'release';
-  // ── #214: Use CARGO_TARGET_DIR for persistent cache across restarts ──
-  const cargoArgs = ['build', '--profile', profile];
-
-  // Set environment variables for incremental compilation (#214)
-  const cargoEnv: Record<string, string> = {
-    ...process.env,
-    CARGO_TARGET_DIR: sharedTargetDir,
-  };
-
-  // Enable sccache if available (#214) — can be disabled via config (#213)
-  const sccacheEnabled = cargoConfig?.sccache;
-  if (sccacheEnabled !== false) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const child = spawn('sccache', ['--version'], { stdio: 'ignore' });
-        child.on('error', reject);
-        child.on('close', (code) => {
-          if (code === 0) resolve();
-          else reject(new Error('sccache not found'));
-        });
-      });
-      cargoEnv.RUSTC_WRAPPER = 'sccache';
-    } catch {
-      // sccache not installed — continue without it
-    }
-  }
-
-  try {
-    const { stdout } = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      const timeoutMs = cargoConfig?.timeout ?? (isDev ? 30000 : 120000);
-      const child = spawn('cargo', cargoArgs, {
-        cwd: rustDir,
-        stdio: 'pipe',
-        timeout: timeoutMs,
-        env: cargoEnv,
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (data: Buffer) => { stdout += data.toString(); });
-      child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
-      child.on('error', reject);
-      child.on('close', (code, signal) => {
-        if (code === 0) resolve({ stdout, stderr });
-        else {
-          // ── #210: Map Rust errors to .psx/.ps source locations ───────
-          const sourceMapEntry = SOURCE_MAP_CACHE.get(moduleName);
-          if (sourceMapEntry) {
-            const mappedErrors = mapRustErrors(
-              stderr,
-              sourceMapEntry.entries,
-              moduleName,
-              sourceMapEntry.sourceFilePath,
-            );
-            for (const err of mappedErrors) {
-              console.error(formatMappedError(err, sourceMapEntry.sourceFilePath));
-            }
-          } else {
-            console.error(`[pledgestack] Rust compilation failed for ${moduleName}:`, stderr);
-          }
-          // PRODUCTION-READINESS-100.md goal 85: `code` is `null` whenever
-          // the process was killed by a signal instead of exiting normally
-          // — which is exactly what happens when Node's `timeout` option
-          // above fires (it sends SIGTERM). The old `cargo exited with
-          // ${code}` message rendered as the literally useless "cargo
-          // exited with null" in that case, with no indication a timeout
-          // was the cause. `signal` (Node's second `close` argument) tells
-          // us which case this actually is.
-          if (code === null && signal === 'SIGTERM') {
-            reject(new Error(`cargo build timed out after ${timeoutMs}ms`));
-          } else if (code === null) {
-            reject(new Error(`cargo was killed by signal ${signal ?? 'unknown'}`));
-          } else {
-            reject(new Error(`cargo exited with code ${code}`));
-          }
-        }
-      });
-    });
-
-    // ── #211: println! → console.log bridge ────────────────────────────
-    // Capture any stdout output from Rust compilation (e.g., println! in build scripts)
-    // and redirect to console with source attribution
-    if (stdout.trim()) {
-      const sourceMapEntry = SOURCE_MAP_CACHE.get(moduleName);
-      const sourcePath = sourceMapEntry?.sourceFilePath ?? sourceFilePath;
-      const captured = captureRustOutput(stdout, 'stdout', sourceMapEntry?.entries ?? [], sourcePath);
-      for (const line of formatCapturedOutput(captured)) {
-        console.log(line);
-      }
-    }
-
-    // Find the compiled .so/.dll/.dylib and copy as .node
-    // ── #214: Use shared target directory ──────────────────────────────
-    const targetDir = join(sharedTargetDir, isDev ? 'debug' : 'release');
-    const libName = `pledge_${moduleName}`;
-    const candidates = [
-      join(targetDir, `lib${libName}.so`),     // Linux
-      join(targetDir, `lib${libName}.dylib`),  // macOS
-      join(targetDir, `${libName}.dll`),       // Windows
-    ];
-
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) {
-        const { copyFile } = await import('node:fs/promises');
-        await copyFile(candidate, addonPath);
-        await writeFile(hashFile, currentHash, 'utf-8');
-
-        // Update compilation state
-        const s = COMPILATION_STATE.get(moduleName);
-        if (s) {
-          s.compiling = false;
-          s.compiledAt = Date.now();
-          s.hash = currentHash;
-        }
-
-        // ── #208: HMR — notify connected clients that Rust addon was recompiled ──
-        notifyRustAddonReload(moduleName, sourceFilePath);
-
-        return true;
-      }
-    }
-
-    console.error(`[pledgestack] Compiled addon not found for ${moduleName}`);
-    const s = COMPILATION_STATE.get(moduleName);
-    if (s) s.compiling = false;
-    return false;
-  } catch (err) {
-    // Compilation failed — return false so fallback stub is used
-    const s = COMPILATION_STATE.get(moduleName);
-    if (s) s.compiling = false;
-    return false;
-  }
 }
 
 /**
@@ -576,35 +328,35 @@ function parseVueSFC(source: string): VueSFCBlocks {
 }
 
 /**
- * Compiles a Vue template string into a render function using Vue's h().
- * This is a lightweight compiler that handles common template patterns.
- * For complex templates, the full @vue/compiler-sfc should be used.
+ * Compiles a Vue template with @vue/compiler-dom (resolved from the project
+ * first, then from this package). Returns the compiled render code
+ * (`mode: 'function'`, evaluated later against the `Vue` namespace), or null
+ * when the compiler is not installed.
  */
-function compileVueTemplate(template: string): string {
-  // Try to use @vue/compiler-dom if available
-  try {
-    // This is a synchronous require — if it fails, we fall back to manual
-    const { compile } = require('@vue/compiler-dom');
-    const { code } = compile(template, {
-      mode: 'function',
-      hoistStatic: true,
-    });
-    return code;
-  } catch {
-    // @vue/compiler-dom not available — generate a simple render function
-    // that renders the template as raw HTML via v-html
-    // This is a fallback; the real compilation happens in the bundler
-    const escaped = template.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
-    return `function render() { return { __html: '${escaped}' } }`;
+function compileVueTemplate(template: string, projectRoot: string): string | null {
+  const candidates = [join(projectRoot, 'package.json'), import.meta.url];
+  for (const base of candidates) {
+    try {
+      const req = createRequire(base);
+      const { compile } = req('@vue/compiler-dom') as {
+        compile: (t: string, o: Record<string, unknown>) => { code: string };
+      };
+      return compile(template, { mode: 'function', hoistStatic: true }).code;
+    } catch (err) {
+      // A template syntax error must surface; only "module not found" falls through.
+      if ((err as NodeJS.ErrnoException)?.code !== 'MODULE_NOT_FOUND') throw err;
+    }
   }
+  return null;
 }
 
 /**
  * Transforms a .vue SFC into a JS module that can be imported by Node.js.
  *
- * The generated module:
- *   1. Imports Vue's h() and defineComponent from 'vue'
- *   2. Evaluates the <script setup> or <script> block
+ * The generated module (see generateVueModule):
+ *   1. Imports Vue and hoists the imports of <script setup>
+ *   2. Runs the <script setup> body in setup() and returns every top-level
+ *      binding so the template can reference it
  *   3. Compiles the <template> into a render function
  *   4. Exports a default component definition
  */
@@ -614,94 +366,43 @@ async function transformVueSFC(
   // Reserved for dev-mode module URL rewriting / relative import resolution,
   // matching transformReactSFC's signature — not yet needed by this transform.
   _pledgepackPort: number | undefined,
-  _projectRoot: string,
+  projectRoot: string,
   _hostname?: string,
 ): Promise<string> {
   const source = await readFile(sourcePath, 'utf-8');
   const blocks = parseVueSFC(source);
   const moduleName = basename(sourcePath, '.vue');
 
-  // Build the JS module
-  const parts: string[] = [];
-
-  // Import Vue runtime
-  parts.push(`import { h, defineComponent, ref, reactive, computed, watch, onMounted, onUnmounted, createApp } from 'vue';`);
-
-  // Extract script setup logic — wrap in a setup() function
-  let setupCode = '';
-  let scriptExports = '';
-
-  if (blocks.scriptSetup) {
-    // <script setup> — all top-level bindings become setup() return values
-    setupCode = blocks.scriptSetup;
-  } else if (blocks.script) {
-    // Regular <script> — may export default
-    // Check if it has `export default`
-    if (blocks.script.includes('export default')) {
-      scriptExports = blocks.script;
-    } else {
-      setupCode = blocks.script;
-    }
+  // Regular <script> — with `export default` it is an options-API component,
+  // otherwise it runs as setup code.
+  let plainScript: string | null = null;
+  let scriptExports: string | null = null;
+  if (!blocks.scriptSetup && blocks.script) {
+    if (blocks.script.includes('export default')) scriptExports = blocks.script;
+    else plainScript = blocks.script;
   }
 
-  // Compile template
-  let renderFn = 'null';
-  if (blocks.template) {
-    const compiled = compileVueTemplate(blocks.template);
-    renderFn = compiled;
-  }
+  const compiledRender = blocks.template ? compileVueTemplate(blocks.template, projectRoot) : null;
+
+  const parts: string[] = [
+    generateVueModule({
+      moduleName,
+      scriptSetup: blocks.scriptSetup,
+      plainScript,
+      scriptExports,
+      template: blocks.template,
+      compiledRender,
+    }),
+  ];
 
   // Route metadata from <route> block
-  let routeMeta = '{}';
   if (blocks.route) {
+    let routeMeta = blocks.route;
     try {
       routeMeta = JSON.stringify(JSON.parse(blocks.route));
     } catch {
       // Not valid JSON — leave as-is
-      routeMeta = blocks.route;
     }
-  }
-
-  // Generate the module
-  if (scriptExports) {
-    // Regular <script> with export default — merge with template
-    parts.push(scriptExports.replace('export default', 'const __component ='));
-    parts.push(`
-// Compiled template render function
-const __render = ${renderFn};
-
-// Merge render into component
-if (__component && !__component.render) {
-  __component.render = typeof __render === 'function' ? __render : () => h('div', { innerHTML: __render.__html });
-}
-
-export default __component;
-`);
-  } else {
-    // <script setup> or no script — generate component with setup()
-    parts.push(`
-// Component definition
-const __component = defineComponent({
-${setupCode ? `  setup(props, { attrs, slots, emit }) {
-    ${setupCode}
-    // Return bindings for template (auto-detected from top-level declarations)
-    return {};
-  },` : ''}
-  render() {
-    ${blocks.template
-      ? `return typeof __render === 'function' ? __render.call(this) : h('div', { innerHTML: __render.__html });`
-      : `return h('div', {}, 'Vue component: ${moduleName}');`}
-  },
-});
-
-const __render = ${renderFn};
-
-export default __component;
-`);
-  }
-
-  // Export route metadata if present
-  if (blocks.route) {
     parts.push(`export const route = ${routeMeta};`);
   }
 
@@ -711,7 +412,12 @@ export default __component;
     parts.push(`export const __styles = \`${allStyles}\`;`);
   }
 
-  const transformedCode = parts.join('\n');
+  let transformedCode = parts.join('\n');
+
+  // <script setup lang="ts"> — strip the types so Node can import the module.
+  if (/<script[^>]*\blang\s*=\s*["']tsx?["']/i.test(source)) {
+    transformedCode = await transformTsxLocally(transformedCode, isDev);
+  }
 
   // Write to cache and return file URL
   const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);
@@ -902,7 +608,9 @@ async function transformMDX(
   const compiledCode = compileMDX(source, moduleName);
 
   if (isDev && pledgepackPort) {
-    const devOutPath = join(cacheDir, `${moduleName}.dev.js`);
+    // Unique file name per compile: Node caches ESM imports by URL, so reusing
+    // one path would keep serving the first version after the .mdx is edited.
+    const devOutPath = join(cacheDir, `${moduleName}.dev.${Date.now()}.js`);
     await writeFile(devOutPath, compiledCode, 'utf-8');
     return pathToFileURL(devOutPath).href;
   }
@@ -918,7 +626,7 @@ async function transformMDX(
  * Frontmatter (--- delimited) is stripped from the rendered content and
  * exported as `frontmatter`, honoring config.mdx.frontmatter (default: on).
  */
-function compileMDX(source: string, moduleName: string): string {
+export function compileMDX(source: string, moduleName: string): string {
   // Extract frontmatter before compiling so --- blocks never render as
   // page content; the parsed data is exported for metadata resolution.
   const fmMatch = source.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -1018,13 +726,16 @@ function compileMDX(source: string, moduleName: string): string {
 
   const jsxContent = jsxParts.join('\n');
 
-  return `// Compiled from ${moduleName}.mdx
+  // The body is HTML produced above (embedded JSX blocks pass through as
+  // markup). Passing it as a child string would make React render the tags
+  // as literal, escaped text, so inject it as HTML instead.
+  return `// Compiled from ${moduleName.replace(/[\r\n]/g, ' ')}.mdx
 import { createElement as h } from 'react';
 
 export const frontmatter = ${JSON.stringify(frontmatter)};
 
 function MDXContent(props) {
-  return h('div', { className: 'mdx-content', ...props }, ${JSON.stringify(jsxContent)});
+  return h('div', { className: 'mdx-content', ...props, dangerouslySetInnerHTML: { __html: ${JSON.stringify(jsxContent)} } });
 }
 
 MDXContent.__mdx = true;

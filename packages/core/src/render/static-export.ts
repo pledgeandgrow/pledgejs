@@ -1,6 +1,7 @@
 import type { PledgeConfig, ResolvedRoute } from 'pledgestack-shared';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { pprShellFileName } from './ppr-shell-path';
 
 /**
  * Static export generator — pre-renders all routes to static HTML files.
@@ -63,7 +64,7 @@ export async function generateStaticExport(options: StaticExportOptions): Promis
           try {
             const shellHtml = await prerenderPPRShell(route, {});
             const shellDir = join(config.rootDir, config.outDir, 'ppr-shells');
-            const shellFile = join(shellDir, route.pattern.replace(/\//g, '_').replace(/^\//, '') + '.shell.html');
+            const shellFile = join(shellDir, pprShellFileName(route.pattern));
             mkdirSync(dirname(shellFile), { recursive: true });
             writeFileSync(shellFile, shellHtml);
             pprShells.push(shellFile);
@@ -86,8 +87,7 @@ export async function generateStaticExport(options: StaticExportOptions): Promis
             try {
               const shellHtml = await prerenderPPRShell(route, params);
               const shellDir = join(config.rootDir, config.outDir, 'ppr-shells');
-              const paramSuffix = Object.values(params).join('_');
-              const shellFile = join(shellDir, route.pattern.replace(/\//g, '_').replace(/^\//, '') + '_' + paramSuffix + '.shell.html');
+              const shellFile = join(shellDir, pprShellFileName(route.pattern, params));
               mkdirSync(dirname(shellFile), { recursive: true });
               writeFileSync(shellFile, shellHtml);
               pprShells.push(shellFile);
@@ -155,11 +155,18 @@ function getOutputPath(pattern: string, outputDir: string): string {
  */
 function getOutputPathWithParams(pattern: string, params: Record<string, string>, outputDir: string): string {
   let path = pattern;
-  for (const [key, value] of Object.entries(params)) {
+  for (const [key, rawValue] of Object.entries(params)) {
+    const value = String(rawValue);
+    // Param values come from generateStaticParams (often CMS/DB data) and end up
+    // in a file path: refuse anything that could climb out of the output dir.
+    if (value.split(/[\\/]/).some((seg) => seg === '..') || value.includes('\0')) {
+      throw new Error(`Unsafe static param value for "${key}": ${JSON.stringify(value)}`);
+    }
+    // Function replacers: a string replacement would expand `$&`, `$1`, ... in the value.
     path = path
-      .replace(`:${key}`, value)
-      .replace(`*${key}`, value)
-      .replace(`[${key}]`, value); // tolerate bracket form too
+      .replace(`:${key}`, () => value)
+      .replace(`*${key}`, () => value)
+      .replace(`[${key}]`, () => value); // tolerate bracket form too
   }
   return getOutputPath(path, outputDir);
 }

@@ -65,3 +65,22 @@ describe('ReadonlyURLSearchParams', () => {
     expect(params.toString()).toBe('');
   });
 });
+
+import { classifyNavigation } from './router';
+describe('classifyNavigation', () => {
+  const origin = 'https://app.example';
+  it('treats same-origin targets as internal and keeps the query string in the fetch path', () => {
+    const r = classifyNavigation('/search?q=cats', origin);
+    expect(r.external).toBe(false);
+    expect(r.fetchPath).toBe('/search?q=cats');
+  });
+  it('treats absolute cross-origin URLs as external (pushState would throw SecurityError)', () => {
+    const r = classifyNavigation('https://other.example/x', origin);
+    expect(r.external).toBe(true);
+    expect(r.safe).toBe(true);
+  });
+  it('flags non-http(s) schemes as unsafe', () => {
+    expect(classifyNavigation('javascript:alert(1)', origin).safe).toBe(false);
+    expect(classifyNavigation('data:text/html,x', origin).safe).toBe(false);
+  });
+});

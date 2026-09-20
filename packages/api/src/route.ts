@@ -24,6 +24,13 @@ export interface ApiRouteOptions {
   middleware?: Array<(req: PledgeRequest) => Promise<PledgeResponse | null>>;
 }
 
+/** Sweep expired rate-limit buckets once the map reaches this size. */
+const PRUNE_THRESHOLD = 1000;
+/** Absolute upper bound on tracked rate-limit keys per route. */
+const MAX_BUCKETS = 10_000;
+/** Minimum gap between full expiry sweeps (keeps per-request cost O(1) amortized). */
+const SWEEP_INTERVAL_MS = 1000;
+
 export function defineApiRoute(
   handler: ApiRouteHandler,
   options?: ApiRouteOptions,
@@ -35,15 +42,36 @@ export function defineApiRoute(
   // Fixed-window rate-limit state, keyed by client identifier.
   const rlWindow = options.rateLimit;
   const buckets = new Map<string, { count: number; resetAt: number }>();
+  let lastSweep = 0;
 
   return async (req: PledgeRequest): Promise<PledgeResponse> => {
     // Rate limiting (previously the whole options object was ignored, so
     // rateLimit/middleware never ran).
     if (rlWindow) {
-      const key = req.headers['x-forwarded-for']?.split(',')[0]?.trim()
+      // Prefer the handler-resolved IP (which honors the trustedProxies
+      // config) — raw forwarded headers are client-spoofable when no
+      // trusted proxy is configured.
+      const key = req.ip
+        ?? req.headers['x-forwarded-for']?.split(',')[0]?.trim()
         ?? req.headers['x-real-ip']
         ?? 'unknown';
       const now = Date.now();
+      // Sweep expired entries so long-running servers don't grow the map
+      // unboundedly with keys that never return.
+      if (buckets.size >= MAX_BUCKETS || (buckets.size >= PRUNE_THRESHOLD && now - lastSweep >= SWEEP_INTERVAL_MS)) {
+        lastSweep = now;
+        for (const [k, b] of buckets) {
+          if (b.resetAt <= now) buckets.delete(k);
+        }
+        // Hard bound: if every remaining bucket is still live (a flood of
+        // distinct client keys inside one window), evict oldest-inserted first
+        // so memory can never exceed MAX_BUCKETS entries.
+        while (buckets.size >= MAX_BUCKETS) {
+          const oldest = buckets.keys().next();
+          if (oldest.done) break;
+          buckets.delete(oldest.value);
+        }
+      }
       const bucket = buckets.get(key);
       if (!bucket || bucket.resetAt <= now) {
         buckets.set(key, { count: 1, resetAt: now + rlWindow.windowMs });

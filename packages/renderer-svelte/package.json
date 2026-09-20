@@ -1,7 +1,21 @@
 {
   "name": "pledgestack-renderer-svelte",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.0",
   "description": "Svelte renderer adapter for PledgeStack — SSR, streaming, hydration",
+  "keywords": [
+    "pledgestack"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/renderer-svelte#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/renderer-svelte"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,13 +23,21 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
     "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "pledgestack-shared": "workspace:*"
@@ -24,10 +46,15 @@
     "svelte": "^5.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
     "rimraf": "^6.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "svelte": "^5.56.8"
   },
-  "license": "MIT",
-  "author": "PledgeStack Contributors"
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

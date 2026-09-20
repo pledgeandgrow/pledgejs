@@ -136,6 +136,13 @@ export interface RenderContext {
   rsc?: boolean;
   /** Client manifest for RSC (React only) */
   clientManifest?: Record<string, string>;
+  /**
+   * Per-request security context — CSP nonce + SRI hashes. Renderer adapters
+   * stamp these on the <script> tags they emit (see applyScriptSecurity in
+   * ./render-security). Streamed output can't be post-processed, so adapters
+   * MUST stamp their streamed shell/script tags when this is set.
+   */
+  security?: import('./types').RenderSecurity;
 }
 
 /**
@@ -245,20 +252,31 @@ export class RendererRegistry {
   }
 }
 
-/** Global renderer registry singleton */
-let globalRegistry: RendererRegistry | null = null;
+/**
+ * Global renderer registry singleton — keyed on `globalThis`, not module
+ * state. The published CLI bundles its own inlined copy of this module via
+ * esbuild while renderer adapters are loaded at runtime from node_modules;
+ * a module-level singleton would give each copy its own registry, so
+ * adapters would register into a registry `initRenderer` never sees.
+ */
+const REGISTRY_KEY = '__pledgestack_renderer_registry__';
+
+interface RendererRegistryGlobal {
+  [REGISTRY_KEY]?: RendererRegistry;
+}
 
 /** Get the global renderer registry */
 export function getRendererRegistry(): RendererRegistry {
-  if (!globalRegistry) {
-    globalRegistry = new RendererRegistry();
+  const g = globalThis as RendererRegistryGlobal;
+  if (!g[REGISTRY_KEY]) {
+    g[REGISTRY_KEY] = new RendererRegistry();
   }
-  return globalRegistry;
+  return g[REGISTRY_KEY];
 }
 
 /** Reset the global renderer registry (for testing) */
 export function resetRendererRegistry(): void {
-  globalRegistry = null;
+  delete (globalThis as RendererRegistryGlobal)[REGISTRY_KEY];
 }
 
 // --- Shared route tree types and layout chain ---

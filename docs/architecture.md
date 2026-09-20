@@ -2,7 +2,7 @@
 
 ## Monorepo Structure
 
-PledgeJS is a pnpm workspace with 37 packages organized into functional layers:
+PledgeJS is a pnpm workspace with 36 packages organized into functional layers:
 
 ```
 pledgejs/
@@ -112,7 +112,7 @@ Request → handler.ts
 
 ### Rust Acceleration
 
-16 native Rust crates provide optional acceleration. When compiled (via
+17 native Rust crates provide optional acceleration. When compiled (via
 `cargo build` in `packages/core/native/`), they're loaded as NAPI addons. When
 not compiled, all paths fall back to JavaScript implementations:
 
@@ -134,6 +134,7 @@ not compiled, all paths fall back to JavaScript implementations:
 | rust-search | Full-text search | In-memory |
 | rust-jit-templates | JIT template compilation | JS Map profiler |
 | rust-ws-compression | WS permessage-deflate | Node zlib |
+| rust-bench | NAPI benchmark harness (`pledge bench --psx`) | JS fallback benchmarks |
 
 ## Routing System
 
@@ -236,20 +237,26 @@ ESM output that Node can't resolve).
 | Workflow | Purpose |
 |----------|---------|
 | `ci.yml` | Lint, typecheck, build verification, tests (3 OS matrix), Rust checks |
-| `release.yml` | Typecheck → lint → test → build → publish to npm (on tag push) |
+| `release.yml` | On push to `main`: typecheck → lint → build → test → `pnpm check:release` → Changesets action (Version Packages PR, or publish to npm) |
 | `audit.yml` | Security audit |
 
 ### Release Flow
 
-1. Git tag `v*.*.*` pushed
-2. CI runs typecheck, lint, test, build
-3. If all pass, `pnpm --filter "./packages/cli" publish --no-git-checks`
-4. Only the CLI package is published (it bundles everything)
+1. Contributors add a changeset (`pnpm changeset`) with each PR.
+2. On push to `main` the release workflow runs the full gate, then the Changesets
+   action opens/updates a "Version Packages" PR (`pnpm version-packages`).
+3. Merging that PR publishes every public package (`pnpm release` = build all
+   packages → `scripts/check-release.mjs --dist` → `changeset publish`).
+4. 34 packages are public and share one version (Changesets `fixed` group);
+   while `.changeset/pre.json` exists versions are `1.0.0-rc.N` and publish under
+   the `rc` dist-tag. Library packages ship esbuild-bundled ESM
+   (`scripts/bundle-package.mjs`) plus `tsc` declarations; the CLI bundles
+   everything it needs so it works on its own. The VS Code extensions are private.
 
 ## Testing
 
-- **Framework:** Vitest 3.2.7
-- **Scope:** 112 test files, 1023 tests (2 failing in new MDX/server-fn tests)
-- **Environment:** Node (jsdom not required for most tests)
-- **Coverage:** v8 provider, includes all `packages/*/src/**/*.ts`
-- **Timeout:** 10s default (30s for sccache test on Windows)
+- **Framework:** Vitest 4.1.11
+- **Scope:** 206 test files, 1697 tests (1691 passing, 6 skipped, 0 failing as of 2026-09-20)
+- **Environment:** Node; DOM/React tests (a11y, overlay) opt into jsdom with a `// @vitest-environment jsdom` docblock
+- **Coverage:** v8 provider, includes all `packages/*/src/**/*.ts`; global thresholds are enforced in `vitest.config.ts`
+- **Timeout:** 15s default (30s for sccache test on Windows)

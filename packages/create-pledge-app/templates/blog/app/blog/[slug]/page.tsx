@@ -33,7 +33,7 @@ export function generateStaticParams() {
 }
 
 export function generateMetadata({ params }: { params: { slug: string } }) {
-  const post = posts[params.slug];
+  const post = Object.prototype.hasOwnProperty.call(posts, params.slug) ? posts[params.slug] : undefined;
   if (!post) return { title: 'Post not found' };
   return {
     title: `${post.title} — PledgeBlog`,
@@ -42,7 +42,7 @@ export function generateMetadata({ params }: { params: { slug: string } }) {
 }
 
 export default function BlogPost({ params }: { params: { slug: string } }) {
-  const post = posts[params.slug];
+  const post = Object.prototype.hasOwnProperty.call(posts, params.slug) ? posts[params.slug] : undefined;
 
   if (!post) {
     return (

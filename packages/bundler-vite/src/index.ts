@@ -1,15 +1,18 @@
-import { join, dirname, basename, extname, resolve } from 'node:path';
+import { join, dirname, basename, extname, resolve, relative, sep } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
+  loadPSXModule,
   transformPSX,
   detectCratesFromImports,
   generateModuleCargoToml,
   ensureRootCargoToml,
   serializeSourceMap,
+  rustLibName,
 } from 'pledgestack-core';
+import type { RustBuildFn } from 'pledgestack-core';
 import { generateRustFallback, BoundedLRUMap, MAX_TRANSFORM_CACHE_ENTRIES } from 'pledgestack-shared';
 import type {
   BundlerAdapter,
@@ -49,6 +52,7 @@ export const viteAdapter: BundlerAdapter = {
     try {
       const { build: viteBuild } = await import('vite');
       const outDir = join(config.rootDir, config.outDir);
+      const serverEntries = await collectServerEntries(config);
 
       // Build server bundle
       await viteBuild({
@@ -58,12 +62,13 @@ export const viteAdapter: BundlerAdapter = {
           outDir: join(outDir, 'server'),
           ssr: true,
           rollupOptions: {
-            input: collectServerEntries(config),
+            input: serverEntries,
             output: {
               format: 'esm',
-              // Content-hash server entries so they can be safely long-term
-              // cached and so deployments can atomically swap.
-              entryFileNames: '[name].[hash].js',
+              // Server entries keep their route path (no content hash):
+              // resolveProductionPath() maps a source file to
+              // <outDir>/server/<route>.js, which a hashed name would never match.
+              entryFileNames: '[name].js',
               chunkFileNames: 'chunks/[name].[hash].js',
             },
           },
@@ -89,6 +94,9 @@ export const viteAdapter: BundlerAdapter = {
             outDir: join(outDir, 'client'),
             ssr: false,
             rollupOptions: {
+              // Without an input, Vite looks for an index.html that PledgeStack
+              // projects do not have and the client build fails.
+              input: clientEntries(serverEntries),
               output: {
                 format: 'esm',
                 entryFileNames: 'assets/[name].[hash].js',
@@ -236,10 +244,15 @@ export const viteAdapter: BundlerAdapter = {
  * - Route resolution
  * - PSX → JS transform via PledgeStack's pipeline
  */
-function pledgeStackVitePlugin(_config: PledgeConfig) {
+export function pledgeStackVitePlugin(_config: PledgeConfig, opts: { build?: RustBuildFn } = {}) {
+  let isDev = process.env.NODE_ENV !== 'production';
   return {
     name: 'pledgestack',
     enforce: 'pre' as const,
+
+    configResolved(resolved: { command?: string }) {
+      isDev = resolved.command === 'serve';
+    },
 
     resolveId(source: string, importer?: string) {
       // Resolve .psx and .ps imports
@@ -253,26 +266,15 @@ function pledgeStackVitePlugin(_config: PledgeConfig) {
     },
 
     async load(id: string) {
-      // Transform .psx and .ps files
+      // Transform .psx and .ps files: compile the Rust addon, write the NAPI
+      // wrapper (or the fallback stub) and return the module source.
       if (id.endsWith('.psx') || id.endsWith('.ps')) {
-        const format = id.endsWith('.ps') ? 'ps' : 'psx';
-        const source = await readFile(id, 'utf-8');
-        const moduleName = basename(id, extname(id));
-
-        const result = transformPSX(source, {
-          moduleName,
-          compileRust: true,
-          addonPath: `./${moduleName}.node`,
-          format,
+        return loadPSXModule(id, {
+          isDev,
+          projectRoot: _config.rootDir,
+          cargoConfig: _config.cargo,
+          build: opts.build,
         });
-
-        // For .ps files (pure Rust), return the NAPI wrapper
-        if (format === 'ps') {
-          return result.napiWrapper ?? generateRustFallback(moduleName);
-        }
-
-        // For .psx files, return the TSX portion — Vite/esbuild handles JSX
-        return result.tsx;
       }
       return null;
     },
@@ -308,15 +310,45 @@ function buildAliasMap(config: PledgeConfig): Record<string, string> {
   return alias;
 }
 
-function collectServerEntries(config: PledgeConfig): Record<string, string> {
-  const appDir = join(config.rootDir, config.appDir);
+/** Source files under app/ that are build entries — not tests, stories or declarations. */
+const ENTRY_FILE = /.(?:[cm]?[jt]sx?|psx?)$/;
+const NON_ENTRY_FILE = /.(?:d.ts|test.[cm]?[jt]sx?|spec.[cm]?[jt]sx?|stories.[cm]?[jt]sx?)$/;
+
+async function collectRouteEntries(appDir: string): Promise<Record<string, string>> {
   const entries: Record<string, string> = {};
 
-  if (existsSync(appDir)) {
-    // Use the app directory as a single entry point.
-    // Vite + the PledgeStack plugin will resolve individual route modules.
-    entries['app'] = appDir;
+  async function walk(dir: string): Promise<void> {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+        await walk(full);
+      } else if (entry.isFile() && ENTRY_FILE.test(entry.name) && !NON_ENTRY_FILE.test(entry.name)) {
+        // Entry name = route path without extension, always with forward slashes.
+        const name = relative(appDir, full).split(sep).join('/').replace(ENTRY_FILE, '');
+        entries[name] = full;
+      }
+    }
   }
+
+  if (existsSync(appDir)) await walk(appDir);
+  return entries;
+}
+
+/** Client bundles exclude server-only entries (route handlers, middleware, pure-Rust modules). */
+function clientEntries(serverEntries: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, file] of Object.entries(serverEntries)) {
+    const base = basename(name);
+    if (base === 'route' || base === 'middleware' || file.endsWith('.ps')) continue;
+    out[name] = file;
+  }
+  return out;
+}
+
+async function collectServerEntries(config: PledgeConfig): Promise<Record<string, string>> {
+  const appDir = join(config.rootDir, config.appDir);
+  const entries = await collectRouteEntries(appDir);
 
   // Also check for a custom server entry
   const serverEntry = join(config.rootDir, 'server.ts');
@@ -342,6 +374,8 @@ async function transformPSXFile(
     moduleName,
     compileRust: true,
     addonPath: `./${moduleName}.node`,
+    // The wrapper is written next to the emitted module as <name>.napi.js.
+    wrapperImportPath: `./${moduleName}.napi.js`,
     format,
   });
 
@@ -481,15 +515,26 @@ async function compileRustAddon(
         timeout: cargoConfig?.timeout ?? (isDev ? 30000 : 120000),
         env: cargoEnv,
       });
+      // Always drain the pipes: cargo blocks once an unread pipe fills (~64KB),
+      // which turned a noisy build into a hang until the timeout. Keep stderr
+      // so a failed build says why instead of silently falling back.
+      let stderr = '';
+      child.stdout?.resume();
+      child.stderr?.on('data', (data: Buffer) => {
+        if (stderr.length < 64 * 1024) stderr += data.toString();
+      });
       child.on('error', reject);
       child.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`cargo exited with ${code}`));
+        else {
+          console.error(`[pledgestack] Rust compilation failed for ${moduleName}:\n${stderr}`);
+          reject(new Error(`cargo exited with ${code}`));
+        }
       });
     });
 
     const targetDir = join(sharedTargetDir, isDev ? 'debug' : 'release');
-    const libName = `pledge_${moduleName}`;
+    const libName = rustLibName(moduleName);
     const candidates = [
       join(targetDir, `lib${libName}.so`),
       join(targetDir, `lib${libName}.dylib`),

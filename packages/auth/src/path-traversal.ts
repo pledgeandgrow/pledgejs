@@ -3,7 +3,14 @@
  * validate all fs calls against rootDir.
  */
 
-import { resolve, relative, sep } from 'node:path';
+import { resolve, relative, sep, isAbsolute } from 'node:path';
+
+/** True when `rel` (result of path.relative(root, target)) points outside root. */
+function escapesRoot(rel: string): boolean {
+  // isAbsolute covers Windows targets on a different drive, where relative()
+  // returns the absolute target path instead of a '..' chain.
+  return rel === '..' || rel.startsWith('..' + sep) || rel.startsWith('../') || isAbsolute(rel);
+}
 
 /**
  * Check if a path contains traversal sequences (`..`).
@@ -22,7 +29,7 @@ export function safeResolve(sandboxDir: string, ...pathSegments: string[]): stri
   const resolved = resolve(sandboxDir, ...pathSegments);
   const rel = relative(sandboxDir, resolved);
 
-  if (rel.startsWith('..') || sep + rel === resolved) {
+  if (escapesRoot(rel)) {
     throw new Error(`Path traversal detected: ${pathSegments.join('/')} escapes sandbox ${sandboxDir}`);
   }
 
@@ -37,7 +44,7 @@ export function isPathSafe(sandboxDir: string, path: string): boolean {
   try {
     const resolved = resolve(sandboxDir, path);
     const rel = relative(sandboxDir, resolved);
-    return !rel.startsWith('..') && !resolve(sandboxDir, path).startsWith('..');
+    return !escapesRoot(rel);
   } catch {
     return false;
   }

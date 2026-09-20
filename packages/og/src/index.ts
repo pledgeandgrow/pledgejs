@@ -4,8 +4,8 @@ import { escapeHtml } from 'pledgestack-shared';
 /**
  * OpenGraph image generation for PledgeStack.
  *
- * Uses Satori to convert React-like JSX to SVG, then resvg to rasterize to PNG.
- * PledgePack's asset pipeline handles the actual rendering at build/dev time.
+ * Converts a JSX tree to SVG with a built-in flexbox layout (server side), then rasterizes to PNG.
+ * Rasterization uses the native rust-og-renderer addon or the optional `sharp` package.
  *
  * Usage in an API route:
  * ```typescript
@@ -51,13 +51,15 @@ export interface OGFont {
 /**
  * Response class for OG image generation.
  *
- * IMPORTANT: until PledgePack's OG pipeline (Satori + resvg) intercepts and
- * renders it, the response BODY is the serialized JSX element tree — NOT PNG
- * bytes — even though Content-Type is `image/png`. Interception is keyed on the
- * `X-Pledge-OG: true` header (and `X-Pledge-OG-Rendered: false` below marks the
- * un-rendered state); the renderer replaces the body with the PNG and clears
- * that marker. If you consume an ImageResponse without that pipeline (e.g. a
- * unit test or a non-PledgePack runtime), read the serialized body via
+ * IMPORTANT: the constructor only SERIALIZES the element tree; the body it
+ * carries is JSON, not PNG bytes, and is marked `X-Pledge-OG: true` /
+ * `X-Pledge-OG-Rendered: false`. The PledgeStack server (`maybeRenderOgResponse`
+ * in pledgestack-server) intercepts such responses, lays the tree out
+ * (a flexbox subset: see the README for supported CSS), and rasterizes it to a
+ * real PNG with the native rust-og-renderer addon or the optional `sharp`
+ * package. If neither is installed the server answers 501 with an actionable
+ * message instead of returning fake image bytes. If you consume an
+ * ImageResponse outside the PledgeStack server (e.g. a unit test), check
  * `X-Pledge-OG-Rendered` rather than assuming PNG bytes.
  */
 export class ImageResponse extends Response {
@@ -120,11 +122,28 @@ function serializeElement(element: unknown, depth = 0): unknown {
   if (element === null || element === undefined || typeof element === 'string' || typeof element === 'number') {
     return element;
   }
+  // React renders nothing for booleans (`{cond && <X/>}`) — String(false) used
+  // to leak a literal "false" into the image.
+  if (typeof element === 'boolean') return null;
   if (Array.isArray(element)) {
     return element.map((e) => serializeElement(e, depth + 1));
   }
   if (typeof element === 'object' && element !== null) {
     const el = element as { type?: unknown; props?: Record<string, unknown> };
+    // Function components are expanded by calling them with their props (they must
+    // be pure — hooks are not available here, exactly as with Satori). A component
+    // that throws degrades to an empty box rather than failing the whole image.
+    if (typeof el.type === 'function') {
+      try {
+        return serializeElement((el.type as (props: Record<string, unknown>) => unknown)(el.props ?? {}), depth + 1);
+      } catch {
+        return { type: 'div', props: {} };
+      }
+    }
+    // Fragments (React.Fragment is a symbol) contribute only their children.
+    if (typeof el.type === 'symbol') {
+      return serializeElement(el.props?.children, depth + 1);
+    }
     return {
       type: typeof el.type === 'string' ? el.type : 'div',
       props: serializeProps(el.props ?? {}, depth + 1),

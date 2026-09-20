@@ -8,6 +8,7 @@ export {
   DEFAULT_FORMATS,
   generateBlurPlaceholder,
   blurPlaceholderStyle,
+  cssUrl,
   generateResponsiveSrcSet,
   generateSizesAttr,
 } from './types';

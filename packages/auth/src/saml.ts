@@ -254,7 +254,7 @@ function escapeC14nAttr(value: string): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&#quot;')
+    .replace(/"/g, '&quot;')
     .replace(/\t/g, '&#x9;')
     .replace(/\n/g, '&#xA;')
     .replace(/\r/g, '&#xD;');
@@ -290,6 +290,12 @@ export interface SAMLConfig {
   wantSignedAssertions?: boolean;
   /** NameID format (default: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress') */
   nameIdFormat?: string;
+  /**
+   * Accept SHA-1 based signatures/digests (rsa-sha1, DigestMethod sha1).
+   * Default: false — SHA-1 is collision-broken and rejected. Only enable for
+   * a legacy IdP you cannot upgrade, and treat it as temporary.
+   */
+  allowSha1?: boolean;
 }
 
 export interface SAMLAuthnRequest {
@@ -398,7 +404,9 @@ export function parseSAMLResponse(
     return null;
   }
 
-  if (!xml.includes('samlp:Response') && !xml.includes('saml:Assertion')) return null;
+  // Any namespace prefix (samlp:, saml2p:, none, ...) is legitimate; the XML
+  // parse and signature check below do the real validation.
+  if (!/<(?:[\w.-]+:)?(?:Response|Assertion)[\s>]/.test(xml)) return null;
 
   // Obtain the SIGNED, digest-bound assertion and parse every claim from THAT
   // element only. Parsing claims from the whole document (the previous
@@ -417,13 +425,26 @@ export function parseSAMLResponse(
   if (config.idpEntityId && issuer !== config.idpEntityId) return null;
 
   const sessionIndex = extractAttribute(assertion, 'SessionIndex');
-  const notOnOrAfter = extractAttribute(assertion, 'NotOnOrAfter');
 
-  // Enforce the assertion's validity window: an expired assertion is rejected.
-  const notOnOrAfterMs = notOnOrAfter ? Date.parse(notOnOrAfter) : undefined;
-  if (notOnOrAfterMs !== undefined && !Number.isNaN(notOnOrAfterMs) && Date.now() >= notOnOrAfterMs) {
-    return null;
+  // Enforce the assertion's validity window. NotOnOrAfter appears on both
+  // <Conditions> and <SubjectConfirmationData>; ALL occurrences must still be
+  // in the future, and any NotBefore must already have passed (60s skew).
+  const now = Date.now();
+  let notOnOrAfterMs: number | undefined;
+  for (const value of extractAllAttributes(assertion, 'NotOnOrAfter')) {
+    const ms = Date.parse(value);
+    if (Number.isNaN(ms)) continue;
+    if (now >= ms) return null;
+    notOnOrAfterMs = notOnOrAfterMs === undefined ? ms : Math.min(notOnOrAfterMs, ms);
   }
+  for (const value of extractAllAttributes(assertion, 'NotBefore')) {
+    const ms = Date.parse(value);
+    if (!Number.isNaN(ms) && now < ms - 60_000) return null;
+  }
+
+  // AudienceRestriction: if the assertion names audiences, this SP must be one.
+  const audiences = extractAllValues(assertion, 'Audience');
+  if (audiences.length > 0 && !audiences.includes(config.entityId)) return null;
 
   return {
     nameId,
@@ -486,7 +507,13 @@ function getVerifiedAssertion(samlResponse: string, config: SAMLConfig): string 
     return extractRawElement(xml, 'Assertion');
   }
 
-  const doc = parseXmlDocument(xml);
+  let doc: XmlElementNode | null;
+  try {
+    doc = parseXmlDocument(xml);
+  } catch {
+    // e.g. RangeError from pathologically deep nesting
+    return null;
+  }
   if (!doc) return null;
 
   const signatures = findAllElements(doc, 'Signature');
@@ -510,6 +537,8 @@ function getVerifiedAssertion(samlResponse: string, config: SAMLConfig): string 
       const expected = Buffer.from(digestValueB64, 'base64');
       const digestAlg = digestAlgFromUri(getAlgorithmUri(digestMethodEl));
       const sigAlg = sigAlgFromUri(getAlgorithmUri(signatureMethodEl));
+      // SHA-1 signature or digest: rejected unless explicitly opted in.
+      if (!config.allowSha1 && (digestAlg === 'sha1' || sigAlg === 'RSA-SHA1')) continue;
 
       // 1. Verify the signature over the SignedInfo — try both the raw
       //    extracted text and the canonicalized form (real IdPs sign c14n).
@@ -681,6 +710,15 @@ function extractRawElement(xml: string, tag: string): string | null {
   return match ? match[0] : null;
 }
 
+function extractAllAttributes(xml: string, attr: string): string[] {
+  return [...xml.matchAll(new RegExp(`\\b${attr}="([^"]+)"`, 'gi'))].map((m) => m[1]);
+}
+
+function extractAllValues(xml: string, tag: string): string[] {
+  const pattern = new RegExp(`<(?:[\\w.-]+:)?${tag}[^>]*>([^<]+)</(?:[\\w.-]+:)?${tag}>`, 'gi');
+  return [...xml.matchAll(pattern)].map((m) => m[1].trim());
+}
+
 function extractAttribute(xml: string, attr: string): string | null {
   const match = xml.match(new RegExp(`${attr}="([^"]+)"`, 'i'));
   return match ? match[1] : null;
@@ -688,14 +726,14 @@ function extractAttribute(xml: string, attr: string): string | null {
 
 function extractAttributes(xml: string): Record<string, string[]> {
   const attributes: Record<string, string[]> = {};
-  const attrRegex = /<saml:Attribute\s+Name="([^"]+)"[^>]*>([\s\S]*?)<\/saml:Attribute>/g;
+  const attrRegex = /<(?:[\w.-]+:)?Attribute\s+Name="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w.-]+:)?Attribute>/g;
   let match: RegExpExecArray | null;
 
   while ((match = attrRegex.exec(xml)) !== null) {
     const name = match[1];
     const valueXml = match[2];
     const values: string[] = [];
-    const valueRegex = /<saml:AttributeValue[^>]*>([^<]+)<\/saml:AttributeValue>/g;
+    const valueRegex = /<(?:[\w.-]+:)?AttributeValue[^>]*>([^<]+)<\/(?:[\w.-]+:)?AttributeValue>/g;
     let valueMatch: RegExpExecArray | null;
     while ((valueMatch = valueRegex.exec(valueXml)) !== null) {
       values.push(valueMatch[1].trim());

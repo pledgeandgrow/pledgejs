@@ -6,7 +6,7 @@
  */
 
 import { rm, access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { homedir, platform } from 'node:os';
 import type { PledgeConfig } from 'pledgestack-shared';
 
@@ -19,7 +19,21 @@ interface CleanResult {
 /**
  * Paths to clean, in order.
  */
-function getCleanPaths(config: PledgeConfig): string[] {
+/**
+ * A clean target must never be the project root itself, one of its parents, or
+ * the home directory. `outDir: '.'` (or '' / '..') in a config would otherwise
+ * make `pledge clean` recursively delete the whole project.
+ */
+export function isSafeToRemove(target: string, rootDir: string): boolean {
+  const t = resolve(target);
+  const root = resolve(rootDir);
+  if (t === root) return false;
+  if (root.startsWith(t.endsWith(sep) ? t : t + sep)) return false; // ancestor of root
+  if (t === resolve(homedir())) return false;
+  return true;
+}
+
+export function getCleanPaths(config: PledgeConfig): string[] {
   const root = config.rootDir;
   const paths: string[] = [
     // Build output
@@ -48,7 +62,7 @@ function getCleanPaths(config: PledgeConfig): string[] {
     : join(home, '.cache', 'pledgepack');
   paths.push(osCacheDir);
 
-  return paths;
+  return paths.filter((p) => isSafeToRemove(p, root));
 }
 
 /**

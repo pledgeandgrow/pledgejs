@@ -22,8 +22,24 @@ export async function formatRustSource(
 ): Promise<{ formatted: string; changed: boolean }> {
   const edition = options?.edition ?? '2021';
 
+  // Format the code itself and put the surrounding whitespace back afterwards.
+  // rustfmt drops leading/trailing blank space, so comparing its output with a
+  // block that starts with the newline after `<rust>` (or a file that ends
+  // with a newline) reported "changed" for every already-formatted input.
+  const leading = source.match(/^\s*/)?.[0] ?? '';
+  const body = source.slice(leading.length);
+  const trailing = body.match(/\s*$/)?.[0] ?? '';
+  const code = body.slice(0, body.length - trailing.length);
+  if (!code) return { formatted: source, changed: false };
+
   return new Promise((resolve) => {
-    const args = ['fmt', '--emit', 'stdout', '--edition', edition];
+    // `rustfmt` is the standalone formatter (no `fmt` subcommand — that is
+    // `cargo fmt`; passing it made rustfmt treat "fmt" as an input file and
+    // fail, so nothing was ever formatted). With no file it reads stdin.
+    // Keep the file's own line endings: rustfmt's default ("native") rewrote LF
+    // sources with CRLF on Windows, changing every line.
+    const newlineStyle = source.includes('\r\n') ? 'Windows' : 'Unix';
+    const args = ['--emit', 'stdout', '--edition', edition, '--config', `newline_style=${newlineStyle}`];
     if (options?.configFile) {
       args.push('--config-path', options.configFile);
     }
@@ -43,9 +59,9 @@ export async function formatRustSource(
       resolve({ formatted: source, changed: false });
     });
 
-    child.on('close', (code) => {
-      if (code === 0 && stdout.trim()) {
-        const formatted = stdout.replace(/\n$/, '');
+    child.on('close', (exitCode) => {
+      if (exitCode === 0 && stdout.trim()) {
+        const formatted = leading + stdout.replace(/\s+$/, '') + trailing;
         resolve({ formatted, changed: formatted !== source });
       } else {
         // Formatting failed — return original
@@ -53,7 +69,7 @@ export async function formatRustSource(
       }
     });
 
-    child.stdin.write(source);
+    child.stdin.write(code);
     child.stdin.end();
   });
 }
@@ -63,12 +79,13 @@ export async function formatRustSource(
  */
 export async function formatPsFile(
   filePath: string,
-  options?: { edition?: string; configFile?: string },
+  options?: { edition?: string; configFile?: string; check?: boolean },
 ): Promise<{ changed: boolean }> {
   const source = await readFile(filePath, 'utf-8');
   const { formatted, changed } = await formatRustSource(source, options);
 
-  if (changed) {
+  // `check` only reports; it must never modify the file.
+  if (changed && !options?.check) {
     await writeFile(filePath, formatted, 'utf-8');
   }
 
@@ -83,7 +100,7 @@ export async function formatPsFile(
  */
 export async function formatPsxFile(
   filePath: string,
-  options?: { edition?: string; configFile?: string },
+  options?: { edition?: string; configFile?: string; check?: boolean },
 ): Promise<{ changed: boolean; blocksFormatted: number }> {
   const source = await readFile(filePath, 'utf-8');
   let changed = false;
@@ -120,7 +137,7 @@ export async function formatPsxFile(
     }
   }
 
-  if (changed) {
+  if (changed && !options?.check) {
     await writeFile(filePath, result, 'utf-8');
   }
 

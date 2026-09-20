@@ -32,7 +32,13 @@ export function usePersistentState<T>(options: PersistenceOptions<T>): [T, (valu
   const storageRef = useRef<Storage | null>(null);
 
   if (typeof window !== 'undefined') {
-    storageRef.current = storageType === 'localStorage' ? window.localStorage : window.sessionStorage;
+    try {
+      storageRef.current = storageType === 'localStorage' ? window.localStorage : window.sessionStorage;
+    } catch {
+      // Accessing window.localStorage throws SecurityError when storage is
+      // blocked (privacy modes, sandboxed iframes) — degrade to in-memory.
+      storageRef.current = null;
+    }
   }
 
   const [state, setState] = useState<T>(defaultValue);
@@ -66,6 +72,7 @@ export function usePersistentState<T>(options: PersistenceOptions<T>): [T, (valu
     (value: T | ((prev: T) => T)) => {
       // Compute next and persist OUTSIDE the updater (updaters must be pure).
       const next = typeof value === 'function' ? (value as (p: T) => T)(stateRef.current) : value;
+      stateRef.current = next;
       if (typeof window !== 'undefined' && storageRef.current) {
         try {
           storageRef.current.setItem(key, serializeRef.current(next));

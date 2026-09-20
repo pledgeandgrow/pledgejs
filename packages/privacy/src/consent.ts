@@ -83,17 +83,30 @@ export class ConsentManager {
       if (dot === -1) return null;
       const encoded = raw.slice(0, dot);
       const signature = raw.slice(dot + 1);
-      const expected = this.sign(encoded);
+      // The framework's cookie parser percent-decodes values before they get
+      // here, but the signature covers the percent-ENCODED form — accept
+      // either representation (encodeURIComponent is canonical, so
+      // re-encoding a decoded value reproduces what was signed).
       const sigBuf = Buffer.from(signature);
-      const expBuf = Buffer.from(expected);
-      if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
-        return null;
-      }
+      const verified = [encoded, encodeURIComponent(encoded)].some((candidate) => {
+        const expBuf = Buffer.from(this.sign(candidate));
+        return sigBuf.length === expBuf.length && timingSafeEqual(sigBuf, expBuf);
+      });
+      if (!verified) return null;
       payload = encoded;
     }
 
     try {
-      const state = JSON.parse(decodeURIComponent(payload)) as ConsentState;
+      let text = payload;
+      try {
+        text = decodeURIComponent(payload);
+      } catch {
+        // Already decoded by the cookie parser (contains a literal '%').
+      }
+      const state = JSON.parse(text) as ConsentState;
+      // Shape check: a crafted (unsigned-mode) cookie like {"version":"1"} must
+      // not make hasConsent() throw on state.records.find().
+      if (!state || typeof state !== 'object' || !Array.isArray(state.records)) return null;
       if (state.version !== this.version) return null;
       return state;
     } catch {

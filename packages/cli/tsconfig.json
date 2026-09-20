@@ -36,6 +36,10 @@
     { "path": "../bundler-rsbuild" },
     { "path": "../bundler-webpack" },
     { "path": "../deploy" },
-    { "path": "../content" }
+    { "path": "../content" },
+    { "path": "../renderer-react" },
+    { "path": "../renderer-vue" },
+    { "path": "../renderer-solid" },
+    { "path": "../renderer-svelte" }
   ]
 }

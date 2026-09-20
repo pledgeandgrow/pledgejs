@@ -1,6 +1,40 @@
 import type { Rule } from 'eslint';
 import type { FunctionDeclaration, ArrowFunctionExpression, VariableDeclarator } from 'estree';
 
+/** Filename of the linted file — `context.filename` (ESLint 9) with a fallback for older cores. Path separators are normalized so rules work on Windows. */
+function filenameOf(context: Rule.RuleContext): string {
+  const raw = (context as { filename?: string }).filename ?? context.getFilename();
+  return raw.replace(/\\/g, '/');
+}
+
+/** Base name of a normalized path (`app/og-layout.ts` -> `og-layout.ts`), so `layout.ts` does not match `og-layout.ts`. */
+function baseNameOf(filename: string): string {
+  return filename.split('/').pop() ?? '';
+}
+
+/**
+ * True when the source begins with a client directive ('use client' or
+ * PledgeStack's 'use pledge:client'). A BOM, whitespace and leading comments
+ * are allowed before it — they do not stop it from being a directive.
+ */
+export function hasClientDirective(source: string): boolean {
+  let rest = source.replace(/^\uFEFF/, '');
+  for (;;) {
+    const trimmed = rest.replace(/^\s+/, '');
+    if (trimmed.startsWith('//')) {
+      const nl = trimmed.indexOf('\n');
+      rest = nl === -1 ? '' : trimmed.slice(nl + 1);
+    } else if (trimmed.startsWith('/*')) {
+      const end = trimmed.indexOf('*/');
+      rest = end === -1 ? '' : trimmed.slice(end + 2);
+    } else {
+      rest = trimmed;
+      break;
+    }
+  }
+  return /^(['"])use (?:client|pledge:client)\1/.test(rest);
+}
+
 const noDefaultExportInPage: Rule.RuleModule = {
   meta: {
     type: 'problem',
@@ -13,8 +47,8 @@ const noDefaultExportInPage: Rule.RuleModule = {
     schema: [],
   },
   create(context) {
-    const filename = context.getFilename();
-    if (!filename.endsWith('page.tsx') && !filename.endsWith('page.ts')) return {};
+    const filename = filenameOf(context);
+    if (!['page.tsx', 'page.ts'].includes(baseNameOf(filename))) return {};
 
     let hasDefaultExport = false;
 
@@ -46,8 +80,8 @@ const noDefaultExportInLayout: Rule.RuleModule = {
     schema: [],
   },
   create(context) {
-    const filename = context.getFilename();
-    if (!filename.endsWith('layout.tsx') && !filename.endsWith('layout.ts')) return {};
+    const filename = filenameOf(context);
+    if (!['layout.tsx', 'layout.ts'].includes(baseNameOf(filename))) return {};
 
     let hasDefaultExport = false;
 
@@ -79,8 +113,8 @@ const noAsyncInClientComponent: Rule.RuleModule = {
     schema: [],
   },
   create(context) {
-    const filename = context.getFilename();
-    if (!filename.endsWith('page.tsx') && !filename.endsWith('layout.tsx')) return {};
+    const filename = filenameOf(context);
+    if (!['page.tsx', 'layout.tsx'].includes(baseNameOf(filename))) return {};
 
     return {
       'ExportDefaultDeclaration > FunctionDeclaration[async=true]'(node: FunctionDeclaration) {
@@ -105,15 +139,15 @@ const noUseClientInServer: Rule.RuleModule = {
     schema: [],
   },
   create(context) {
-    const filename = context.getFilename();
+    const filename = filenameOf(context);
     const serverOnlyFiles = ['loading.tsx', 'error.tsx', 'not-found.tsx', 'head.tsx', 'template.tsx'];
-    const basename = filename.split('/').pop() ?? '';
+    const basename = filename.split(/[\\/]/).pop() ?? '';
     if (!serverOnlyFiles.includes(basename)) return {};
 
     return {
       Program(node) {
-        const source = context.getSourceCode().getText(node);
-        if (source.startsWith('"use client"') || source.startsWith("'use client'")) {
+        const source = (context.sourceCode ?? context.getSourceCode()).getText(node);
+        if (hasClientDirective(source)) {
           context.report({ loc: { line: 1, column: 0 }, messageId: 'noUseClient', data: { file: basename } });
         }
       },
@@ -181,6 +215,20 @@ const noNewFunc: Rule.RuleModule = {
   },
 };
 
+/** True for `{{ __html: fn(...) }}` where the callee's name contains "sanitize". */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isSanitizedHtml(value: any): boolean {
+  const obj = value?.type === 'JSXExpressionContainer' ? value.expression : undefined;
+  if (obj?.type !== 'ObjectExpression') return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const html = obj.properties.find((p: any) => p.type === 'Property' && (p.key?.name === '__html' || p.key?.value === '__html'));
+  const call = html?.value;
+  if (call?.type !== 'CallExpression') return false;
+  const callee = call.callee;
+  const calleeName = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression' ? callee.property?.name : '';
+  return /sanitize/i.test(calleeName ?? '');
+}
+
 const noDangerouslySetInnerHTML: Rule.RuleModule = {
   meta: {
     type: 'problem',
@@ -194,6 +242,11 @@ const noDangerouslySetInnerHTML: Rule.RuleModule = {
       JSXAttribute(node: any) {
         const name = node.name as { type: string; name?: string };
         if (name.type === 'JSXIdentifier' && name.name === 'dangerouslySetInnerHTML') {
+          // `allowSanitized` (declared in the schema) permits `{ __html: sanitize(x) }`
+          // / `DOMPurify.sanitize(x)` — the value must be passed through a call
+          // whose name contains "sanitize".
+          const allowSanitized = (context.options[0] as { allowSanitized?: boolean } | undefined)?.allowSanitized;
+          if (allowSanitized && isSanitizedHtml(node.value)) return;
           context.report({ node, messageId: 'noDanger' });
         }
       },
@@ -230,13 +283,23 @@ const noSecretsInClient: Rule.RuleModule = {
     schema: [],
   },
   create(context) {
-    const filename = context.getFilename();
-    const isClient = filename.includes('client') || filename.endsWith('.client.ts') || filename.endsWith('.client.tsx');
-    if (!isClient) return {};
+    const filename = filenameOf(context);
+    // A client file is one named *.client.ts(x), living under a `client`
+    // directory, or opting in with a client directive. (Matching the substring
+    // "client" anywhere in the path flagged e.g. "oauth-client-secret.ts" and
+    // every project checked out under a folder called "client-work".)
+    const dirs = filename.split('/').slice(0, -1);
+    let isClient = /\.client\.[cm]?[jt]sx?$/.test(baseNameOf(filename)) || dirs.includes('client');
 
     const secretPatterns = [/secret/i, /api[_-]?key/i, /password/i, /token/i, /private[_-]?key/i];
     return {
+      Program(node) {
+        if (!isClient) {
+          isClient = hasClientDirective((context.sourceCode ?? context.getSourceCode()).getText(node));
+        }
+      },
       VariableDeclarator(node: VariableDeclarator) {
+        if (!isClient) return;
         if (node.id.type === 'Identifier' && secretPatterns.some((p) => p.test((node.id as { name: string }).name))) {
           if (node.init && node.init.type === 'Literal' && typeof node.init.value === 'string' && (node.init.value as string).length > 8) {
             context.report({ node, messageId: 'noSecrets' });

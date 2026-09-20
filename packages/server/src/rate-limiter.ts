@@ -20,7 +20,7 @@ export interface RateLimitOptions {
   maxTokens?: number;
   /** Tokens refilled per second (sustained rate). Default: 10 */
   refillRate?: number;
-  /** Key function — defaults to IP address from x-forwarded-for or socket remoteAddress */
+  /** Key function — defaults to the handler's trusted-proxy-resolved client IP */
   keyFn?: (req: { headers: Record<string, string>; ip?: string }) => string;
   /** Paths to exclude from rate limiting. Default: ['/api/health'] */
   excludePaths?: string[];
@@ -45,9 +45,14 @@ export function rateLimitMiddleware(options: RateLimitOptions = {}): PledgePlugi
   const refillRate = options.refillRate ?? 10;
   const excludePaths = options.excludePaths ?? ['/api/health'];
   const keyFn = options.keyFn ?? ((req) => {
+    // ctx.ip is resolved by the handler through the trusted-proxy model —
+    // X-Forwarded-For is only honored when the peer is a configured trusted
+    // proxy, so a direct client can't spoof a fresh bucket per request.
+    // Falling back to raw XFF here would re-open that hole.
+    if (req.ip) return req.ip;
     const forwarded = req.headers['x-forwarded-for'];
     if (forwarded) return forwarded.split(',')[0].trim();
-    return req.ip ?? 'unknown';
+    return 'unknown';
   });
 
   return {

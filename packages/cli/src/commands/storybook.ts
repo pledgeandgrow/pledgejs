@@ -10,7 +10,7 @@
 
 import { readFile, writeFile, mkdir, readdir, access } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, dirname, sep } from 'node:path';
 import type { PledgeConfig } from 'pledgestack-shared';
 
 interface StorybookOptions {
@@ -42,7 +42,8 @@ function generateMainConfig(config: PledgeConfig): string {
   const framework = config.framework ?? 'react';
   const frameworkPackage = storybookFrameworkPackage(framework);
 
-  const isReact = framework === 'react';
+  // 'pledge' apps are React on the UI layer (full-stack React + Rust backend)
+  const isReact = framework === 'react' || framework === 'pledge';
   const storyExts = isReact ? 'ts|tsx|mdx' : `ts|${framework === 'svelte' ? 'svelte' : 'js'}|mdx`;
   const typescriptBlock = isReact
     ? `  typescript: {
@@ -87,9 +88,9 @@ export default config;
 /**
  * Generates the .storybook/preview.ts config.
  */
-function generatePreviewConfig(): string {
+export function generatePreviewConfig(config: Pick<PledgeConfig, 'appDir'>): string {
   return `import type { Preview } from './types';
-import '../${'app'}/globals.css';
+import '../${config.appDir}/globals.css';
 
 const preview: Preview = {
   parameters: {
@@ -175,11 +176,12 @@ export type Story = {
 /**
  * Generates a default story for a component file.
  */
-function generateDefaultStory(_componentPath: string, componentName: string, isClient: boolean): string {
+export function generateDefaultStory(typesImportPath: string, componentName: string, isClient: boolean): string {
   const storyName = `${componentName}Story`;
 
-  return `import type { Story } from '../../.storybook/types';
-${isClient ? '"use pledge:client";\n' : ''}
+  // A directive only counts when it is the first statement, so it must precede the import.
+  return `${isClient ? '"use pledge:client";\n' : ''}import type { Story } from '${typesImportPath}';
+
 // Auto-generated story for ${componentName}
 // Edit this file to customize the story
 
@@ -241,7 +243,7 @@ async function hasExistingStory(filePath: string): Promise<boolean> {
 /**
  * Walks the app/ directory and finds component files.
  */
-async function findComponents(appDir: string): Promise<string[]> {
+export async function findComponents(appDir: string): Promise<string[]> {
   const components: string[] = [];
 
   async function walk(dir: string) {
@@ -252,7 +254,9 @@ async function findComponents(appDir: string): Promise<string[]> {
         // Skip special directories
         if (entry.name.startsWith('_') || entry.name === 'api') continue;
         await walk(fullPath);
-      } else if (/\.(tsx|ts)$/.test(entry.name)) {
+      } else if (/\.(tsx|ts)$/.test(entry.name) && !/\.(stories|story|test|spec)\.[tj]sx?$|\.d\.ts$/.test(entry.name)) {
+        // (generated stories, tests and declaration files are not components —
+        // without this, re-running with --all generated `X.stories.stories.tsx`)
         // Skip page.tsx, layout.tsx, loading.tsx, error.tsx, not-found.tsx, etc.
         const skip = ['page', 'layout', 'loading', 'error', 'not-found', 'template', 'default', 'head', 'route', 'middleware'];
         const baseName = entry.name.replace(/\.(tsx|ts)$/, '');
@@ -295,7 +299,7 @@ export async function storybookCommand(opts: StorybookOptions = {}): Promise<voi
   await writeFile(join(storybookDir, 'main.ts'), generateMainConfig(config), 'utf-8');
   console.log('    ✓ main.ts');
 
-  await writeFile(join(storybookDir, 'preview.ts'), generatePreviewConfig(), 'utf-8');
+  await writeFile(join(storybookDir, 'preview.ts'), generatePreviewConfig(config), 'utf-8');
   console.log('    ✓ preview.ts');
 
   await writeFile(join(storybookDir, 'types.ts'), generateTypes(), 'utf-8');
@@ -319,7 +323,10 @@ export async function storybookCommand(opts: StorybookOptions = {}): Promise<voi
 
     const componentName = getComponentName(component);
     const isClient = await isClientComponent(component);
-    const storyContent = generateDefaultStory(component, componentName, isClient);
+    // Import path from the story file to .storybook/types (posix separators, no extension)
+    let typesImportPath = relative(dirname(component), join(storybookDir, 'types')).split(sep).join('/');
+    if (!typesImportPath.startsWith('.')) typesImportPath = `./${typesImportPath}`;
+    const storyContent = generateDefaultStory(typesImportPath, componentName, isClient);
     const storyPath = component.replace(/\.(tsx|ts)$/, '.stories.tsx');
 
     await writeFile(storyPath, storyContent, 'utf-8');

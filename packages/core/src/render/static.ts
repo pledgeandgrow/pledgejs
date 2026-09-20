@@ -28,6 +28,10 @@ export async function generateStaticPages(ctx: SSGContext): Promise<Map<string, 
     const mod = ctx.modules.get(route.filePath);
     if (!mod) continue;
 
+    // Dynamic routes without generateStaticParams render per-request (SSR) —
+    // there are no params to prerender with, so there is nothing to emit here.
+    if (route.pattern.includes(':') && !mod.generateStaticParams) continue;
+
     // For dynamic routes, call generateStaticParams
     if (mod.generateStaticParams && route.pattern.includes(':')) {
       let paramsList: Awaited<ReturnType<typeof mod.generateStaticParams>>;
@@ -44,7 +48,7 @@ export async function generateStaticPages(ctx: SSGContext): Promise<Map<string, 
       }
       for (const params of paramsList) {
         const path = route.pattern.replace(/:(\w+)/g, (_, name) => params[name] ?? '');
-        const html = renderToString(createElement(mod.default, params));
+        const html = renderToString(createElement(mod.default, { params }));
         const metadata = await resolvePageMetadata(mod, params);
         const viewport = await resolvePageViewport(mod);
         output.set(path, wrapStaticHtml(html, route, metadata, viewport));

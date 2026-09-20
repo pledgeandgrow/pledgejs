@@ -1,21 +1,49 @@
 # PledgeStack release workflow
-# Publishes pledgestack to npm on git tag push (v*.*.*)
+#
+# Publishes every public package (34 packages, one shared version — see the
+# `fixed` group in .changeset/config.json) to npm through Changesets.
+#
+# Flow:
+#   1. Contributors add a changeset (`pnpm changeset`) with each PR.
+#   2. On every push to main this workflow runs the full quality gate, then the
+#      Changesets action either
+#        - opens/updates a "Version Packages" PR (bumps versions, writes each
+#          package's CHANGELOG.md), or
+#        - when that PR is merged and no changesets remain, publishes to npm
+#          (`pnpm release` = build all packages -> release check -> `changeset publish`)
+#          and pushes the git tags.
+#   3. While .changeset/pre.json exists the repo is in prerelease mode
+#      (`changeset pre enter rc`): versions are 1.0.0-rc.N and packages are
+#      published under the `rc` dist-tag. Run `pnpm changeset pre exit` to leave
+#      prerelease mode for the stable 1.0.0 release.
+#
+# Requires the repository secret NPM_TOKEN (an npm automation token with publish
+# rights to the `pledgestack*` names and `create-pledge-app`).
 
 name: Release
 
-permissions:
-  contents: write
-
 on:
   push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+*"
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
 
 jobs:
-  publish-npm:
+  release:
+    name: Version or publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v5
@@ -35,15 +63,26 @@ jobs:
 
       - name: Lint
         run: pnpm lint
-        continue-on-error: true
-
-      - name: Test
-        run: pnpm test
 
       - name: Build packages
         run: pnpm build:packages
 
-      - name: Publish to npm
-        run: pnpm --filter "./packages/cli" publish --no-git-checks
+      - name: Test
+        run: pnpm test
+
+      - name: Release check (metadata, versions, dist entry points)
+        run: pnpm check:release
+
+      - name: Create version PR or publish to npm
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm version-packages
+          publish: pnpm release
+          commit: "chore: version packages"
+          title: "chore: version packages"
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

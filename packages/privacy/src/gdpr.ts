@@ -8,6 +8,11 @@ import type { PledgeRequest, PledgeResponse } from 'pledgestack-shared';
  * the export is opened in Excel/Sheets by an admin. We neutralize it by
  * prefixing a single quote, then apply standard quote-escaping/quoting.
  */
+/** Restricts a value to filename-safe characters for Content-Disposition. */
+function safeFilePart(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 100);
+}
+
 function csvCell(value: unknown): string {
   let s = String(value);
   if (/^[=+\-@\t\r]/.test(s)) {
@@ -36,6 +41,8 @@ export interface DataExportResult {
   format: 'json' | 'csv';
   /** All user data records */
   records: UserDataRecord[];
+  /** Collectors whose export threw — the data from these sources is missing. */
+  failedSources?: string[];
 }
 
 export interface RightToBeForgottenResult {
@@ -87,6 +94,7 @@ export class GDPRManager {
    */
   async exportData(userId: string, format: 'json' | 'csv' = 'json'): Promise<DataExportResult> {
     const records: UserDataRecord[] = [];
+    const failedSources: string[] = [];
 
     for (const collector of this.collectors.values()) {
       try {
@@ -94,6 +102,8 @@ export class GDPRManager {
         records.push(...data);
       } catch (err) {
         console.error(`[pledgestack] GDPR export failed for source "${collector.name}":`, err);
+        // Surface the gap — an access request must not silently look complete.
+        failedSources.push(collector.name);
       }
     }
 
@@ -102,6 +112,7 @@ export class GDPRManager {
       exportedAt: Date.now(),
       format,
       records,
+      ...(failedSources.length > 0 ? { failedSources } : {}),
     };
   }
 
@@ -153,7 +164,7 @@ export class GDPRManager {
         status: 200,
         headers: {
           'Content-Type': 'text/csv',
-          'Content-Disposition': `attachment; filename="user-data-${userId}.csv"`,
+          'Content-Disposition': `attachment; filename="user-data-${safeFilePart(userId)}.csv"`,
         },
         body: csv,
       };
@@ -163,7 +174,7 @@ export class GDPRManager {
       status: 200,
       headers: {
         'Content-Type': 'application/json',
-        'Content-Disposition': `attachment; filename="user-data-${userId}.json"`,
+        'Content-Disposition': `attachment; filename="user-data-${safeFilePart(userId)}.json"`,
       },
       body: JSON.stringify(result, null, 2),
     };

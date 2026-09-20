@@ -8,7 +8,10 @@
  * Usage:
  *   pledge lint              Lint all .psx/.ps files
  *   pledge lint app/users    Lint specific directory
- *   pledge lint --fix        Not yet supported — shows suggestions only
+ *
+ * There is no --fix: none of the current rules has a semantics-preserving
+ * mechanical fix (e.g. unwrap() -> ? is only valid in Result-returning fns),
+ * so autofixing is intentionally not offered.
  */
 
 import { lintDirectory, formatLintResults, analyzeDeadCode, formatDeadCodeResult } from 'pledgestack-core';
@@ -16,20 +19,12 @@ import { lintDirectory, formatLintResults, analyzeDeadCode, formatDeadCodeResult
 export interface LintOptions {
   /** Specific directory to lint */
   dir?: string;
-  /** Show suggestions (always on for now) */
-  fix?: boolean;
   /** Run dead code analysis (#219) */
   deadCode?: boolean;
 }
 
 export async function lintCommand(opts: LintOptions): Promise<void> {
   const rootDir = opts.dir ?? process.cwd();
-
-  // `--fix` is accepted but auto-fixing isn't implemented yet. Say so explicitly
-  // rather than silently ignoring the flag (the previous behavior).
-  if (opts.fix) {
-    console.log('\x1b[33m  ⚠ --fix is not yet supported; showing suggestions only.\x1b[0m');
-  }
 
   const results = await lintDirectory(rootDir);
   const output = formatLintResults(results);

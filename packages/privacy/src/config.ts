@@ -56,7 +56,12 @@ export const DEFAULT_PRIVACY_CONFIG: Required<PrivacyConfig> = {
  * Ensures all fields are set and opt-in is enforced.
  */
 export function resolvePrivacyConfig(userConfig?: PrivacyConfig): Required<PrivacyConfig> {
-  return { ...DEFAULT_PRIVACY_CONFIG, ...userConfig };
+  // Drop explicit `undefined`s: spreading them would overwrite a safe default
+  // (e.g. requireConsent: undefined silently disabled the consent requirement).
+  const defined = Object.fromEntries(
+    Object.entries(userConfig ?? {}).filter(([, v]) => v !== undefined),
+  ) as PrivacyConfig;
+  return { ...DEFAULT_PRIVACY_CONFIG, ...defined };
 }
 
 /**

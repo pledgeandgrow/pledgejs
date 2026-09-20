@@ -8,8 +8,10 @@ describe('metrics Prometheus format (#50)', () => {
     c.timing('http.request_duration_ms', 12, { method: 'GET', path: '/' });
     const out = c.export();
     // Correct: name_sum{labels}. Never name{labels}_sum.
-    expect(out).toContain('http.request_duration_ms_sum{method=GET,path=/} 12');
-    expect(out).toContain('http.request_duration_ms_count{method=GET,path=/} 1');
+    // The exporter sanitizes the metric name to the Prometheus charset
+    // (dots → underscores) and quotes label values per the exposition format.
+    expect(out).toContain('http_request_duration_ms_sum{method="GET",path="/"} 12');
+    expect(out).toContain('http_request_duration_ms_count{method="GET",path="/"} 1');
     expect(out).not.toMatch(/}_sum/);
     // _avg is not a valid summary component and must not be emitted.
     expect(out).not.toContain('_avg');

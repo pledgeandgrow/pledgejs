@@ -77,7 +77,8 @@ export async function testCommand(opts: TestOptions): Promise<void> {
       });
 
       const vitestExit = await new Promise<number>((resolve) => {
-        vitestChild.on('close', (code) => resolve(code ?? 0));
+        // null means Vitest was killed by a signal — report that as a failure.
+        vitestChild.on('close', (code) => resolve(code ?? 1));
         vitestChild.on('error', () => resolve(-1));
       });
 

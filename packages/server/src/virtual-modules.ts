@@ -24,9 +24,10 @@ export async function tryServePledgeVirtual(
   pledgepackPort?: number,
 ): Promise<boolean> {
   const url = req.url ?? '/';
-  if (!url.startsWith('/__pledge__/')) return false;
-
   const pathname = url.split('?')[0];
+  // '/_pledge/image' (query form, emitted by pledgestack-image) lives outside
+  // the /__pledge__/ prefix — the early return used to make it unreachable.
+  if (!url.startsWith('/__pledge__/') && pathname !== '/_pledge/image') return false;
 
   if (pathname === '/__pledge__/client.css') {
     return serveClientCss(res, config);
@@ -76,6 +77,9 @@ async function serveFontCss(
     const fontModuleName: string = 'pledgestack-font';
     const { resolveFont, fontVarName } = await import(fontModuleName);
     const family = decodeURIComponent(pathname.replace('/__pledge__/font/', ''));
+    // The family name is interpolated into CSS below — restrict it to plain
+    // font-name characters so it can't break out of the quoted string.
+    if (!/^[A-Za-z0-9 _-]{1,100}$/.test(family)) throw new Error('Invalid font family');
     const resolved = resolveFont({ family, src: family });
     const css = `@font-face {
   font-family: '${family}';
@@ -137,6 +141,17 @@ async function serveOptimizedImage(
       return true;
     }
 
+    // Only image files, never dotfiles: this endpoint reads straight from
+    // public/, so without the allowlist it would serve .env/.git/etc. that
+    // the static handler deliberately blocks.
+    const imageExt = imagePath.split('?')[0].split('.').pop()?.toLowerCase() ?? '';
+    const hasDotSegment = imagePath.split(/[\\/]/).some((s) => s.startsWith('.'));
+    if (hasDotSegment || !['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'svg'].includes(imageExt)) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Image not found');
+      return true;
+    }
+
     const publicPath = resolveImageSource(config, imagePath);
     const { readFile } = await import('node:fs/promises');
     const { existsSync } = await import('node:fs');
@@ -166,14 +181,23 @@ async function serveOptimizedImage(
     // original bytes with the content-type of the ACTUAL file — never claiming a
     // format we didn't convert to (the previous code mislabeled every response).
     if ((width || height || format) && srcExt !== 'svg') {
+      // Decompression-bomb guard: a few-hundred-KB PNG can decode to
+      // gigabytes of pixels. Cap input bytes and let libvips cap decoded
+      // area before spending memory on it.
+      const MAX_SOURCE_BYTES = 50 * 1024 * 1024;
+      if (data.byteLength > MAX_SOURCE_BYTES) {
+        res.writeHead(413, { 'Content-Type': 'text/plain' });
+        res.end('Image source too large');
+        return true;
+      }
       try {
         const sharpMod = 'sharp';
-        const sharp = (await import(sharpMod)).default as (input: Buffer) => {
+        const sharp = (await import(sharpMod)).default as (input: Buffer, opts?: { limitInputPixels?: number }) => {
           resize: (opts: { width?: number; height?: number; fit: string }) => ReturnType<typeof sharp>;
           toFormat: (fmt: string, opts?: { quality?: number }) => ReturnType<typeof sharp>;
           toBuffer: () => Promise<Buffer>;
         };
-        let pipeline = sharp(data);
+        let pipeline = sharp(data, { limitInputPixels: 100_000_000 });
         if (width || height) pipeline = pipeline.resize({ width, height, fit: 'inside' });
         const outFormat = format ?? srcExt;
         pipeline = pipeline.toFormat(outFormat, quality ? { quality } : undefined);
@@ -194,6 +218,9 @@ async function serveOptimizedImage(
       'Content-Type': contentTypeForExt(srcExt),
       'Cache-Control': 'public, max-age=31536000, immutable',
       'Vary': 'Accept',
+      // SVG passthrough can carry <script> — same-origin navigation to an
+      // image/svg+xml response executes it in first-party context.
+      ...(srcExt === 'svg' ? { 'Content-Security-Policy': "script-src 'none'; object-src 'none'" } : {}),
     });
     res.end(data);
     return true;
@@ -229,6 +256,11 @@ function getActiveRenderer(config: PledgeConfig): RendererAdapter | null {
  *   - Imports named exports (GET, POST, PUT, DELETE, PATCH) from route.ts files
  *   - Exports a route map for client-side navigation
  */
+/** Mirrors pledgestack-client's routeMapKey (server does not depend on client). */
+function routeMapKey(convention: string, pattern: string): string {
+  return convention === 'page' || convention === 'route' ? pattern : `${convention}:${pattern}`;
+}
+
 export function tryServeRouterModule(
   req: IncomingMessage,
   res: ServerResponse,
@@ -250,12 +282,15 @@ export function tryServeRouterModule(
     if (file.convention === FILE_CONVENTIONS.route) {
       const varName = `route_${routeEntries.length}`;
       imports.push(`import * as ${varName} from '${importPath}';`);
-      routeEntries.push(`  ${JSON.stringify(file.routePattern)}: { type: 'api', handlers: ${varName} }`);
+      routeEntries.push(`  ${JSON.stringify(routeMapKey('route', file.routePattern))}: { type: 'api', handlers: ${varName} }`);
     } else {
       const varName = `mod_${routeEntries.length}`;
       imports.push(`import ${varName} from '${importPath}';`);
       const conventionType = file.convention ?? 'page';
-      routeEntries.push(`  ${JSON.stringify(file.routePattern)}: { type: ${JSON.stringify(conventionType)}, component: ${varName} }`);
+      // Non-page conventions are key-prefixed (e.g. "layout:/") so a layout and
+      // a page at the same pattern don't overwrite each other in the map.
+      const key = routeMapKey(conventionType, file.routePattern);
+      routeEntries.push(`  ${JSON.stringify(key)}: { type: ${JSON.stringify(conventionType)}, component: ${varName} }`);
     }
   }
 
@@ -263,7 +298,7 @@ export function tryServeRouterModule(
 // Re-export the client runtime so the generated client script can import
 // everything it needs from '/__pledge_router' (previously RouterProvider/Link
 // were imported from here but never exported, breaking client hydration).
-export { RouterProvider, Link, resolveRouteElement, initPledgeHydration } from 'pledgestack-client';
+export { RouterProvider, Link, resolveRouteElement, resolveRouteChain, initPledgeHydration } from 'pledgestack-client';
 ${imports.join('\n')}
 
 export const routes = {
@@ -336,17 +371,10 @@ async function serveClientCss(
   res: ServerResponse,
   config: PledgeConfig,
 ): Promise<boolean> {
-  const cssPath = join(config.rootDir, config.outDir, '__pledge__', 'client.css');
-  try {
-    const content = await readFile(cssPath, 'utf-8');
-    res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
-    res.end(content);
-    return true;
-  } catch {
-    res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
-    res.end('/* PledgeStack — no client CSS */');
-    return true;
-  }
+  const content = await readClientCss(config);
+  res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8' });
+  res.end(content ?? '/* PledgeStack — no client CSS */');
+  return true;
 }
 
 function serveClientJs(
@@ -355,27 +383,11 @@ function serveClientJs(
   isDev: boolean,
   pledgepackPort?: number,
 ): boolean {
-  const adapter = getActiveRenderer(config);
-  const options: ClientScriptOptions = {
-    isDev,
-    pledgepackPort,
-    rscEnabled: config.rsc,
-  };
-
-  let code: string;
-  if (adapter) {
-    // Use the framework-specific hydration script from the renderer adapter
-    code = adapter.generateClientScript(options);
-  } else {
-    // Fallback: minimal hydration script
-    code = generateFallbackClientScript(options);
-  }
-
   res.writeHead(200, {
     'Content-Type': 'application/javascript; charset=utf-8',
     'Cache-Control': 'no-cache',
   });
-  res.end(code);
+  res.end(generateClientScriptCode(config, isDev, pledgepackPort));
   return true;
 }
 
@@ -385,28 +397,93 @@ function serveRscClientJs(
   isDev: boolean,
   pledgepackPort?: number,
 ): boolean {
+  res.writeHead(200, {
+    'Content-Type': 'application/javascript; charset=utf-8',
+    'Cache-Control': 'no-cache',
+  });
+  res.end(generateRscClientScriptCode(config, isDev, pledgepackPort));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Shared generators + SRI integrity hashes
+//
+// The HTML render pipeline stamps integrity="sha384-…" on the /__pledge__/*
+// script/link tags it emits. The hashes are computed here from the SAME code
+// path that serves the bytes, so the stamped hash always matches what the
+// server actually returns.
+// ---------------------------------------------------------------------------
+
+/** Reads the built client CSS, or null when no stylesheet was emitted. */
+async function readClientCss(config: PledgeConfig): Promise<string | null> {
+  const cssPath = join(config.rootDir, config.outDir, '__pledge__', 'client.css');
+  try {
+    return await readFile(cssPath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/** Generates the exact bytes served at /__pledge__/client.js. */
+export function generateClientScriptCode(config: PledgeConfig, isDev: boolean, pledgepackPort?: number): string {
   const adapter = getActiveRenderer(config);
   const options: ClientScriptOptions = {
     isDev,
     pledgepackPort,
     rscEnabled: config.rsc,
   };
-
-  let code: string;
-  if (adapter?.generateRSCClientScript) {
-    // Use the framework-specific RSC client script (React only)
-    code = adapter.generateRSCClientScript(options);
-  } else {
-    // No RSC support for this framework — emit a no-op
-    code = `// PledgeStack RSC client — RSC is not supported for framework "${config.framework ?? 'react'}"\n`;
+  if (adapter) {
+    return adapter.generateClientScript(options);
   }
+  return generateFallbackClientScript(options);
+}
 
-  res.writeHead(200, {
-    'Content-Type': 'application/javascript; charset=utf-8',
-    'Cache-Control': 'no-cache',
-  });
-  res.end(code);
-  return true;
+/** Generates the exact bytes served at /__pledge__/rsc-client.js. */
+export function generateRscClientScriptCode(config: PledgeConfig, isDev: boolean, pledgepackPort?: number): string {
+  const adapter = getActiveRenderer(config);
+  const options: ClientScriptOptions = {
+    isDev,
+    pledgepackPort,
+    rscEnabled: config.rsc,
+  };
+  if (adapter?.generateRSCClientScript) {
+    return adapter.generateRSCClientScript(options);
+  }
+  return `// PledgeStack RSC client — RSC is not supported for framework "${config.framework ?? 'react'}"\n`;
+}
+
+/** SHA-384 SRI hash. Uses WebCrypto so it works in Node and edge runtimes. */
+async function sriHash(content: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-384', new TextEncoder().encode(content));
+  let binary = '';
+  for (const b of new Uint8Array(digest)) binary += String.fromCharCode(b);
+  return `sha384-${btoa(binary)}`;
+}
+
+/**
+ * Computes SRI integrity hashes for the framework-emitted virtual assets
+ * (`/__pledge__/client.js`, `/__pledge__/rsc-client.js`, `/__pledge__/client.css`).
+ * Keyed by URL path; passed to renderers via RenderSecurity.assetIntegrity.
+ * Called once per handler context — results are stable for a given
+ * (config, isDev, pledgepackPort) and recomputed after invalidate().
+ */
+export async function computeAssetIntegrity(
+  config: PledgeConfig,
+  isDev: boolean,
+  pledgepackPort?: number,
+): Promise<Record<string, string>> {
+  const integrity: Record<string, string> = {};
+  try {
+    integrity['/__pledge__/client.js'] = await sriHash(generateClientScriptCode(config, isDev, pledgepackPort));
+    integrity['/__pledge__/rsc-client.js'] = await sriHash(generateRscClientScriptCode(config, isDev, pledgepackPort));
+    const css = await readClientCss(config);
+    if (css !== null) {
+      integrity['/__pledge__/client.css'] = await sriHash(css);
+    }
+  } catch {
+    // Hashing must never break serving — return whatever was computed.
+  }
+  return integrity;
 }
 
 /**

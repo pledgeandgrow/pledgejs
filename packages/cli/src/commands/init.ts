@@ -8,13 +8,49 @@
 
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
 
 type DetectedFramework = 'nextjs' | 'vite' | 'cra' | 'express' | 'unknown';
 
-interface InitOptions {
+export interface InitOptions {
   force?: boolean;
+  /** Do not run the package manager after scaffolding (`--skip-install`). */
   skipInstall?: boolean;
+  /** Project root (default: process.cwd()). */
+  rootDir?: string;
+  /** Override the installer (tests). Resolves to the process exit code. */
+  installer?: (pm: PackageManager, cwd: string) => Promise<number>;
+}
+
+export type PackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm';
+
+/**
+ * Detects the project's package manager from its lockfile, falling back to the
+ * `packageManager` field of package.json and finally npm.
+ */
+export async function detectPackageManager(rootDir: string): Promise<PackageManager> {
+  if (existsSync(join(rootDir, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (existsSync(join(rootDir, 'yarn.lock'))) return 'yarn';
+  if (existsSync(join(rootDir, 'bun.lockb')) || existsSync(join(rootDir, 'bun.lock'))) return 'bun';
+  if (existsSync(join(rootDir, 'package-lock.json'))) return 'npm';
+  try {
+    const pkg = JSON.parse(await readFile(join(rootDir, 'package.json'), 'utf-8')) as { packageManager?: string };
+    const name = pkg.packageManager?.split('@')[0];
+    if (name === 'pnpm' || name === 'yarn' || name === 'bun' || name === 'npm') return name;
+  } catch {
+    // no package.json
+  }
+  return 'npm';
+}
+
+function runInstall(pm: PackageManager, cwd: string): Promise<number> {
+  return new Promise((resolve) => {
+    // shell:true so pnpm.cmd / npm.cmd resolve on Windows; the command is a fixed literal.
+    const child = spawn(`${pm} install`, { cwd, stdio: 'inherit', shell: true });
+    child.on('error', () => resolve(1));
+    child.on('close', (code) => resolve(code ?? 1));
+  });
 }
 
 async function fetchLatestVersion(pkgName: string): Promise<string> {
@@ -343,7 +379,7 @@ function relativePath(root: string, abs: string): string {
  * Runs the init command — adds PledgeStack to an existing project.
  */
 export async function initCommand(opts: InitOptions = {}): Promise<void> {
-  const rootDir = process.cwd();
+  const rootDir = opts.rootDir ?? process.cwd();
 
   console.log('\n  PledgeStack — Initializing in existing project...\n');
 
@@ -437,12 +473,24 @@ export async function initCommand(opts: InitOptions = {}): Promise<void> {
 
   console.log('\n  ✓ PledgeStack initialized successfully!\n');
 
-  if (!opts.skipInstall) {
+  const pm = await detectPackageManager(rootDir);
+  if (opts.skipInstall) {
+    console.log('  Skipped dependency installation (--skip-install).');
     console.log('  Next steps:');
-    console.log('    1. Install dependencies: pnpm install');
+    console.log(`    1. Install dependencies: ${pm} install`);
     console.log('    2. Start dev server: pledge dev\n');
+  } else if (!existsSync(join(rootDir, 'package.json'))) {
+    console.log('  No package.json found — nothing to install. Run `pledge dev` to start developing.\n');
   } else {
-    console.log('  Run `pledge dev` to start developing.\n');
+    console.log(`  → Installing dependencies with ${pm}...`);
+    const code = await (opts.installer ?? runInstall)(pm, rootDir);
+    if (code === 0) {
+      console.log('    ✓ Dependencies installed');
+      console.log('  Run `pledge dev` to start developing.\n');
+    } else {
+      console.log(`    ✗ \`${pm} install\` failed (exit code ${code}).`);
+      console.log(`  Install manually with \`${pm} install\`, then run \`pledge dev\`.\n`);
+    }
   }
 
   if (framework === 'nextjs') {

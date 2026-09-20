@@ -26,7 +26,7 @@ export default function FeaturesPage() {
         </p>
         <div className="grid">
           {features.map((f) => (
-            <div className="card">
+            <div key={f.title} className="card">
               <h3><span className="card-icon">{f.icon}</span> {f.title}</h3>
               <p>{f.desc}</p>
             </div>

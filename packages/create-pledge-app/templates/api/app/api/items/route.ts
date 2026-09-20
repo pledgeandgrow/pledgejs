@@ -5,9 +5,18 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const body = await request.json();
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return Response.json({ error: 'Body must be a JSON object' }, { status: 400 });
+  }
   const id = crypto.randomUUID();
-  const item = { id, ...body };
+  // `id` goes last so a client-supplied "id" can't override the server's.
+  const item = { name: '', ...(body as Record<string, unknown>), id };
   items.set(id, item);
   return Response.json(item, { status: 201 });
 }

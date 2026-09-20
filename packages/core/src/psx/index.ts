@@ -21,6 +21,7 @@ export * from './types';
 export * from './parser';
 export * from './codegen';
 export * from './transform';
+export * from './compile-module';
 export * from './batch';
 export * from './rust-ssr';
 export * from './binary-protocol';

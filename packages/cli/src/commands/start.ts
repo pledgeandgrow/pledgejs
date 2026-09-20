@@ -1,4 +1,4 @@
-import { startNodeServer, loadEnv } from 'pledgestack-server';
+import { startNodeServer, loadEnv, reportProductionPosture } from 'pledgestack-server';
 import { resolveBundlerAdapter } from '../bundler-resolver';
 import { assertEnv } from 'pledgestack-shared';
 
@@ -28,6 +28,14 @@ export async function startCommand(options: { port?: number; hostname?: string }
   const hostname = options.hostname ?? 'localhost';
 
   loadEnv(config.rootDir, 'production');
+
+  // `pledge start` is production context by definition — default NODE_ENV so
+  // error pages and security checks don't fall back to dev behavior.
+  process.env.NODE_ENV ||= 'production';
+
+  // Fail-loud on production-unsafe config (disabled CSRF/headers, wildcard
+  // CORS with credentials, …). Warnings only — never blocks startup.
+  reportProductionPosture(config);
 
   // Validate required env vars before starting — fail fast with a clear error
   // instead of crashing at the first request that needs a missing var (#49).

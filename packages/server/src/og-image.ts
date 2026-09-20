@@ -50,7 +50,7 @@ export async function tryServeOgImage(
     const m = regex.exec(parentPath);
     if (m) {
       route = r;
-      params = Object.fromEntries(paramNames.map((name, i) => [name, decodeURIComponent(m[i + 1] ?? '')]));
+      params = Object.fromEntries(paramNames.map((name, i) => [name, safeDecodeParam(m[i + 1] ?? '')]));
       break;
     }
   }
@@ -83,5 +83,13 @@ export async function tryServeOgImage(
   } catch (err) {
     console.error('[pledgestack] OG image render error:', err);
     return null;
+  }
+}
+
+function safeDecodeParam(v: string): string {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
   }
 }

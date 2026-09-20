@@ -23,7 +23,8 @@ const DEFAULT_RULES: A11yRule[] = [
     id: 'img-alt',
     description: 'Images must have alt text',
     severity: 'error',
-    check: (el) => el.tagName === 'IMG' && !el.getAttribute('alt'),
+    // alt="" is the correct markup for decorative images — only a MISSING alt is a violation.
+    check: (el) => el.tagName === 'IMG' && !el.hasAttribute('alt'),
     fix: 'Add an alt attribute to the image',
   },
   {
@@ -46,9 +47,15 @@ const DEFAULT_RULES: A11yRule[] = [
     severity: 'error',
     check: (el) => {
       if (el.tagName !== 'INPUT' && el.tagName !== 'SELECT' && el.tagName !== 'TEXTAREA') return false;
+      if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) return false;
+      // Implicit association: <label><input></label>
+      if (el.closest('label')) return false;
       const id = el.getAttribute('id');
-      if (!id) return !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby');
-      return !document.querySelector(`label[for="${id}"]`) && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby');
+      if (!id) return true;
+      // Compare attribute values instead of building a selector (ids containing
+      // quotes threw, and the global `document` ignored the element's own document).
+      const doc = el.ownerDocument;
+      return !Array.from(doc.querySelectorAll('label')).some((l) => l.getAttribute('for') === id);
     },
     fix: 'Add a <label for="..."> or aria-label attribute',
   },

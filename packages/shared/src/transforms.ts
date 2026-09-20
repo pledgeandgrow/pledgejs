@@ -114,7 +114,9 @@ export async function fetchFromPledgepack(
   const host = hostname ?? 'localhost';
   const relPath = relative(projectRoot, sourcePath).replace(/\\/g, '/');
 
-  const url = `http://${host}:${port}/${relPath}`;
+  // Encode per segment: a file named "my page#1.tsx" would otherwise have its
+  // "#..." parsed as a URL fragment and fetch the wrong module.
+  const url = `http://${host}:${port}/${relPath.split('/').map(encodeURIComponent).join('/')}`;
   const response = await fetch(url);
 
   if (!response.ok) {
@@ -181,7 +183,7 @@ export function generateRustFallback(moduleName: string): string {
  */
 const notCompiled = (name) => () => {
   throw new Error(
-    '[PledgeStack] rust.${name}() is not available — Rust addon not compiled.\\n' +
+    '[PledgeStack] rust.' + name + '() is not available — Rust addon not compiled.\\n' +
     'Install Rust toolchain: https://rustup.rs\\n' +
     'Then restart the dev server.'
   );

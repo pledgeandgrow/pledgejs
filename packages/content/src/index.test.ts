@@ -358,7 +358,16 @@ describe('Content Collections', () => {
 
     it('escapes HTML in code blocks', () => {
       const html = renderMarkdown('```\n<div>test</div>\n```');
-      expect(html).toContain('<div>');
+      expect(html).toContain('&lt;div&gt;test&lt;/div&gt;');
+      expect(html).not.toContain('<div>');
+    });
+
+    it('escapes HTML in inline code and neutralises script URLs in links/images', () => {
+      expect(renderMarkdown('use `<b>x</b>`')).toContain('<code>&lt;b&gt;x&lt;/b&gt;</code>');
+      expect(renderMarkdown('[x](javascript:alert(1))')).toContain('href="#"');
+      expect(renderMarkdown('[x](java\tscript:alert(1))')).toContain('href="#"');
+      expect(renderMarkdown('![a"b](x.png"onerror="y)')).not.toMatch(/onerror="/);
+      expect(renderMarkdown('[ok](https://example.com/a?b=1&c=2)')).toContain('href="https://example.com/a?b=1&amp;c=2"');
     });
   });
 

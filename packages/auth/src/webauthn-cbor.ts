@@ -20,13 +20,18 @@ interface DecodeResult {
 }
 
 function decodeItem(buf: Buffer, offset: number): DecodeResult {
+  if (offset >= buf.length) throw new Error('CBOR: unexpected end of input');
   const first = buf[offset];
   const major = first >> 5;
   const info = first & 0x1f;
   let len = info;
   let cursor = offset + 1;
 
-  if (info === 24) { len = buf[cursor]; cursor += 1; }
+  // Buffer.read* throw RangeError on truncated input.
+  if (info === 24) {
+    if (cursor >= buf.length) throw new Error('CBOR: unexpected end of input');
+    len = buf[cursor]; cursor += 1;
+  }
   else if (info === 25) { len = buf.readUInt16BE(cursor); cursor += 2; }
   else if (info === 26) { len = buf.readUInt32BE(cursor); cursor += 4; }
   else if (info === 27) {
@@ -37,6 +42,13 @@ function decodeItem(buf: Buffer, offset: number): DecodeResult {
     cursor += 8;
   } else if (info > 27) {
     throw new Error(`Unsupported CBOR additional info: ${info}`);
+  }
+
+  // Every array/map element and every string byte occupies at least one input
+  // byte, so a declared length beyond the remaining input is malformed (and
+  // would otherwise let a tiny payload force a multi-billion-iteration loop).
+  if (major >= 2 && major <= 5 && len > buf.length - cursor) {
+    throw new Error('CBOR: declared length exceeds input');
   }
 
   switch (major) {

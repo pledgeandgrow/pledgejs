@@ -13,7 +13,11 @@ describe('NAPI Overhead Benchmarking', () => {
       expect(result.functionName).toBe('add');
       expect(result.jsOnlyMs).toBeGreaterThan(0);
       expect(result.napiMs).toBeGreaterThan(0);
-      expect(result.overheadMs).toBeGreaterThanOrEqual(-0.001);
+      // The two functions do identical work, so the measured overhead is pure timing
+      // noise and may be slightly negative (it was flaky under coverage instrumentation
+      // with a -0.001ms floor). Assert it is a sane finite number instead.
+      expect(Number.isFinite(result.overheadMs)).toBe(true);
+      expect(Math.abs(result.overheadMs)).toBeLessThan(5);
       expect(result.recommendation).toBeDefined();
     });
   });

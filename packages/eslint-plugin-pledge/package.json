@@ -1,7 +1,21 @@
 {
   "name": "pledgestack-eslint-plugin",
-  "version": "0.1.4",
+  "version": "1.0.0-rc.0",
   "description": "ESLint plugin for PledgeStack framework conventions",
+  "keywords": [
+    "pledgestack"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/eslint-plugin-pledge#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/eslint-plugin-pledge"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,22 +23,35 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
     "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "eslint": "^9.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
     "rimraf": "^6.0.0",
+    "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
     "@types/estree": "^1.0.0"
   },
-  "private": true
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

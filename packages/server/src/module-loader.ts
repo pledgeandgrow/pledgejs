@@ -126,25 +126,75 @@ export function createModuleLoader(
     ];
 
     for (const middlewarePath of middlewarePaths) {
-      if (existsSync(middlewarePath)) {
-        const cached = middlewareCache.get(middlewarePath);
-        if (cached) return cached;
+      if (!existsSync(middlewarePath)) continue;
 
-        const importUrl = await resolveImportUrl(middlewarePath);
+      const cached = middlewareCache.get(middlewarePath);
+      if (cached) return cached;
 
-        try {
-          const mod = await import(importUrl);
-          const middleware = mod as MiddlewareModule;
-          middlewareCache.set(middlewarePath, middleware);
-          return middleware;
-        } catch (err) {
-          console.error(`[pledgestack] Failed to load middleware ${middlewarePath}:`, err);
-          return null;
+      // Production never imports TypeScript/PSX source: it loads the built
+      // artifact, or fails loudly. Silently serving without auth middleware
+      // is the dangerous direction.
+      let importUrl: string;
+      if (isDev) {
+        importUrl = await resolveImportUrl(middlewarePath);
+      } else {
+        importUrl = pathToFileURL(resolveProductionMiddlewarePath(middlewarePath)).href;
+      }
+
+      try {
+        const mod = await import(importUrl);
+        const middleware = mod as MiddlewareModule;
+        middlewareCache.set(middlewarePath, middleware);
+        return middleware;
+      } catch (err) {
+        console.error(`[pledgestack] Failed to load middleware ${middlewarePath}:`, err);
+        if (!isDev) {
+          throw new Error(
+            `[pledgestack] SECURITY: middleware exists (${middlewarePath}) but could not be loaded in production — ` +
+            'refusing to start without it. Fix the error above or remove the middleware file. ' +
+            `Cause: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
+        return null;
       }
     }
 
     return null;
+  }
+
+  /**
+   * Production resolution for a middleware source file. Prefers the bundler's
+   * built output (.pledge/server/middleware.js — the bundlers compile every
+   * module under the app dir). Plain JS sources may be imported as-is. Anything
+   * else (TS/PSX with no build output) throws: Node cannot import it, and the
+   * app must not silently run without its middleware.
+   */
+  function resolveProductionMiddlewarePath(sourcePath: string): string {
+    const ext = extname(sourcePath);
+    const appRoot = join(config.rootDir, config.appDir);
+    const underApp = sourcePath.startsWith(appRoot);
+    if (underApp) {
+      try {
+        const built = adapter
+          ? adapter.resolveProductionPath(sourcePath, config)
+          : resolveProductionPath(sourcePath, config);
+        if (existsSync(built)) return built;
+      } catch {
+        // fall through to the checks below
+      }
+    }
+    // Root-level middleware is outside the bundled app dir; a build may still
+    // have emitted it next to the server modules.
+    const emitted = join(config.rootDir, config.outDir, 'server', 'middleware.js');
+    if (!underApp && existsSync(emitted)) return emitted;
+
+    if (ext === '.js' || ext === '.mjs' || ext === '.cjs') return sourcePath;
+
+    throw new Error(
+      `[pledgestack] SECURITY: middleware ${sourcePath} has no built output in ${join(config.rootDir, config.outDir, 'server')} — ` +
+      'refusing to start without it (it would silently not be enforced). ' +
+      `Run "pledge build" first, and keep middleware${ext} inside "${config.appDir}/" (bundled) or ship it as plain middleware.js.`,
+    );
   }
 
   return { load, loadAll, invalidate, invalidateAll, loadMiddleware };

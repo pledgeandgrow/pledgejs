@@ -110,9 +110,9 @@ function renderRoutes(routes: RouteInfo[], border: string): ReactNode {
         createElement('td', { style: tdStyle(border) }, r.path),
         createElement('td', { style: tdStyle(border) }, r.mode),
         createElement('td', { style: tdStyle(border) }, r.runtime),
-        createElement('td', { style: tdStyle(border) }, r.filePath.split('/').pop() ?? r.filePath),
-        createElement('td', { style: tdStyle(border) }, r.loadTime ? `${r.loadTime.toFixed(1)}ms` : '-'),
-        createElement('td', { style: tdStyle(border) }, r.renderTime ? `${r.renderTime.toFixed(1)}ms` : '-'),
+        createElement('td', { style: tdStyle(border) }, r.filePath.split(/[\\/]/).pop() ?? r.filePath),
+        createElement('td', { style: tdStyle(border) }, r.loadTime != null ? `${r.loadTime.toFixed(1)}ms` : '-'),
+        createElement('td', { style: tdStyle(border) }, r.renderTime != null ? `${r.renderTime.toFixed(1)}ms` : '-'),
       )),
     ),
   );

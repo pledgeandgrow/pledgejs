@@ -3,8 +3,30 @@ import { isIP } from 'node:net';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 
+/**
+ * Normalise an IP literal: strip URL brackets / zone id and unwrap IPv4-mapped
+ * IPv6 addresses (::ffff:a.b.c.d or ::ffff:hhhh:hhhh) to plain dotted IPv4 so
+ * the IPv4 range checks apply to them.
+ */
+function normalizeIp(raw: string): string {
+  let ip = raw.trim().toLowerCase();
+  if (ip.startsWith('[') && ip.endsWith(']')) ip = ip.slice(1, -1);
+  const zone = ip.indexOf('%');
+  if (zone !== -1) ip = ip.slice(0, zone);
+  const dotted = /^(?:0{0,4}:){0,5}:?ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(ip);
+  if (dotted) return dotted[1];
+  const hex = /^(?:0{0,4}:){0,5}:?ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  return ip;
+}
+
 function isLoopback(ip: string): boolean {
-  return ip === '127.0.0.1' || ip === '::1' || ip.startsWith('127.');
+  // 0.0.0.0/8 and :: ("this host") reach the local machine on most platforms.
+  return ip === '::1' || ip === '::' || ip.startsWith('127.') || ip.startsWith('0.');
 }
 
 function isPrivate(ip: string): boolean {
@@ -14,8 +36,13 @@ function isPrivate(ip: string): boolean {
     const second = parseInt(ip.split('.')[1], 10);
     if (second >= 16 && second <= 31) return true;
   }
+  if (ip.startsWith('100.')) {
+    // 100.64.0.0/10 — carrier-grade NAT / shared address space
+    const second = parseInt(ip.split('.')[1], 10);
+    if (second >= 64 && second <= 127) return true;
+  }
   if (ip.startsWith('169.254.')) return true;
-  if (ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd')) return true;
+  if (ip.includes(':') && (ip.startsWith('fc') || ip.startsWith('fd'))) return true;
   return false;
 }
 
@@ -68,7 +95,7 @@ export async function isSafeUrl(
     return { safe: false, reason: `Hostname ${hostname} is blocklisted` };
   }
 
-  if (isIP(hostname)) {
+  if (isIP(stripBrackets(hostname))) {
     const check = checkIp(hostname, { allowLoopback, allowPrivate, allowLinkLocal });
     if (!check.safe) return check;
   } else {
@@ -91,10 +118,15 @@ export async function isSafeUrl(
   return { safe: true };
 }
 
+function stripBrackets(h: string): string {
+  return h.startsWith('[') && h.endsWith(']') ? h.slice(1, -1) : h;
+}
+
 function checkIp(
   ip: string,
   opts: { allowLoopback: boolean; allowPrivate: boolean; allowLinkLocal: boolean },
 ): { safe: boolean; reason?: string } {
+  ip = normalizeIp(ip);
   if (isLoopback(ip) && !opts.allowLoopback) {
     return { safe: false, reason: 'Loopback address blocked' };
   }
@@ -167,7 +199,7 @@ async function safeRequest(
   // DNS â€” allowing a malicious DNS server to return a safe IP for the check
   // and a private IP (e.g. 169.254.169.254) for the actual connection.
   let resolvedIp: string | null = null;
-  if (!isIP(hostname)) {
+  if (!isIP(stripBrackets(hostname))) {
     try {
       const addresses = await withTimeout(lookup(hostname, { all: true }), options.dnsTimeout ?? 5000);
       // isSafeUrl already validated all addresses; use the first.
@@ -215,7 +247,9 @@ async function safeRequest(
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('error', reject);
         res.on('end', async () => {
+          try {
           const body = Buffer.concat(chunks);
           const status = res.statusCode ?? 0;
 
@@ -236,8 +270,18 @@ async function safeRequest(
                 // Per fetch spec, 301/302/303 downgrade non-GET/HEAD to GET.
                 const downgrade = status === 301 || status === 302 || status === 303;
                 const method = init?.method ?? 'GET';
+                // Per fetch spec, drop credentials when the redirect leaves the origin.
+                let redirectHeaders = init?.headers;
+                if (new URL(redirectUrl).origin !== new URL(url).origin && redirectHeaders) {
+                  const h = new Headers(redirectHeaders);
+                  h.delete('authorization');
+                  h.delete('cookie');
+                  h.delete('proxy-authorization');
+                  redirectHeaders = h;
+                }
                 const redirectInit: RequestInit = {
                   ...init,
+                  headers: redirectHeaders,
                   method: downgrade && method !== 'GET' && method !== 'HEAD' ? 'GET' : method,
                   body: downgrade && method !== 'GET' && method !== 'HEAD' ? undefined : init?.body,
                 };
@@ -255,13 +299,17 @@ async function safeRequest(
             if (value !== undefined) resHeaders.set(key, Array.isArray(value) ? value.join(', ') : String(value));
           }
 
+          const bodiless = status === 101 || status === 204 || status === 205 || status === 304;
           resolve(
-            new Response(body, {
+            new Response(bodiless ? null : body, {
               status,
               statusText: res.statusMessage,
               headers: resHeaders,
             }),
           );
+          } catch (err) {
+            reject(err);
+          }
         });
       },
     );

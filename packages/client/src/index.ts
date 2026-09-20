@@ -1,5 +1,6 @@
 export * from './hydrate';
 export * from './router';
+export * from './route-chain';
 export * from './error-overlay';
 export * from './fast-refresh';
 export * from './pledge';

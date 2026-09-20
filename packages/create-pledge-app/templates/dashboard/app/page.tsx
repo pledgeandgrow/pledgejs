@@ -28,7 +28,7 @@ export default function HomePage() {
     <div>
       <div className="stats">
         {stats.map((s) => (
-          <div className="stat-card">
+          <div key={s.label} className="stat-card">
             <div className="label">{s.label}</div>
             <div className="value">{s.value}</div>
             <div className={`change ${s.up ? 'up' : 'down'}`}>
@@ -42,7 +42,7 @@ export default function HomePage() {
         <h3>Revenue — Last 7 Days</h3>
         <div className="chart">
           {chartData.map((d) => (
-            <div className="bar" style={{ height: `${d.height}%` }}>
+            <div key={d.day} className="bar" style={{ height: `${d.height}%` }}>
               <div className="label">{d.day}</div>
             </div>
           ))}
@@ -63,7 +63,7 @@ export default function HomePage() {
           </thead>
           <tbody>
             {orders.map((o) => (
-              <tr>
+              <tr key={o.id}>
                 <td>{o.id}</td>
                 <td>{o.customer}</td>
                 <td>{o.date}</td>

@@ -24,13 +24,13 @@ export default function HomePage() {
 
       <div className="filters">
         {filters.map((f, i) => (
-          <button className={`filter ${i === 0 ? 'active' : ''}`}>{f}</button>
+          <button key={f} className={`filter ${i === 0 ? 'active' : ''}`}>{f}</button>
         ))}
       </div>
 
       <div className="products">
         {products.map((p) => (
-          <div className="product">
+          <div key={p.name} className="product">
             <div className="img">{p.emoji}</div>
             <div className="body">
               <h3>{p.name}</h3>

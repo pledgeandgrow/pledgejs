@@ -52,4 +52,5 @@ declare module 'kysely' {
   export class SqliteDialect {
     constructor(opts: unknown);
   }
+  export const sql: (strings: TemplateStringsArray, ...values: unknown[]) => { execute(db: unknown): Promise<unknown> };
 }

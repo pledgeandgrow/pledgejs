@@ -9,6 +9,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { PledgeConfig, PledgeResponse } from 'pledgestack-shared';
 import type { RouteTree, RouteTreeNode } from 'pledgestack-core';
 import { generateRobotsTxt, generateSitemapXML, routesToSitemapEntries } from 'pledgestack-sitemap';
@@ -18,7 +19,7 @@ import { generateRSSFeed, generateAtomFeed, generateJSONFeed, type FeedItem } fr
  * Checks if a file exists in the public directory.
  */
 async function tryReadPublicFile(config: PledgeConfig, filename: string): Promise<string | null> {
-  const publicDir = join(config.rootDir, 'public');
+  const publicDir = join(config.rootDir, config.publicDir ?? 'public');
   const filePath = join(publicDir, filename);
   try {
     const content = await readFile(filePath, 'utf-8');
@@ -28,6 +29,11 @@ async function tryReadPublicFile(config: PledgeConfig, filename: string): Promis
   }
 }
 
+/** Router patterns mark params as `:name` and catch-alls as `*name` (`[name]` is the file form). */
+function isDynamicPattern(pattern: string): boolean {
+  return pattern.includes('[') || pattern.split('/').some((s) => s.startsWith(':') || s.startsWith('*'));
+}
+
 /**
  * Collects all static (non-dynamic, non-API) routes from the route tree.
  */
@@ -35,7 +41,7 @@ function collectStaticRoutes(tree: RouteTree | null): string[] {
   if (!tree) return [];
   const routes: string[] = [];
   function walk(node: RouteTreeNode) {
-    if (node.route && node.route.mode !== 'api' && !node.route.pattern.includes('[')) {
+    if (node.route && node.route.mode !== 'api' && !isDynamicPattern(node.route.pattern)) {
       routes.push(node.route.pattern);
     }
     for (const child of node.children) {
@@ -133,7 +139,7 @@ export async function tryServeSeoRoute(
       const feedPath = join(config.rootDir, config.appDir, 'feed.ts');
       const { existsSync } = await import('node:fs');
       if (existsSync(feedPath)) {
-        const mod = await import(feedPath).catch(() => null);
+        const mod = await import(pathToFileURL(feedPath).href).catch(() => null);
         if (mod?.default) {
           items = await mod.default();
         }

@@ -236,3 +236,14 @@ strip = true
     });
   });
 });
+
+import { isStrippedFileOutput } from './bundle-analysis';
+describe('isStrippedFileOutput', () => {
+  it('reports "not stripped" binaries as NOT stripped', () => {
+    expect(isStrippedFileOutput('x.node: ELF 64-bit LSB shared object, x86-64, not stripped')).toBe(false);
+    expect(isStrippedFileOutput('x.node: ELF 64-bit LSB shared object, x86-64, with debug_info, not stripped')).toBe(false);
+  });
+  it('reports "stripped" binaries as stripped', () => {
+    expect(isStrippedFileOutput('x.node: ELF 64-bit LSB shared object, x86-64, stripped')).toBe(true);
+  });
+});

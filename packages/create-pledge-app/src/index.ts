@@ -31,20 +31,20 @@ async function resolveLatestVersions(): Promise<{ pledgestack: string; pledgepac
   };
 }
 
-const TEMPLATES = ['pledge', 'default', 'blog', 'api', 'saas', 'portfolio', 'dashboard', 'ecommerce'] as const;
-type Template = (typeof TEMPLATES)[number];
+export const TEMPLATES = ['pledge', 'default', 'blog', 'api', 'saas', 'portfolio', 'dashboard', 'ecommerce'] as const;
+export type Template = (typeof TEMPLATES)[number];
 
-const FRAMEWORKS = ['react', 'vue', 'solid', 'svelte'] as const;
-type Framework = (typeof FRAMEWORKS)[number];
+export const FRAMEWORKS = ['react', 'vue', 'solid', 'svelte'] as const;
+export type Framework = (typeof FRAMEWORKS)[number];
 
-interface CreateOptions {
+export interface CreateOptions {
   name: string;
   template: Template;
   framework: Framework;
   installDeps: boolean;
 }
 
-function parseArgs(argv: string[]): Partial<CreateOptions> {
+export function parseArgs(argv: string[]): Partial<CreateOptions> {
   const opts: Partial<CreateOptions> = {};
   const args = argv.slice(2);
 
@@ -152,7 +152,12 @@ export async function createApp(): Promise<void> {
     });
   }
 
-  const response = await prompts(questions);
+  const response = await prompts(questions, {
+    onCancel: () => {
+      console.error('\nCancelled.');
+      process.exit(1);
+    },
+  });
 
   const options: CreateOptions = {
     name: cliOpts.name || response.name,
@@ -164,7 +169,7 @@ export async function createApp(): Promise<void> {
   await scaffold(options);
 }
 
-async function scaffold(options: CreateOptions): Promise<void> {
+export async function scaffold(options: CreateOptions): Promise<void> {
   const { name, framework, installDeps } = options;
   let { template } = options;
   const targetDir = resolve(process.cwd(), name);
@@ -217,7 +222,13 @@ async function scaffold(options: CreateOptions): Promise<void> {
 
   writeFileSync(
     join(targetDir, 'pnpm-workspace.yaml'),
-    "allowBuilds:\n  pledgepack: true\n  esbuild: true\n",
+    // `allowBuilds` is the pnpm 11+ key; `onlyBuiltDependencies` is what pnpm
+    // 10 reads (it ignores `allowBuilds`, and pnpm 11 ignores the legacy key —
+    // emitting both makes the generated install work on either major without
+    // a manual `approve-builds` step, which would otherwise leave pledgepack's
+    // postinstall-downloaded native binary missing and `pledge build` broken).
+    "allowBuilds:\n  pledgepack: true\n  esbuild: true\n" +
+      "onlyBuiltDependencies:\n  - pledgepack\n  - esbuild\n",
   );
 
   if (installDeps) {
@@ -256,9 +267,20 @@ function getFrameworkTemplateDir(framework: Framework): string {
   return join(__dirname, '..', 'templates', framework);
 }
 
-function generatePackageJson(name: string, versions: { pledgestack: string; pledgepack: string }, framework: Framework) {
+/** Derive a valid npm package name from a project directory argument (may be a path). */
+function toPackageName(input: string): string {
+  const last = input.split(/[\\/]/).filter((s) => s && s !== '.' && s !== '..').pop() ?? '';
+  const cleaned = last
+    .toLowerCase()
+    .replace(/[^a-z0-9._~-]+/g, '-')
+    .replace(/^[._-]+/, '')
+    .replace(/-+$/, '');
+  return cleaned || 'my-pledge-app';
+}
+
+export function generatePackageJson(name: string, versions: { pledgestack: string; pledgepack: string }, framework: Framework) {
   const base = {
-    name: name.toLowerCase().replace(/\s+/g, '-'),
+    name: toPackageName(name),
     version: '0.0.1',
     private: true,
     type: 'module',
@@ -284,8 +306,9 @@ function generatePackageJson(name: string, versions: { pledgestack: string; pled
         dependencies: {
           react: '^19.2.0',
           'react-dom': '^19.2.0',
+          // Renderer adapters are bundled inside `pledgestack` — no
+          // separate `pledgestack-renderer-*` packages are published.
           pledgestack: versions.pledgestack,
-          'pledgestack-renderer-react': versions.pledgestack,
         },
         devDependencies: {
           ...base.devDependencies,
@@ -299,7 +322,6 @@ function generatePackageJson(name: string, versions: { pledgestack: string; pled
         dependencies: {
           vue: '^3.5.0',
           pledgestack: versions.pledgestack,
-          'pledgestack-renderer-vue': versions.pledgestack,
         },
         devDependencies: {
           ...base.devDependencies,
@@ -312,7 +334,6 @@ function generatePackageJson(name: string, versions: { pledgestack: string; pled
         dependencies: {
           'solid-js': '^1.9.0',
           pledgestack: versions.pledgestack,
-          'pledgestack-renderer-solid': versions.pledgestack,
         },
         devDependencies: {
           ...base.devDependencies,
@@ -324,7 +345,6 @@ function generatePackageJson(name: string, versions: { pledgestack: string; pled
         dependencies: {
           svelte: '^5.0.0',
           pledgestack: versions.pledgestack,
-          'pledgestack-renderer-svelte': versions.pledgestack,
         },
         devDependencies: {
           ...base.devDependencies,
@@ -347,7 +367,7 @@ function detectPackageManager(): 'pnpm' | 'npm' | 'yarn' {
   }
 }
 
-function generateTsConfig(framework: Framework) {
+export function generateTsConfig(framework: Framework) {
   const base = {
     compilerOptions: {
       target: 'ES2022',
@@ -375,7 +395,7 @@ function generateTsConfig(framework: Framework) {
   }
 }
 
-function generateGitignore(): string {
+export function generateGitignore(): string {
   return [
     'node_modules',
     '.pledge',

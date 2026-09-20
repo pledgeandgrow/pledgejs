@@ -45,10 +45,11 @@ export class PIIRedactor {
     if (config.redactIP === false) {
       this.patterns = this.patterns.filter((p) => p.name !== 'ip_address');
     }
-    this.sensitiveKeys = new Set([
-      ...SENSITIVE_KEYS,
-      ...(config.customSensitiveKeys ?? []),
-    ]);
+    // Stored lowercased: the built-in list is camelCase ("apiKey"), so an
+    // exact-case Set missed "apikey"/"APIKEY"/"ApiKey" variants.
+    this.sensitiveKeys = new Set(
+      [...SENSITIVE_KEYS, ...(config.customSensitiveKeys ?? [])].map((k) => k.toLowerCase()),
+    );
     this.whitelist = new Set(config.whitelistKeys ?? []);
   }
 
@@ -69,10 +70,24 @@ export class PIIRedactor {
    * String values are pattern-redacted.
    */
   redactObject<T>(input: T): T {
+    return this.redactValue(input, new WeakSet<object>()) as T;
+  }
+
+  private redactValue(input: unknown, seen: WeakSet<object>): unknown {
     if (input === null || input === undefined) return input;
-    if (typeof input === 'string') return this.redactString(input) as unknown as T;
+    if (typeof input === 'string') return this.redactString(input);
     if (typeof input !== 'object') return input;
-    if (Array.isArray(input)) return input.map((item) => this.redactObject(item)) as unknown as T;
+    // Circular structures (very common in logged request/error objects) must
+    // not blow the stack, and non-plain objects (Date, Map, Buffer…) have no
+    // enumerable own keys — flattening them to {} silently destroyed the value.
+    if (seen.has(input as object)) return '[Circular]';
+    if (Array.isArray(input)) {
+      seen.add(input);
+      return input.map((item) => this.redactValue(item, seen));
+    }
+    const proto = Object.getPrototypeOf(input);
+    if (proto !== Object.prototype && proto !== null) return input;
+    seen.add(input as object);
 
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
@@ -81,14 +96,14 @@ export class PIIRedactor {
         continue;
       }
 
-      if (this.sensitiveKeys.has(key) || this.sensitiveKeys.has(key.toLowerCase())) {
+      if (this.sensitiveKeys.has(key.toLowerCase())) {
         result[key] = '[REDACTED]';
         continue;
       }
 
-      result[key] = this.redactObject(value);
+      result[key] = this.redactValue(value, seen);
     }
-    return result as unknown as T;
+    return result;
   }
 
   /**

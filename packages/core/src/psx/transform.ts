@@ -9,7 +9,7 @@
  *     → parsePSX()           — split Rust blocks from TSX
  *     → generateTypeDefinitions() — .d.ts from Rust structs
  *     → generateRustSource()      — lib.rs for cargo
- *     → generateCargoToml()       — Cargo.toml
+ *     → generateNapiBindings()    — NAPI binding Rust code
  *     → generateNapiWrapper()     — JS wrapper importing native addon
  *     → inject rust import into TSX
  *     → return all artifacts
@@ -19,8 +19,8 @@ import { parsePSX, parsePS } from './parser';
 import {
   generateTypeDefinitions,
   generateRustSource,
-  generateCargoToml,
   generateNapiWrapper,
+  generateNapiBindings,
 } from './codegen';
 import type { PSXTransformResult, SourceMapEntry } from './types';
 
@@ -31,6 +31,13 @@ export interface PSXTransformOptions {
   outputDir?: string;
   /** Path to the compiled native addon (relative to output) */
   addonPath?: string;
+  /**
+   * Module specifier the transformed TSX uses to import the generated NAPI
+   * wrapper. Defaults to `addonPath` with `.node` -> `.js`. Bundlers that write
+   * the wrapper as `<name>.napi.js` next to the emitted module pass
+   * `./<name>.napi.js` here so the import resolves.
+   */
+  wrapperImportPath?: string;
   /** Whether to generate Rust artifacts (false = TSX-only mode) */
   compileRust?: boolean;
   /** File format: .psx (Rust+TSX) or .ps (pure Rust) */
@@ -52,7 +59,7 @@ export function transformPSX(
   source: string,
   options: PSXTransformOptions,
 ): PSXTransformResult {
-  const { moduleName, addonPath, compileRust = true, format = 'psx' } = options;
+  const { moduleName, addonPath, wrapperImportPath, compileRust = true, format = 'psx' } = options;
 
   // .ps files are pure Rust — treat entire file as one Rust block
   // .psx files mix Rust and TypeScript/JSX
@@ -84,16 +91,14 @@ export function transformPSX(
   }
 
   // Generate NAPI bindings (included in rustSource, but also returned separately for tooling)
-  const napiBindings = compileRust
-    ? generateCargoToml(moduleName, parse)
-    : '';
+  const napiBindings = compileRust ? generateNapiBindings(parse) : '';
 
   // Generate JS wrapper that imports the native addon
   const resolvedAddonPath = addonPath ?? `./${moduleName}.node`;
   const napiWrapper = generateNapiWrapper(parse, resolvedAddonPath);
 
   // Inject the rust import at the top of the TSX content
-  const rustImport = `import { rust } from '${resolvedAddonPath.replace(/\.node$/, '.js')}';\n`;
+  const rustImport = `import { rust } from ${JSON.stringify(wrapperImportPath ?? resolvedAddonPath.replace(/\.node$/, '.js'))};\n`;
   const tsx = rustImport + parse.tsxContent;
 
   return {

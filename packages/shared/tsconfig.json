@@ -5,10 +5,21 @@
     "rootDir": "./src",
     "composite": true,
     "declaration": true,
-    "declarationMap": true,
-    "types": ["node"]
+    "declarationMap": false,
+    "types": [
+      "node"
+    ],
+    "emitDeclarationOnly": true,
+    "sourceMap": false
   },
-  "include": ["src/**/*"]
-,
-  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "dist",
+    "node_modules",
+    "src/**/*.test.tsx"
+  ]
 }

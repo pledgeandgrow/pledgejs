@@ -61,21 +61,56 @@ export function configureLogger(config: Partial<LoggerConfig>): void {
   loggerConfig = { ...defaultConfig, ...config };
 }
 
+/** Entry fields owned by the logger — context keys with these names are kept under a `ctx_` prefix. */
+const RESERVED_LOG_KEYS = new Set(['timestamp', 'level', 'message']);
+
+function isRedactedKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return loggerConfig.redactFields.some((f) => lower.includes(f.toLowerCase()));
+}
+
 /**
- * Redacts sensitive fields from a log context object.
+ * Redacts sensitive fields from a log context object — including inside
+ * arrays and nested objects. Errors are serialised (their fields are
+ * non-enumerable, so they used to log as `{}`), Dates become ISO strings and
+ * circular references are replaced rather than overflowing the stack.
  */
-function redact(ctx: LogContext): LogContext {
+function redact(ctx: LogContext, ancestors: Set<object> = new Set()): LogContext {
+  ancestors.add(ctx);
   const redacted: LogContext = {};
   for (const [key, value] of Object.entries(ctx)) {
-    if (loggerConfig.redactFields.some((f) => key.toLowerCase().includes(f.toLowerCase()))) {
-      redacted[key] = '[REDACTED]';
-    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-      redacted[key] = redact(value as LogContext);
-    } else {
-      redacted[key] = value;
-    }
+    redacted[key] = isRedactedKey(key) ? '[REDACTED]' : redactValue(value, ancestors);
   }
+  ancestors.delete(ctx);
   return redacted;
+}
+
+function redactValue(value: unknown, ancestors: Set<object>): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  if (ancestors.has(value)) return '[Circular]';
+
+  if (value instanceof Error) {
+    ancestors.add(value);
+    const out: LogContext = {
+      ...redact({ ...(value as unknown as LogContext) }, ancestors),
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    };
+    if ('cause' in value && value.cause !== undefined) out.cause = redactValue(value.cause, ancestors);
+    ancestors.delete(value);
+    return out;
+  }
+
+  if (Array.isArray(value)) {
+    ancestors.add(value);
+    const out = value.map((item) => redactValue(item, ancestors));
+    ancestors.delete(value);
+    return out;
+  }
+
+  return redact(value as LogContext, ancestors);
 }
 
 /**
@@ -121,8 +156,13 @@ function log(level: LogLevel, message: string, context?: LogContext): void {
     level,
     message,
     service: loggerConfig.serviceName,
-    ...redactedCtx,
   };
+  // Context must never overwrite the entry's own timestamp/level/message
+  // (`logger.info('done', { message: err.message })` used to replace the log
+  // message, and a `level` key corrupted severity).
+  for (const [key, value] of Object.entries(redactedCtx)) {
+    entry[RESERVED_LOG_KEYS.has(key) ? `ctx_${key}` : key] = value;
+  }
 
   const formatted = formatEntry(entry);
   if (level === 'error' || level === 'fatal') {
@@ -563,20 +603,33 @@ export function profileRequest<T>(
 
   const start = performance.now();
   const result = profileStorage.run(profile, fn);
-  profile.totalDuration = performance.now() - start;
 
-  if (loggerConfig.level === 'debug' || process.env.PLEDGE_PROFILE === '1') {
-    logger.debug('Route profile', {
-      route: profile.route,
-      method: profile.method,
-      totalDuration: Math.round(profile.totalDuration * 100) / 100,
-      renderTime: Math.round(profile.renderTime * 100) / 100,
-      dataFetchTime: Math.round(profile.dataFetchTime * 100) / 100,
-      middlewareTime: Math.round(profile.middlewareTime * 100) / 100,
-      cacheHits: profile.cacheHits,
-      cacheMisses: profile.cacheMisses,
-      spanCount: profile.spans.length,
-    });
+  const finish = (): void => {
+    profile.totalDuration = performance.now() - start;
+
+    if (loggerConfig.level === 'debug' || process.env.PLEDGE_PROFILE === '1') {
+      logger.debug('Route profile', {
+        route: profile.route,
+        method: profile.method,
+        totalDuration: Math.round(profile.totalDuration * 100) / 100,
+        renderTime: Math.round(profile.renderTime * 100) / 100,
+        dataFetchTime: Math.round(profile.dataFetchTime * 100) / 100,
+        middlewareTime: Math.round(profile.middlewareTime * 100) / 100,
+        cacheHits: profile.cacheHits,
+        cacheMisses: profile.cacheMisses,
+        spanCount: profile.spans.length,
+      });
+    }
+  };
+
+  // Async handlers return before any work has happened: measure to
+  // completion, otherwise totalDuration is ~0 and the profile is logged with
+  // none of its spans. (Both settle paths are handled so no rejection leaks
+  // from the derived promise; the caller still receives the original one.)
+  if (result != null && typeof (result as { then?: unknown }).then === 'function') {
+    (result as unknown as PromiseLike<unknown>).then(finish, finish);
+  } else {
+    finish();
   }
 
   return result;

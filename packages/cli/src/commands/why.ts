@@ -9,7 +9,7 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
+import { join, relative, extname, posix } from 'node:path';
 import type { PledgeConfig } from 'pledgestack-shared';
 
 interface ImportNode {
@@ -123,7 +123,7 @@ async function buildImportGraph(outDir: string, rootDir: string): Promise<Map<st
 /**
  * Resolves an import path to a relative project path.
  */
-function resolveImportPath(importPath: string, fromFile: string, rootDir: string): string | null {
+export function resolveImportPath(importPath: string, fromFile: string, rootDir: string): string | null {
   // Skip node_modules and bare specifiers
   if (!importPath.startsWith('.') && !importPath.startsWith('/')) {
     // Map known packages to node_modules paths
@@ -142,7 +142,8 @@ function resolveImportPath(importPath: string, fromFile: string, rootDir: string
     resolved = importPath.slice(1);
   } else {
     const fromDir = relative(rootDir, fromFile).replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-    resolved = `${fromDir}/${importPath}`.replace(/\/\.\//g, '/').replace(/\/[^/]+\/\.\.\//g, '/');
+    // posix.normalize collapses every `./` and `../` (the old regexes handled only one level).
+    resolved = posix.normalize(fromDir ? `${fromDir}/${importPath}` : importPath);
   }
 
   // Add extension if missing
@@ -243,7 +244,7 @@ function findPathToEntry(graph: Map<string, ImportNode>, start: string): string[
 /**
  * Detects circular dependencies involving the target module.
  */
-function detectCircularDeps(
+export function detectCircularDeps(
   graph: Map<string, ImportNode>,
   target: string,
   maxDepth: number = 10,
@@ -254,9 +255,12 @@ function detectCircularDeps(
     if (path.length > maxDepth) return;
     if (visited.has(current)) {
       // Found a cycle — extract it
+      // `path` already ends with `current` (it was appended on the way in), so
+      // slicing from its first occurrence is the whole cycle — concatenating
+      // `current` again printed the closing module twice.
       const cycleStart = path.indexOf(current);
       if (cycleStart !== -1) {
-        const cycle = path.slice(cycleStart).concat(current);
+        const cycle = path.slice(cycleStart);
         if (cycle.includes(target)) {
           cycles.push(cycle);
         }
@@ -280,7 +284,8 @@ function detectCircularDeps(
   // Deduplicate cycles
   const seen = new Set<string>();
   return cycles.filter((c) => {
-    const key = c.sort().join('|');
+    // Sort a copy: sorting `c` in place scrambled the cycle that gets printed.
+    const key = [...c].sort().join('|');
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

@@ -18,7 +18,7 @@ export default function BlogPostPage({ params }: { params: { slug: string } }) {
     },
   };
 
-  const post = posts[slug];
+  const post = Object.prototype.hasOwnProperty.call(posts, slug) ? posts[slug] : undefined;
 
   if (!post) {
     return (

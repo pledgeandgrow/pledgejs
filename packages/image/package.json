@@ -1,8 +1,21 @@
 {
   "name": "pledgestack-image",
-  "version": "0.0.1",
-  "private": true,
+  "version": "1.0.0-rc.0",
   "description": "Image optimization component for PledgeStack — responsive srcset, WebP/AVIF, blur placeholders",
+  "keywords": [
+    "pledgestack"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/image#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/image"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,13 +23,21 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
     "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "pledgestack-shared": "workspace:*"
@@ -25,9 +46,15 @@
     "react": "^19.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
     "rimraf": "^6.0.0",
+    "typescript": "^5.7.0",
     "@types/react": "^19.0.0",
     "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

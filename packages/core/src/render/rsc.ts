@@ -1,10 +1,11 @@
 import { renderToPipeableStream } from 'react-dom/server';
 import { createElement, type ReactNode } from 'react';
 import { Writable } from 'node:stream';
-import type { RouteMatch, PledgeConfig, AnyGenericModule } from 'pledgestack-shared';
+import type { RouteMatch, PledgeConfig, AnyGenericModule, RenderSecurity } from 'pledgestack-shared';
 import type { PageModule, LayoutModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
+import { scriptSecurityAttrs, escapeJsonForScript } from './security';
 
 export interface RSCPayload {
   /** The serialized RSC tree as a string */
@@ -33,6 +34,8 @@ export interface RSCContext {
   clientManifest?: Record<string, string>;
   /** Search params for the current request (Next.js 15 style page prop) */
   searchParams?: Record<string, string>;
+  /** Per-request CSP nonce + SRI hashes stamped on emitted <script> tags */
+  security?: RenderSecurity;
 }
 
 /**
@@ -60,6 +63,7 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
           searchParams: ctx.searchParams,
           rsc: ctx.config.rsc,
           clientManifest: ctx.clientManifest,
+          security: ctx.security,
         });
       }
       return renderer.renderToReadableStream({
@@ -67,6 +71,7 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
         tree: ctx.tree,
         modules: ctx.modules as unknown as Map<string, AnyGenericModule>,
         searchParams: ctx.searchParams,
+        security: ctx.security,
       });
     }
   } catch {
@@ -99,10 +104,10 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
   const encoder = new TextEncoder();
   const shellBefore = `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${match.route.metadata?.title ?? 'PledgeStack App'}</title>\n  <link rel="stylesheet" href="/__pledge__/client.css" />\n</head>\n<body>\n  <div id="__pledge_root__">`;
 
-  const clientRefs = JSON.stringify(extractClientReferences(ctx));
-  const serializedManifest = JSON.stringify(ctx.clientManifest ?? {});
+  const clientRefs = escapeJsonForScript(JSON.stringify(extractClientReferences(ctx)));
+  const serializedManifest = escapeJsonForScript(JSON.stringify(ctx.clientManifest ?? {}));
 
-  const shellAfter = `</div>\n  <script id="__pledge_rsc_data__" type="application/json">${clientRefs}</script>\n  <script id="__pledge_manifest__" type="application/json">${serializedManifest}</script>\n  <script type="module" src="/__pledge__/client.js"></script>\n  <script type="module" src="/__pledge__/rsc-client.js"></script>\n</body>\n</html>`;
+  const shellAfter = `</div>\n  <script id="__pledge_rsc_data__" type="application/json">${clientRefs}</script>\n  <script id="__pledge_manifest__" type="application/json">${serializedManifest}</script>\n  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/client.js')} src="/__pledge__/client.js"></script>\n  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/rsc-client.js')} src="/__pledge__/rsc-client.js"></script>\n</body>\n</html>`;
 
   return new Promise<ReadableStream<Uint8Array>>((resolve, reject) => {
     let shellReady = false;
@@ -174,6 +179,7 @@ export async function renderRSCToHTML(ctx: RSCContext): Promise<string> {
           searchParams: ctx.searchParams,
           rsc: ctx.config.rsc,
           clientManifest: ctx.clientManifest,
+          security: ctx.security,
         });
       }
     }

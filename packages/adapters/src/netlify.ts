@@ -58,7 +58,8 @@ export function createNetlifyHandler(options: { config: PledgeConfig }) {
     // host on any real Netlify site.
     const host = event.headers['host'] ?? event.headers['Host'] ?? event.headers['x-forwarded-host'] ?? 'localhost';
     const proto = event.headers['x-forwarded-proto'] ?? 'https';
-    const url = new URL(event.path, `${proto}://${host}`);
+    // Concatenate instead of new URL(path, base): "//evil.example/x" would replace the host.
+    const url = new URL(`${proto}://${host}${event.path.startsWith('/') ? '' : '/'}${event.path}`);
 
     if (event.queryStringParameters) {
       for (const [key, value] of Object.entries(event.queryStringParameters)) {

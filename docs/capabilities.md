@@ -1,8 +1,10 @@
 # Capabilities — What's Working
 
 All features below are implemented, tested, and verified working as of
-2026-09-14. Tests: 1023 passing, 2 failing (new MDX/server-fn tests), 5
-skipped across 112 files. Typecheck: 0 errors.
+2026-09-20. Tests: 1691 passing, 0 failing, 6 skipped (real-CLI deploy
+tests gated on external tokens) across 206 files. Typecheck: 0 errors.
+Where a capability depends on optional pieces (native addons, `sharp`, a
+bundler's own dev server) it is qualified below and in [limitations.md](./limitations.md).
 
 ## Authentication & Security
 
@@ -139,7 +141,7 @@ skipped across 112 files. Typecheck: 0 errors.
 - Hard timeout (10s) to prevent hangs
 
 ### Rust Acceleration (Optional)
-- 16 native NAPI addons for rendering, caching, compression
+- 17 native NAPI addons for rendering, caching, compression
 - Automatic JS fallback when not compiled
 - Incremental compilation with sccache support
 
@@ -178,7 +180,8 @@ skipped across 112 files. Typecheck: 0 errors.
 - Selective hydration (viewport-aware priority)
 - Media-query-based hydration
 - Interaction-based hydration
-- Stable hydration IDs
+- Instance-scoped hydration IDs (import-order counters — see
+  `docs/limitations.md`; stable-across-builds IDs are not yet implemented)
 
 ### Routing
 - `RouterProvider` with `useRouter()` hook
@@ -198,9 +201,9 @@ skipped across 112 files. Typecheck: 0 errors.
 - Rust-accelerated client hooks (optional)
 
 ### Fast Refresh / HMR
-- Hot module replacement integration
+- Hot module replacement is provided by the bundler's own dev server (Vite, webpack-dev-server, Rsbuild, the PledgePack binary); the esbuild fallback servers do not live-reload — see [limitations.md](./limitations.md#bundler-hmr-hot-module-replacement)
 - Error overlay
-- Dev toolbar
+- Dev toolbar (`DevTools`; the middleware only injects a script when given a `scriptUrl`)
 
 ## State Management
 
@@ -302,8 +305,8 @@ skipped across 112 files. Typecheck: 0 errors.
 - Custom element validation
 
 ### OG Image Generation
-- JSX serialization → PledgePack → PNG
-- Depth-capped serialization
+- `ImageResponse` serializes a JSX tree (function components and fragments are expanded); the server lays it out with a flexbox subset, converts it to SVG and rasterizes it to a real PNG via the native addon or the optional `sharp` package (otherwise a clear `501`)
+- Depth- and node-capped serialization and layout; only inline `data:` images are drawn
 - `nosniff` header
 - OG/Twitter meta tag helpers
 

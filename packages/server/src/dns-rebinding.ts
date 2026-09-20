@@ -13,7 +13,17 @@ export interface DnsRebindingOptions {
   blockDisallowed?: boolean;
 }
 
-const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0'];
+const DEFAULT_ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]'];
+
+/** Host header without port; keeps bracketed IPv6 literals ("[::1]:3000" -> "[::1]"). */
+function hostNameOf(hostHeader: string): string {
+  const h = hostHeader.trim().toLowerCase();
+  if (h.startsWith('[')) {
+    const end = h.indexOf(']');
+    return end === -1 ? h : h.slice(0, end + 1);
+  }
+  return h.split(':')[0];
+}
 
 /**
  * Validate the Host header against an allowlist.
@@ -30,8 +40,7 @@ export function validateHost(
 
   if (!hostHeader) return false;
 
-  // Strip port from host header
-  const host = hostHeader.split(':')[0].toLowerCase();
+  const host = hostNameOf(hostHeader);
 
   return allowedHosts.includes(host);
 }
@@ -54,7 +63,7 @@ export function dnsRebindingMiddleware(options: DnsRebindingOptions = {}) {
         return { blocked: true, reason: 'Missing Host header' };
       }
 
-      const hostName = host.split(':')[0].toLowerCase();
+      const hostName = hostNameOf(host);
       if (!allowedHosts.includes(hostName)) {
         return { blocked: true, reason: `Disallowed host: ${hostName}` };
       }

@@ -64,7 +64,9 @@ export function parsePSX(source: string): PSXParseResult {
 
     const block: RustBlock = {
       source: rustSource.trim(),
-      startLine,
+      // `source` is trimmed, so point startLine at its first line (not the
+      // <rust> tag line) — codegen and lint map lines as startLine + index.
+      startLine: startLine + leadingNewlines(rustSource),
       endLine,
       functions,
       structs,
@@ -86,30 +88,35 @@ export function parsePSX(source: string): PSXParseResult {
 
   // 2. Extract inline rust!{...} expressions — uses brace matching, not regex on Rust
   let inlineIndex = 0;
-  const inlineRegex = /rust!\s*\{([\s\S]*?)\};?/g;
+  // `rust!` must be a standalone token (not the tail of `trust!`/`x.rust!`).
+  const inlineRegex = /(?<![\w$.])rust!\s*\{/g;
   let inlineMatch: RegExpExecArray | null;
 
   while ((inlineMatch = inlineRegex.exec(tsxContent)) !== null) {
-    const exprSource = inlineMatch[1].trim();
+    const open = inlineMatch.index + inlineMatch[0].length - 1;
+    const close = findMatchingBrace(tsxContent, open);
+    if (close === -1) continue; // unbalanced — leave the text untouched
     const varName = `__rust_expr_${inlineIndex}`;
 
     const inlineExpr: InlineRustExpr = {
-      source: exprSource,
+      source: tsxContent.slice(open + 1, close).trim(),
       start: inlineMatch.index,
-      end: inlineMatch.index + inlineMatch[0].length,
+      end: close + 1,
       varName,
     };
 
     inlineExpressions.push(inlineExpr);
     inlineIndex++;
+    inlineRegex.lastIndex = close + 1;
   }
 
-  // Replace inline expressions with variable references
+  // Replace inline expressions with variable references. The generated
+  // function is async, so `await rust!{…}` becomes `await __rust_expr_N()`
+  // (the user's own `await` is preserved as-is).
   let replacedTsx = tsxContent;
   for (let i = inlineExpressions.length - 1; i >= 0; i--) {
     const expr = inlineExpressions[i];
-    const hasAwait = tsxContent.slice(Math.max(0, expr.start - 10), expr.start).includes('await');
-    const replacement = hasAwait ? `await ${expr.varName}()` : `${expr.varName}()`;
+    const replacement = `${expr.varName}()`;
     replacedTsx =
       replacedTsx.slice(0, expr.start) +
       replacement +
@@ -130,6 +137,78 @@ export function parsePSX(source: string): PSXParseResult {
     hasRust: rustBlocks.length > 0 || inlineExpressions.length > 0,
     sourceMap,
   };
+}
+
+/** Number of line breaks before the first non-whitespace character. */
+function leadingNewlines(text: string): number {
+  const leading = text.match(/^\s*/)?.[0] ?? '';
+  return leading.split('\n').length - 1;
+}
+
+/**
+ * Given the index of an opening `{` in `src`, returns the index of its
+ * matching `}` — skipping Rust string/char literals, raw strings and comments
+ * — or -1 when unbalanced.
+ */
+function findMatchingBrace(src: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < src.length) {
+    const ch = src[i];
+    const next = src[i + 1];
+    if (ch === '/' && next === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      let nest = 1;
+      i += 2;
+      while (i < src.length && nest > 0) {
+        if (src[i] === '/' && src[i + 1] === '*') { nest++; i += 2; }
+        else if (src[i] === '*' && src[i + 1] === '/') { nest--; i += 2; }
+        else i++;
+      }
+      continue;
+    }
+    if (ch === 'r' && (next === '"' || next === '#') && !/[\w$]/.test(src[i - 1] ?? '')) {
+      let j = i + 1;
+      let hashes = 0;
+      while (src[j] === '#') { hashes++; j++; }
+      if (src[j] === '"') {
+        const terminator = '"' + '#'.repeat(hashes);
+        const endIdx = src.indexOf(terminator, j + 1);
+        if (endIdx === -1) return -1;
+        i = endIdx + terminator.length;
+        continue;
+      }
+    }
+    if (ch === '"') {
+      i++;
+      while (i < src.length && src[i] !== '"') i += src[i] === '\\' ? 2 : 1;
+      i++;
+      continue;
+    }
+    if (ch === '\'') {
+      // Char literal ('x', '\n') — otherwise a lifetime, which we skip over.
+      if (next === '\\') {
+        i += 2;
+        while (i < src.length && src[i] !== '\'') i++;
+        i++;
+        continue;
+      }
+      if (src[i + 2] === '\'') {
+        i += 3;
+        continue;
+      }
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return -1;
 }
 
 /**
@@ -155,7 +234,7 @@ export function parsePS(source: string): PSXParseResult {
 
   const block: RustBlock = {
     source: source.trim(),
-    startLine: 0,
+    startLine: leadingNewlines(source),
     endLine: source.split('\n').length - 1,
     functions,
     structs,
@@ -394,8 +473,10 @@ function tokenizeRust(source: string): Token[] {
       continue;
     }
 
-    // Char literal ('...')
-    if (ch === '\'') {
+    // Char literal ('x' or '\n') — but NOT a lifetime ('a). A char literal is
+    // either an escape sequence or exactly one character followed by a closing
+    // quote; anything else is a lifetime and is handled below.
+    if (ch === '\'' && (source[i + 1] === '\\' || (i + 2 < source.length && source[i + 2] === '\''))) {
       let str = ch;
       col++;
       i++;
@@ -558,23 +639,36 @@ class RustSourceParser {
         continue;
       }
 
-      // Parse pub keyword — look ahead for fn/struct/enum
+      // Items: [pub | pub(...)] [async|unsafe|const|extern "C"]* fn | struct | enum
       let isPub = false;
+      let itemToken: Token = token;
       if (token.type === 'keyword' && token.value === 'pub') {
         isPub = true;
         this.advance();
-        // Skip whitespace
         this.skipWhitespace();
-        const next = this.peek();
-        if (!next) continue;
+        // pub(crate), pub(super), pub(in path)
+        const vis = this.peek();
+        if (vis?.type === 'symbol' && vis.value === '(') {
+          this.skipBalanced('(', ')');
+          this.skipWhitespace();
+        }
+        const afterPub = this.peek();
+        if (!afterPub) continue;
+        itemToken = afterPub;
+      }
 
-        if (next.type === 'keyword' && next.value === 'fn') {
-          const fn = this.parseFunction(isPub, pendingAttrs, pendingDocComments);
+      // Functions, including qualified ones (`pub async fn`, `unsafe fn`, `const fn`, ...)
+      if (itemToken.type === 'keyword') {
+        const fnInfo = this.findFunctionStart();
+        if (fnInfo) {
+          const fnLine = this.tokens[fnInfo.fnPos].line;
+          this.pos = fnInfo.fnPos;
+          const fn = this.parseFunction(isPub, pendingAttrs, pendingDocComments, fnInfo.isAsync);
           if (fn) {
             functions.push(fn);
             blockSourceMap.push({
               generatedLine: -1,
-              originalLine: this.baseLineOffset + next.line,
+              originalLine: this.baseLineOffset + fnLine,
               moduleName: this.moduleName,
             });
           }
@@ -583,13 +677,13 @@ class RustSourceParser {
           continue;
         }
 
-        if (next.type === 'keyword' && next.value === 'struct') {
+        if (itemToken.value === 'struct') {
           const struct = this.parseStruct(isPub, pendingAttrs, pendingDocComments);
           if (struct) {
             structs.push(struct);
             blockSourceMap.push({
               generatedLine: -1,
-              originalLine: this.baseLineOffset + next.line,
+              originalLine: this.baseLineOffset + itemToken.line,
               moduleName: this.moduleName,
             });
           }
@@ -598,13 +692,13 @@ class RustSourceParser {
           continue;
         }
 
-        if (next.type === 'keyword' && next.value === 'enum') {
+        if (itemToken.value === 'enum') {
           const enumDef = this.parseEnum(isPub, pendingAttrs, pendingDocComments);
           if (enumDef) {
             enums.push(enumDef);
             blockSourceMap.push({
               generatedLine: -1,
-              originalLine: this.baseLineOffset + next.line,
+              originalLine: this.baseLineOffset + itemToken.line,
               moduleName: this.moduleName,
             });
           }
@@ -612,99 +706,16 @@ class RustSourceParser {
           pendingDocComments = [];
           continue;
         }
+      }
 
-        // pub(crate), pub(super) etc.
-        if (next.type === 'symbol' && next.value === '(') {
-          this.skipBalanced('(', ')');
-          this.skipWhitespace();
-          const after = this.peek();
-          if (after?.type === 'keyword' && after.value === 'fn') {
-            const fn = this.parseFunction(true, pendingAttrs, pendingDocComments);
-            if (fn) {
-              functions.push(fn);
-              blockSourceMap.push({
-                generatedLine: -1,
-                originalLine: this.baseLineOffset + after.line,
-                moduleName: this.moduleName,
-              });
-            }
-          } else if (after?.type === 'keyword' && after.value === 'struct') {
-            const struct = this.parseStruct(true, pendingAttrs, pendingDocComments);
-            if (struct) {
-              structs.push(struct);
-              blockSourceMap.push({
-                generatedLine: -1,
-                originalLine: this.baseLineOffset + after.line,
-                moduleName: this.moduleName,
-              });
-            }
-          } else if (after?.type === 'keyword' && after.value === 'enum') {
-            const enumDef = this.parseEnum(true, pendingAttrs, pendingDocComments);
-            if (enumDef) {
-              enums.push(enumDef);
-              blockSourceMap.push({
-                generatedLine: -1,
-                originalLine: this.baseLineOffset + after.line,
-                moduleName: this.moduleName,
-              });
-            }
-          }
-          pendingAttrs = [];
-          pendingDocComments = [];
-          continue;
-        }
-
-        // Other pub items (const, static, etc.) — skip to next item
+      if (isPub) {
+        // Other pub items (const, static, trait, mod, ...) — handled by the
+        // generic branches below on the next iteration.
         pendingAttrs = [];
         pendingDocComments = [];
         continue;
       }
 
-      // Non-pub fn/struct/enum
-      if (token.type === 'keyword' && token.value === 'fn') {
-        const fn = this.parseFunction(false, pendingAttrs, pendingDocComments);
-        if (fn) {
-          functions.push(fn);
-          blockSourceMap.push({
-            generatedLine: -1,
-            originalLine: this.baseLineOffset + token.line,
-            moduleName: this.moduleName,
-          });
-        }
-        pendingAttrs = [];
-        pendingDocComments = [];
-        continue;
-      }
-
-      if (token.type === 'keyword' && token.value === 'struct') {
-        const struct = this.parseStruct(false, pendingAttrs, pendingDocComments);
-        if (struct) {
-          structs.push(struct);
-          blockSourceMap.push({
-            generatedLine: -1,
-            originalLine: this.baseLineOffset + token.line,
-            moduleName: this.moduleName,
-          });
-        }
-        pendingAttrs = [];
-        pendingDocComments = [];
-        continue;
-      }
-
-      if (token.type === 'keyword' && token.value === 'enum') {
-        const enumDef = this.parseEnum(false, pendingAttrs, pendingDocComments);
-        if (enumDef) {
-          enums.push(enumDef);
-          blockSourceMap.push({
-            generatedLine: -1,
-            originalLine: this.baseLineOffset + token.line,
-            moduleName: this.moduleName,
-          });
-        }
-        pendingAttrs = [];
-        pendingDocComments = [];
-        continue;
-      }
 
       // Skip everything else (impl blocks, trait defs, mod, const, etc.)
       // For impl blocks, skip the entire block
@@ -797,52 +808,54 @@ class RustSourceParser {
     return path.trim() || null;
   }
 
+  /**
+   * Looks ahead from the current position over function qualifiers
+   * (`async`, `unsafe`, `const`, `extern "C"`) and reports where the `fn`
+   * keyword is, without consuming anything. Returns null if the item at the
+   * current position is not a function.
+   */
+  private findFunctionStart(): { fnPos: number; isAsync: boolean } | null {
+    let p = this.pos;
+    let isAsync = false;
+    let prevWasExtern = false;
+    while (p < this.tokens.length) {
+      const t = this.tokens[p];
+      if (t.type === 'whitespace' || t.type === 'newline') {
+        p++;
+        continue;
+      }
+      if (t.type === 'keyword' && t.value === 'fn') return { fnPos: p, isAsync };
+      if (t.type === 'keyword' && t.value === 'async') {
+        isAsync = true;
+      } else if (t.type === 'keyword' && (t.value === 'unsafe' || t.value === 'const')) {
+        // qualifier
+      } else if (t.type === 'keyword' && t.value === 'extern') {
+        prevWasExtern = true;
+        p++;
+        continue;
+      } else if (t.type === 'string' && prevWasExtern) {
+        // extern "C"
+      } else {
+        return null;
+      }
+      prevWasExtern = false;
+      p++;
+    }
+    return null;
+  }
+
   private parseFunction(
     isPub: boolean,
     attributes: string[],
     docComments: string[],
+    isAsync = false,
   ): RustFunction | null {
-    // Consume 'fn'
+    // Consume 'fn' (callers position us on it; qualifiers were handled by
+    // findFunctionStart, which also determined `isAsync`).
     const fnToken = this.advance();
     if (!fnToken) return null;
 
     this.skipWhitespace();
-
-    // Check for async
-    let isAsync = false;
-    const next = this.peek();
-    if (next?.type === 'keyword' && next.value === 'async') {
-      isAsync = true;
-      this.advance();
-      this.skipWhitespace();
-    }
-
-    // Check for unsafe
-    const afterAsync = this.peek();
-    if (afterAsync?.type === 'keyword' && afterAsync.value === 'unsafe') {
-      this.advance();
-      this.skipWhitespace();
-    }
-
-    // Check for extern
-    const afterUnsafe = this.peek();
-    if (afterUnsafe?.type === 'keyword' && afterUnsafe.value === 'extern') {
-      this.advance();
-      this.skipWhitespace();
-      // Skip extern string (e.g., extern "C")
-      const externStr = this.peek();
-      if (externStr?.type === 'string') {
-        this.advance();
-        this.skipWhitespace();
-      }
-    }
-
-    // Now expect 'fn'
-    const fnKw = this.peek();
-    if (fnKw?.type === 'keyword' && fnKw.value === 'fn') {
-      this.advance();
-      this.skipWhitespace();
-    }
 
     // Function name
     const nameToken = this.peek();
@@ -885,8 +898,12 @@ class RustSourceParser {
         const t = this.peek();
         if (!t) break;
         if (t.type === 'symbol' && (t.value === '{' || t.value === ';')) break;
-        if (t.type === 'symbol' && t.value === 'where') break;
-        if (t.type !== 'whitespace' && t.type !== 'newline') {
+        if (t.type === 'keyword' && t.value === 'where') break;
+        if (t.type === 'whitespace' || t.type === 'newline') {
+          // Collapse whitespace to a single space so `impl Trait`, `dyn X`
+          // and `&mut T` stay separate words.
+          if (!retType.endsWith(' ')) retType += ' ';
+        } else if (t.type !== 'line_comment' && t.type !== 'doc_comment') {
           retType += t.value;
         }
         this.advance();
@@ -1095,49 +1112,102 @@ function extractDerives(attributes: string[]): string[] {
     });
 }
 
+interface Range {
+  text: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Splits `s` on `sep` at nesting depth 0 (ignoring separators inside <>, (),
+ * [] and {}), returning each piece with its offsets. `->` is not treated as
+ * closing an angle bracket.
+ */
+function splitTopLevelRanges(s: string, sep = ','): Range[] {
+  const parts: Range[] = [];
+  let depth = 0;
+  let cur = '';
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '-' && s[i + 1] === '>') {
+      cur += '->';
+      i++;
+      continue;
+    }
+    if (ch === '<' || ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === '>' || ch === ')' || ch === ']' || ch === '}') depth--;
+    if (ch === sep && depth === 0) {
+      parts.push({ text: cur, start, end: i });
+      cur = '';
+      start = i + 1;
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) parts.push({ text: cur, start, end: s.length });
+  return parts;
+}
+
+/** Splits on a top-level separator (see splitTopLevelRanges). */
+export function splitTopLevel(s: string, sep = ','): string[] {
+  return splitTopLevelRanges(s, sep).map((r) => r.text);
+}
+
+/**
+ * Parses `Name<A, B<C>>` into its base path and top-level type arguments.
+ * Returns null when the type is not a generic application.
+ */
+export function parseGenericType(type: string): { base: string; args: string[] } | null {
+  const m = type.trim().match(/^([A-Za-z_][\w:]*)\s*<([\s\S]*)>$/);
+  if (!m) return null;
+  return { base: m[1], args: splitTopLevel(m[2]).map((a) => a.trim()).filter(Boolean) };
+}
+
+/**
+ * Removes comments and attributes from a struct/enum body, collecting doc
+ * comments together with the offset (into the returned text) of the item
+ * they precede.
+ */
+function stripCommentsAndAttrs(body: string): { text: string; docs: Array<{ offset: number; text: string }> } {
+  let text = '';
+  const docs: Array<{ offset: number; text: string }> = [];
+  for (const rawLine of body.split('\n')) {
+    const t = rawLine.trim();
+    if (t.startsWith('///')) {
+      docs.push({ offset: text.length, text: t.replace(/^\/\/\/\s?/, '').trim() });
+      continue;
+    }
+    if (t.startsWith('//')) continue;
+    const line = rawLine
+      .replace(/\/\/.*$/, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/#\[[^\]]*\]/g, '');
+    text += line + '\n';
+  }
+  return { text, docs };
+}
+
+function docFor(docs: Array<{ offset: number; text: string }>, range: Range): string | undefined {
+  const matching = docs.filter((d) => d.offset >= range.start && d.offset <= range.end).map((d) => d.text);
+  return matching.length > 0 ? matching.join(' ') : undefined;
+}
+
 /**
  * Parses Rust enum variants from the body string.
  * Handles unit variants, struct-like variants, and tuple variants.
  */
 function parseEnumVariants(body: string): RustEnumVariant[] {
   const variants: RustEnumVariant[] = [];
-  // Split on commas at depth 0
-  const parts: string[] = [];
-  let depth = 0;
-  let current = '';
+  const { text, docs } = stripCommentsAndAttrs(body);
 
-  for (let i = 0; i < body.length; i++) {
-    const ch = body[i];
-    if (ch === '{' || ch === '(' || ch === '[') depth++;
-    if (ch === '}' || ch === ')' || ch === ']') depth--;
-    if (ch === ',' && depth === 0) {
-      parts.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  if (current.trim()) parts.push(current);
-
-  for (const part of parts) {
-    const trimmed = part.trim();
-    if (!trimmed || trimmed.startsWith('//')) continue;
-
-    // Extract doc comment
-    let variantStr = trimmed;
-    let docComment: string | undefined;
-    const docMatch = variantStr.match(/\/\/\/\s*(.*)/);
-    if (docMatch) {
-      docComment = docMatch[1].trim();
-      variantStr = variantStr.replace(/\/\/\/.*$/, '').trim();
-    }
-
-    // Remove trailing comments
-    variantStr = variantStr.replace(/\/\/.*$/, '').trim();
+  for (const range of splitTopLevelRanges(text)) {
+    const variantStr = range.text.trim();
     if (!variantStr) continue;
+    const docComment = docFor(docs, range);
 
-    // Check for struct-like variant: Name { field: Type, ... }
-    const structMatch = variantStr.match(/^(\w+)\s*\{([\s\S]*)\}/);
+    // Struct-like variant: Name { field: Type, ... }
+    const structMatch = variantStr.match(/^(\w+)\s*\{([\s\S]*)\}$/);
     if (structMatch) {
       variants.push({
         name: structMatch[1],
@@ -1147,24 +1217,17 @@ function parseEnumVariants(body: string): RustEnumVariant[] {
       continue;
     }
 
-    // Check for tuple variant: Name(Type1, Type2)
-    const tupleMatch = variantStr.match(/^(\w+)\s*\((.*)\)/);
+    // Tuple variant: Name(Type1, Type2)
+    const tupleMatch = variantStr.match(/^(\w+)\s*\(([\s\S]*)\)$/);
     if (tupleMatch) {
-      variants.push({
-        name: tupleMatch[1],
-        docComment,
-      });
+      variants.push({ name: tupleMatch[1], docComment });
       continue;
     }
 
-    // Check for discriminant: Name = value
-    const discMatch = variantStr.match(/^(\w+)\s*=\s*(.+)/);
+    // Discriminant: Name = value
+    const discMatch = variantStr.match(/^(\w+)\s*=\s*([\s\S]+)/);
     if (discMatch) {
-      variants.push({
-        name: discMatch[1],
-        discriminant: discMatch[2].trim(),
-        docComment,
-      });
+      variants.push({ name: discMatch[1], discriminant: discMatch[2].trim(), docComment });
       continue;
     }
 
@@ -1183,67 +1246,53 @@ function parseEnumVariants(body: string): RustEnumVariant[] {
  */
 function parseRustParams(paramsStr: string): RustParam[] {
   if (!paramsStr.trim()) return [];
-
-  const params: RustParam[] = [];
-  // Split on commas, but not inside generics like Vec<User>
-  let depth = 0;
-  let current = '';
-  for (const char of paramsStr) {
-    if (char === '<' || char === '(' || char === '[') depth++;
-    if (char === '>' || char === ')' || char === ']') depth--;
-    if (char === ',' && depth === 0) {
-      params.push(parseRustParam(current));
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  if (current.trim()) params.push(parseRustParam(current));
-
-  return params;
+  return splitTopLevel(paramsStr)
+    .filter((p) => p.trim())
+    .map(parseRustParam);
 }
 
 function parseRustParam(paramStr: string): RustParam {
-  const parts = paramStr.trim().split(':');
-  if (parts.length < 2) return { name: paramStr.trim(), type: 'unknown', typeName: 'unknown' };
-  const name = parts[0].trim();
-  const type = parts.slice(1).join(':').trim();
+  const trimmed = paramStr.trim();
+  const colon = trimmed.indexOf(':');
+  if (colon === -1) {
+    // `self`, `&self`, `&mut self`
+    if (/\bself$/.test(trimmed)) return { name: 'self', type: 'Self', typeName: 'Self' };
+    return { name: trimmed, type: 'unknown', typeName: 'unknown' };
+  }
+  const name = trimmed.slice(0, colon).trim().replace(/^mut\s+/, '');
+  const type = trimmed.slice(colon + 1).trim();
   return { name, type, typeName: rustTypeToTs(type) };
 }
 
 /**
  * Parses Rust struct fields: "id: i32, name: String, email: Option<String>"
+ * Fields may be separated by commas and/or newlines and may carry doc
+ * comments and attributes.
  */
 function parseRustFields(body: string): RustField[] {
   const fields: RustField[] = [];
-  const lines = body.split('\n');
+  const { text, docs } = stripCommentsAndAttrs(body);
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#')) continue;
+  for (const range of splitTopLevelRanges(text)) {
+    const segment = range.text.trim().replace(/^pub(\([^)]*\))?\s+/, '');
+    if (!segment) continue;
 
-    // Remove doc comments
-    const commentMatch = trimmed.match(/\/\/\/\s*(.*)/);
-    const docComment = commentMatch?.[1]?.trim();
+    const colon = segment.indexOf(':');
+    if (colon === -1) continue;
+    const name = segment.slice(0, colon).trim();
+    if (!/^(?:r#)?[A-Za-z_]\w*$/.test(name)) continue;
+    const type = segment.slice(colon + 1).trim();
 
-    // Remove trailing comments
-    const cleanLine = trimmed.replace(/\/\/.*$/, '').trim();
-    if (!cleanLine || cleanLine === '}') continue;
-
-    const parts = cleanLine.split(':');
-    if (parts.length < 2) continue;
-
-    const name = parts[0].trim().replace(/pub\s+/, '');
-    const type = parts.slice(1).join(':').trim().replace(/,$/, '').trim();
-    const isOption = type.startsWith('Option<');
-    const cleanType = isOption ? type.replace(/Option<|>/g, '') : type;
+    const generic = parseGenericType(type);
+    const isOption = !!generic && generic.base.split('::').pop() === 'Option' && generic.args.length === 1;
+    const cleanType = isOption ? generic!.args[0] : type;
 
     fields.push({
       name,
       type: cleanType,
       typeName: rustTypeToTs(cleanType),
       isOption,
-      docComment,
+      docComment: docFor(docs, range),
     });
   }
 
@@ -1254,43 +1303,57 @@ function parseRustFields(body: string): RustField[] {
  * Maps Rust types to TypeScript types.
  */
 export function rustTypeToTs(rustType: string): string {
-  const trimmed = rustType.trim();
+  // Remove lifetimes, references and `mut`
+  const type = rustType
+    .replace(/&/g, '')
+    .replace(/'\w+/g, '')
+    .replace(/\bmut\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  // Remove lifetimes and references
-  let type = trimmed.replace(/&/g, '').replace(/'\w+/g, '').trim();
+  if (type === '()') return 'void';
 
-  // Remove mut
-  type = type.replace(/\bmut\b/g, '').trim();
-
-  // Option<T> → T | null
-  const optionMatch = type.match(/Option<(.+)>/);
-  if (optionMatch) {
-    return `${rustTypeToTs(optionMatch[1])} | null`;
-  }
-
-  // Vec<T> → T[]
-  const vecMatch = type.match(/Vec<(.+)>/);
-  if (vecMatch) {
-    return `${rustTypeToTs(vecMatch[1])}[]`;
-  }
-
-  // HashMap<K, V> → Record<K, V>
-  const mapMatch = type.match(/HashMap<([^,]+),\s*(.+)>/);
-  if (mapMatch) {
-    return `Record<${rustTypeToTs(mapMatch[1])}, ${rustTypeToTs(mapMatch[2])}>`;
-  }
-
-  // Result<T, E> → T (we unwrap errors in the binding layer)
-  const resultMatch = type.match(/Result<([^,]+),\s*[^>]+>/);
-  if (resultMatch) {
-    return rustTypeToTs(resultMatch[1]);
+  const generic = parseGenericType(type);
+  if (generic) {
+    const name = generic.base.split('::').pop() ?? generic.base;
+    const [a, b] = generic.args;
+    switch (name) {
+      case 'Option':
+        if (a !== undefined) return `${rustTypeToTs(a)} | null`;
+        break;
+      case 'Vec':
+      case 'VecDeque':
+      case 'HashSet':
+      case 'BTreeSet': {
+        if (a === undefined) break;
+        const inner = rustTypeToTs(a);
+        return inner.includes(' | ') ? `(${inner})[]` : `${inner}[]`;
+      }
+      case 'HashMap':
+      case 'BTreeMap':
+        if (a !== undefined && b !== undefined) return `Record<${rustTypeToTs(a)}, ${rustTypeToTs(b)}>`;
+        break;
+      case 'Result': // errors are unwrapped in the binding layer
+      case 'Box':
+      case 'Arc':
+      case 'Rc':
+        if (a !== undefined) return rustTypeToTs(a);
+        break;
+    }
+    return type;
   }
 
   // Tuple (A, B) → [A, B]
-  const tupleMatch = type.match(/^\(([^)]+)\)$/);
+  const tupleMatch = type.match(/^\(([\s\S]+)\)$/);
   if (tupleMatch) {
-    const elements = tupleMatch[1].split(',').map((e) => rustTypeToTs(e.trim()));
-    return `[${elements.join(', ')}]`;
+    return `[${splitTopLevel(tupleMatch[1]).map((e) => rustTypeToTs(e.trim())).join(', ')}]`;
+  }
+
+  // Slice / array [T] or [T; N] → T[]
+  const sliceMatch = type.match(/^\[([\s\S]+?)(?:;[\s\S]*)?\]$/);
+  if (sliceMatch) {
+    const inner = rustTypeToTs(sliceMatch[1]);
+    return inner.includes(' | ') ? `(${inner})[]` : `${inner}[]`;
   }
 
   // Primitives
@@ -1312,9 +1375,7 @@ export function rustTypeToTs(rustType: string): string {
     'bool': 'boolean',
     'char': 'string',
     'String': 'string',
-    '&str': 'string',
     'str': 'string',
-    '()': 'void',
   };
 
   if (primitiveMap[type]) return primitiveMap[type];

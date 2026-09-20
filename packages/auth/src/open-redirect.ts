@@ -34,6 +34,18 @@ export function validateRedirect(
 
   const trimmed = url.trim();
 
+  // Backslashes are ambiguous path separators: browsers normalize "\evil.com"
+  // and "/\evil.com" to "//evil.com" (protocol-relative). Rejecting any
+  // backslash closes the open-redirect bypass — a Location value with a
+  // backslash is never a legitimate same-origin path.
+  if (trimmed.includes('\\')) return null;
+
+  // WHATWG URL parsing strips ASCII tab/newline anywhere in the input, so
+  // "java\tscript:alert(1)" would parse as the javascript: scheme. Reject
+  // control characters outright rather than relying on prefix checks.
+  // eslint-disable-next-line no-control-regex -- deliberately rejects CTLs that URL parsing silently strips
+  if (/[\x00-\x20]/.test(trimmed)) return null;
+
   // Block dangerous schemes
   const lower = trimmed.toLowerCase();
   for (const scheme of BLOCKED_SCHEMES) {

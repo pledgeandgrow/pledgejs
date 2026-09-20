@@ -9,11 +9,12 @@
 import { renderToPipeableStream } from 'react-dom/server';
 import { createElement, Suspense, Component, type ReactNode, type ComponentType } from 'react';
 import { Writable } from 'node:stream';
-import type { RouteMatch, ResolvedRoute, PledgeConfig, Viewport, AnyGenericModule } from 'pledgestack-shared';
+import type { RouteMatch, ResolvedRoute, PledgeConfig, Viewport, AnyGenericModule, RenderSecurity } from 'pledgestack-shared';
 import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
+import { applyScriptSecurity, escapeJsonForScript } from './security';
 
 export interface RSCStreamContext {
   config: PledgeConfig;
@@ -22,6 +23,8 @@ export interface RSCStreamContext {
   modules: Map<string, PageModule | LayoutModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule | TemplateModule>;
   /** Search params for the current request (Next.js 15 style page prop) */
   searchParams?: Record<string, string>;
+  /** Per-request CSP nonce + SRI hashes stamped on emitted <script> tags */
+  security?: RenderSecurity;
 }
 
 interface ErrorBoundaryState {
@@ -73,6 +76,7 @@ export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableSt
           modules: ctx.modules as unknown as Map<string, AnyGenericModule>,
           searchParams: ctx.searchParams,
           rsc: ctx.config.rsc,
+          security: ctx.security,
         });
       }
       return renderer.renderToReadableStream({
@@ -80,6 +84,7 @@ export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableSt
         tree: ctx.tree,
         modules: ctx.modules as unknown as Map<string, AnyGenericModule>,
         searchParams: ctx.searchParams,
+        security: ctx.security,
       });
     }
   } catch {
@@ -161,7 +166,9 @@ export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableSt
   const viewportTags = renderViewportTags(viewport);
   const manifest: PledgeManifest = { pledges: [] };
 
-  const shellBefore = `<!DOCTYPE html>
+  // Streamed responses can't be post-processed as a whole document, so the
+  // envelope strings get their <script> security attrs here at emit time.
+  const shellBefore = applyScriptSecurity(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -170,13 +177,13 @@ export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableSt
   <link rel="stylesheet" href="/__pledge__/client.css" />
 </head>
 <body>
-  <div id="__pledge_root__">`;
+  <div id="__pledge_root__">`, ctx.security);
 
-  const shellAfter = `</div>
-  <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>
+  const shellAfter = applyScriptSecurity(`</div>
+  <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${escapeJsonForScript(JSON.stringify(manifest))}</script>
   <script type="module" src="/__pledge__/client.js"></script>
 </body>
-</html>`;
+</html>`, ctx.security);
 
   return new Promise<ReadableStream<Uint8Array>>((resolve, reject) => {
     let shellReady = false;

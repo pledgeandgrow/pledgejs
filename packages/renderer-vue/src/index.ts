@@ -15,7 +15,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
@@ -129,11 +129,21 @@ function wrapHtml(
   metadata: HeadMetadata,
   headHtml?: string,
   viewport?: import('pledgestack-shared').Viewport,
+  routeData?: { params: Record<string, string>; searchParams: Record<string, string>; pattern: string },
 ): string {
   const headTags = headHtml ?? renderHeadTags(metadata, route);
   const viewportTags = renderViewportTags(viewport);
   const manifest: PledgeManifest = { pledges: [] };
   const manifestScript = `<script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>`;
+
+  // Emit the server's resolved route (params, searchParams, matched pattern)
+  // so client hydration renders with the SAME props the server used — the
+  // client previously looked the page up by exact pathname (never matching a
+  // dynamic route) and mounted it with no props. `<` is escaped so the JSON
+  // cannot break out of the script element.
+  const routeJson = JSON.stringify(routeData ?? { params: {}, searchParams: {}, pattern: route.pattern })
+    .replace(/</g, '\\u003c');
+  const routeScript = `<script>window.__PLEDGE_ROUTE__=${routeJson}</script>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -146,6 +156,7 @@ function wrapHtml(
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
+  ${routeScript}
   <script type="module" src="/__pledge__/client.js"></script>
 </body>
 </html>`;
@@ -198,7 +209,11 @@ export class VueRendererAdapter implements RendererAdapter {
 
     // Render
     const html = await renderer.renderToString(app);
-    return wrapHtml(html, match.route, metadata, undefined, viewport);
+    return wrapHtml(html, match.route, metadata, undefined, viewport, {
+      params: match.params,
+      searchParams: ctx.searchParams ?? {},
+      pattern: match.route.pattern,
+    });
   }
 
   async renderToStream(ctx: RenderContext): Promise<string> {
@@ -207,7 +222,9 @@ export class VueRendererAdapter implements RendererAdapter {
   }
 
   async renderToReadableStream(ctx: RenderContext): Promise<ReadableStream<Uint8Array>> {
-    const html = await this.renderToString(ctx);
+    // Streamed output can't be post-processed by the handler — stamp the
+    // request's CSP nonce / SRI hashes on emitted scripts here.
+    const html = applyScriptSecurity(await this.renderToString(ctx), ctx.security);
     const encoder = new TextEncoder();
     return new ReadableStream<Uint8Array>({
       start(controller) {
@@ -257,7 +274,7 @@ export class VueRendererAdapter implements RendererAdapter {
       : 'vue';
 
     return `// PledgeStack Vue client hydration (auto-generated)
-import { createSSRApp } from '${vueImport}';
+import { createSSRApp, h } from '${vueImport}';
 
 const root = document.getElementById('__pledge_root__');
 if (root) {
@@ -266,10 +283,21 @@ if (root) {
   // export in Vue's public API — mount() IS the hydration path for
   // createSSRApp-created apps).
   try {
-    const { routes } = await import('/__pledge_router');
-    const pageRoute = routes[window.location.pathname];
-    if (pageRoute && pageRoute.component) {
-      const app = createSSRApp(pageRoute.component);
+    const routeData = window.__PLEDGE_ROUTE__ || { params: {}, searchParams: {}, pattern: window.location.pathname };
+    const { routes, resolveRouteChain } = await import('/__pledge_router');
+    // Resolve the page AND its layout chain by the server's matched pattern and
+    // mount with the SAME params/searchParams the server rendered with.
+    const chain = resolveRouteChain(routes, routeData);
+    if (chain) {
+      const props = { params: routeData.params, searchParams: routeData.searchParams };
+      // Nest layouts around the page (innermost first) exactly like SSR.
+      let renderChild = () => h(chain.page, props);
+      for (let i = chain.layouts.length - 1; i >= 0; i--) {
+        const child = renderChild;
+        const layout = chain.layouts[i];
+        renderChild = () => h(layout, props, { default: child });
+      }
+      const app = createSSRApp({ render: () => renderChild() });
       app.mount(root);
     }
   } catch (e) {

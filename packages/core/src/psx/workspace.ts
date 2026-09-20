@@ -129,6 +129,23 @@ ${cargoProfileToToml(devProfile, 'dev')}
 }
 
 /**
+ * Cargo package name for a .psx module. Cargo only accepts alphanumerics,
+ * `-` and `_`, so anything else in the file name (dots, spaces) becomes `_`.
+ */
+export function rustCrateName(moduleName: string): string {
+  return `pledge-${moduleName.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+}
+
+/**
+ * Base name of the cdylib cargo produces for a module: the crate name with
+ * `-` normalised to `_` (e.g. `user-list` -> `pledge_user_list`, giving
+ * `libpledge_user_list.so` / `pledge_user_list.dll`).
+ */
+export function rustLibName(moduleName: string): string {
+  return rustCrateName(moduleName).replace(/-/g, '_');
+}
+
+/**
  * Generates a per-module Cargo.toml that inherits from the workspace.
  * This is generated for each .psx file by the transform pipeline.
  *
@@ -144,7 +161,7 @@ export function generateModuleCargoToml(
     .join('\n');
 
   return `[package]
-name = "pledge-${moduleName}"
+name = "${rustCrateName(moduleName)}"
 version = "0.1.0"
 edition = "2021"
 
@@ -194,6 +211,10 @@ export async function ensureRootCargoToml(
   await writeFile(cargoPath, cargoToml, 'utf-8');
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Adds a Rust crate to the project's root Cargo.toml.
  * Called by `pledge add <crate>`.
@@ -209,10 +230,16 @@ export async function addCrate(
     await ensureRootCargoToml(projectRoot);
   }
 
+  // The name is written into Cargo.toml unquoted, so it must be a plain crate
+  // name — never something that could start a new key or table.
+  if (!/^[A-Za-z0-9_-]+$/.test(crateName)) {
+    throw new Error(`Invalid crate name: ${JSON.stringify(crateName)}`);
+  }
+
   const content = await readFile(cargoPath, 'utf-8');
 
-  // Check if already present
-  if (content.includes(`${crateName} = `)) {
+  // Check if already present (whole key, not the tail of a longer crate name)
+  if (new RegExp(`^${escapeRegExp(crateName)}\\s*=`, 'm').test(content)) {
     return; // Already installed
   }
 
@@ -227,10 +254,17 @@ export async function addCrate(
   }
 
   // Add to [workspace.dependencies] section
-  const updated = content.replace(
-    /\[workspace\.dependencies\]\n/,
-    `[workspace.dependencies]\n${crateName} = ${spec}\n`,
-  );
+  // (files checked out on Windows use CRLF, so match either line ending)
+  const header = /\[workspace\.dependencies\](\r?\n)/;
+  const headerMatch = header.exec(content);
+  if (!headerMatch) {
+    throw new Error(
+      `Cargo.toml has no [workspace.dependencies] section — cannot add "${crateName}". ` +
+        'Add the section (or regenerate the file) and retry.',
+    );
+  }
+  const eol = headerMatch[1];
+  const updated = content.replace(header, () => `[workspace.dependencies]${eol}${crateName} = ${spec}${eol}`);
 
   await writeFile(cargoPath, updated, 'utf-8');
 }
@@ -250,7 +284,8 @@ export async function removeCrate(
   // Remove the crate line — escape regex special chars in crate name
   const escapedName = crateName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const updated = content.replace(
-    new RegExp(`^${escapedName}\\s*=.*$\n`, 'gm'),
+    // Match the whole line including its CRLF or LF terminator.
+    new RegExp(`^${escapedName}[ \\t]*=[^\\r\\n]*(?:\\r?\\n)?`, 'gm'),
     '',
   );
   await writeFile(cargoPath, updated, 'utf-8');
@@ -267,7 +302,7 @@ export async function listCrates(projectRoot: string): Promise<Record<string, st
   const crates: Record<string, string> = {};
 
   // Parse [workspace.dependencies] section
-  const match = content.match(/\[workspace\.dependencies\]\n([\s\S]*?)(?:\n\[|$)/);
+  const match = content.match(/\[workspace\.dependencies\]\r?\n([\s\S]*?)(?:\r?\n\[|$)/);
   if (match) {
     const depSection = match[1];
     const depRegex = /^(\S+)\s*=\s*(.+)$/gm;

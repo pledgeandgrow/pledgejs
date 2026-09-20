@@ -10,7 +10,7 @@
 
 import { statSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -154,6 +154,15 @@ export function analyzeAddon(filePath: string): AddonSizeInfo {
  * Checks if a binary is stripped (no debug symbols).
  * On Unix, uses `file` command. On Windows, checks for .pdb files.
  */
+/**
+ * Interpret `file(1)` output. Note "not stripped" also contains the substring
+ * "stripped", so the previous `includes('stripped') || ...` check reported
+ * every binary as stripped.
+ */
+export function isStrippedFileOutput(output: string): boolean {
+  return !output.includes('not stripped');
+}
+
 function checkStripped(filePath: string): boolean {
   try {
     if (process.platform === 'win32') {
@@ -163,11 +172,13 @@ function checkStripped(filePath: string): boolean {
     }
 
     // On Unix, use `file` command
-    const output = execSync(`file ${filePath}`, {
+    // execFileSync (no shell): filePath comes from directory contents and may
+    // contain shell metacharacters.
+    const output = execFileSync('file', [filePath], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return output.includes('stripped') || !output.includes('not stripped');
+    return isStrippedFileOutput(output);
   } catch {
     // If we can't check, assume stripped (optimistic)
     return true;

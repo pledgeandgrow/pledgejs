@@ -91,6 +91,35 @@ export interface PledgeRequest {
    * already received a 504.
    */
   signal?: AbortSignal;
+  /**
+   * Client IP resolved through the trustedProxies config — populated by the
+   * request handler. Route code should prefer this over reading
+   * `x-forwarded-for`/`x-real-ip` directly, which are client-spoofable when
+   * no trusted proxy is configured.
+   */
+  ip?: string;
+}
+
+/**
+ * Per-render security context threaded from the request handler into the
+ * render pipeline. Lets the framework stamp CSP nonces and SRI integrity
+ * hashes on the <script> tags it emits.
+ */
+export interface RenderSecurity {
+  /**
+   * Per-request CSP nonce. Stamped as `nonce="..."` on executable <script>
+   * tags and mirrored into the Content-Security-Policy header. Omit for
+   * cached/ISR HTML — a nonce frozen into shared cached markup can never
+   * match the next request's CSP nonce.
+   */
+  cspNonce?: string;
+  /**
+   * SRI integrity hashes keyed by URL path, e.g.
+   * `{ '/__pledge__/client.js': 'sha384-...' }`. Stamped as `integrity="..."`
+   * on matching <script src> / <link> tags. Safe for cached and static HTML
+   * because the value is content-derived, not request-derived.
+   */
+  assetIntegrity?: Record<string, string>;
 }
 
 export interface PledgeResponse {
@@ -99,6 +128,12 @@ export interface PledgeResponse {
   body: string | ReadableStream<Uint8Array> | null;
   /** When true, body is a base64-encoded string (for binary content like images) */
   isBase64?: boolean;
+  /**
+   * Per-request CSP nonce used to stamp this response's <script> tags.
+   * Runtime adapters pass it to applySecurityHeaders so the emitted CSP
+   * includes the matching 'nonce-...' source.
+   */
+  cspNonce?: string;
   /**
    * Set-Cookie values, one per cookie. `headers` (a flat Record) cannot carry
    * multiple Set-Cookie headers, so cookies are surfaced here and emitted as

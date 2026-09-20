@@ -71,3 +71,19 @@ describe('shared getLayoutChain', () => {
     expect(getLayoutChain(match, undefined)).toEqual([]);
   });
 });
+
+import { vi } from 'vitest';
+import { fetchFromPledgepack } from './transforms';
+
+describe('fetchFromPledgepack URL encoding', () => {
+  it('percent-encodes special characters in the module path', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok'));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await fetchFromPledgepack('/proj/app/my page#1.tsx', 4000, '/proj');
+      expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('http://localhost:4000/app/my%20page%231.tsx');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

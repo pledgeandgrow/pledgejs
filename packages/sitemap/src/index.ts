@@ -145,7 +145,8 @@ export function routesToSitemapEntries(
       // Skip API routes
       if (route.startsWith('/api/')) return false;
       // Skip dynamic segments
-      if (route.includes('[')) return false;
+      // (router patterns use `:name` / `*name`; `[name]` is the file-system form)
+      if (route.includes('[') || route.split('/').some((s) => s.startsWith(':') || s.startsWith('*'))) return false;
       // Skip excluded patterns
       for (const pattern of exclude) {
         if (matchGlob(route, pattern)) return false;

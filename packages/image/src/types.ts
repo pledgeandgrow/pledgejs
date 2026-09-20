@@ -69,6 +69,20 @@ export function optimizeUrl(
   return `/_pledge/image?${params}`;
 }
 
+/**
+ * Quotes a value for use inside CSS `url(...)`. Escapes backslashes, quotes and
+ * newlines so a hostile blurDataURL cannot terminate the url() and inject
+ * further declarations.
+ */
+export function cssUrl(value: string): string {
+  const escaped = value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/[\n\r\f]/g, ' ')
+    .replace(/[()]/g, (c) => '\\' + c);
+  return `url("${escaped}")`;
+}
+
 export function aspectRatioPadding(width: number, height: number): string {
   return `${(height / width) * 100}%`;
 }
@@ -107,7 +121,7 @@ export function generateBlurPlaceholder(src: string, options?: BlurPlaceholderOp
  */
 export function blurPlaceholderStyle(blurDataURL: string): import('react').CSSProperties {
   return {
-    background: `url(${blurDataURL}) center/cover no-repeat`,
+    background: `${cssUrl(blurDataURL)} center/cover no-repeat`,
     filter: 'blur(20px)',
     transform: 'scale(1.1)',
     transition: 'opacity 0.3s ease-out',
@@ -138,16 +152,27 @@ export function generateResponsiveSrcSet(
     sizes: sizesAttr,
   }));
 
-  const srcSet = generateSrcSet(src, widths, formats, quality);
+  // The top-level srcSet is the <img> fallback, which cannot carry a `type`
+  // — mixing avif/webp/jpeg candidates into one srcset lets the browser pick a
+  // format it may not decode. Use the last (most compatible) format only; the
+  // per-format `sources` carry the rest.
+  const fallbackFormat = formats[formats.length - 1];
+  const srcSet = generateSrcSet(src, widths, fallbackFormat ? [fallbackFormat] : [], quality);
 
   return { srcSet, sources };
 }
 
 /**
  * Generate the sizes attribute for responsive images based on layout.
+ *
+ * - `responsive`: full width below `breakpoint`, capped at it above.
+ * - `fixed`: the image renders at a fixed CSS width — pass it as `breakpoint`
+ *   (e.g. `generateSizesAttr('fixed', 320)` -> `320px`). Without a width it
+ *   falls back to `100vw` (never `1px`, which made browsers pick the smallest candidate).
+ * - `fill`: `100vw`.
  */
 export function generateSizesAttr(layout: 'responsive' | 'fixed' | 'fill', breakpoint?: number): string {
-  if (layout === 'fixed') return '1px';
+  if (layout === 'fixed') return breakpoint && breakpoint > 0 ? `${breakpoint}px` : '100vw';
   if (layout === 'fill') return '100vw';
   return `(max-width: ${breakpoint ?? 768}px) 100vw, ${breakpoint ?? 768}px`;
 }

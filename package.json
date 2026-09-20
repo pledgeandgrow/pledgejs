@@ -1,12 +1,12 @@
 {
-  "name": "pledgestack",
+  "name": "pledgestack-monorepo",
   "version": "0.1.12",
   "private": true,
   "description": "A full-stack React framework with file-based routing, SSR, SSG, RSC, API routes, middleware, and edge runtime support.",
   "scripts": {
     "dev": "node packages/cli/dist/bin.js dev",
     "build": "node packages/cli/dist/bin.js build",
-    "build:packages": "pnpm --filter \"./packages/cli\" run build",
+    "build:packages": "pnpm --filter \"./packages/*\" --filter \"!pledgestack-vscode\" --filter \"!pledgestack-psx\" run build",
     "build:all": "pnpm build:packages && pnpm build",
     "lint": "pnpm --filter pledgestack-eslint-plugin run build && eslint .",
     "lint:psx": "node packages/cli/dist/bin.js lint",
@@ -15,8 +15,10 @@
     "test": "node packages/cli/dist/bin.js test",
     "audit": "pnpm audit --audit-level=high",
     "changeset": "changeset",
-    "version-packages": "changeset version",
-    "release": "pnpm build:packages && changeset publish"
+    "version-packages": "changeset version && pnpm install --lockfile-only",
+    "release": "pnpm build:packages && node scripts/check-release.mjs --dist && changeset publish",
+    "check:release": "node scripts/check-release.mjs --dist",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@changesets/cli": "^2.27.0",
@@ -24,15 +26,17 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitest/coverage-v8": "^3.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "esbuild": "^0.25.12",
     "eslint": "^9.18.0",
     "globals": "^17.12.0",
-    "pledgepack": "^0.3.2",
+    "jsdom": "^27.4.0",
+    "pledgepack": "^0.3.3",
     "prettier": "^3.4.0",
     "rimraf": "^6.0.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.70.0",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.11"
   },
   "packageManager": "pnpm@11.13.1",
   "engines": {

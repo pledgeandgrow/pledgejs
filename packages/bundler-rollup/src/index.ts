@@ -1,15 +1,18 @@
-import { join, dirname, basename, extname, resolve, relative, isAbsolute } from 'node:path';
+import { join, dirname, basename, extname, resolve, relative, isAbsolute, resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
+  loadPSXModule,
   transformPSX,
   detectCratesFromImports,
   generateModuleCargoToml,
   ensureRootCargoToml,
   serializeSourceMap,
+  rustLibName,
 } from 'pledgestack-core';
+import type { RustBuildFn } from 'pledgestack-core';
 import { generateRustFallback, BoundedLRUMap, MAX_TRANSFORM_CACHE_ENTRIES } from 'pledgestack-shared';
 import type {
   BundlerAdapter,
@@ -138,7 +141,7 @@ export const rollupAdapter: BundlerAdapter = {
     const hostname = options.hostname ?? 'localhost';
 
     const server = createServer(async (req, res) => {
-      const cwd = process.cwd();
+      const cwd = resolvePath(config.rootDir);
       // Resolve within cwd and reject path traversal (`GET /../../secrets.ts`).
       let filePath: string;
       try {
@@ -162,8 +165,10 @@ export const rollupAdapter: BundlerAdapter = {
           isDev: true,
           cargoConfig: config.cargo,
         });
-        const code = await readFile(new URL(fileUrl), 'utf-8');
-        res.writeHead(200, { 'Content-Type': 'application/javascript' });
+        const code = isFallbackScript(filePath)
+          ? await readFile(new URL(fileUrl), 'utf-8')
+          : await readFile(new URL(fileUrl));
+        res.writeHead(200, { 'Content-Type': fallbackContentType(filePath) });
         res.end(code);
       } catch (err) {
         res.writeHead(500);
@@ -244,11 +249,15 @@ export const rollupAdapter: BundlerAdapter = {
 
 // ── Rollup Plugin ────────────────────────────────────────────────────
 
-function pledgeStackRollupPlugin(config: PledgeConfig) {
+export function pledgeStackRollupPlugin(config: PledgeConfig, opts: { build?: RustBuildFn } = {}) {
   return {
     name: 'pledgestack',
 
-    resolveId(source: string, importer?: string) {
+    async resolveId(
+      this: { resolve: (source: string, importer?: string, options?: { skipSelf?: boolean }) => Promise<{ id: string } | null> },
+      source: string,
+      importer?: string,
+    ) {
       if (source.endsWith('.psx') || source.endsWith('.ps')) {
         if (importer) return resolve(dirname(importer), source);
         return source;
@@ -261,7 +270,13 @@ function pledgeStackRollupPlugin(config: PledgeConfig) {
           if (source.startsWith(cleanKey + '/')) {
             const subPath = source.slice(cleanKey.length);
             const cleanValue = value.replace(/\/\*$/, '');
-            return join(config.rootDir, cleanValue, subPath);
+            const target = join(config.rootDir, cleanValue, subPath);
+            // The aliased target usually has no extension ('@/lib/x' -> lib/x);
+            // returning it as-is makes Rollup try to load a file that does not
+            // exist. Hand it back to the resolver chain (node-resolve probes the
+            // configured extensions) and only fall back to the raw path.
+            const resolved = await this.resolve(target, importer, { skipSelf: true });
+            return resolved?.id ?? target;
           }
         }
       }
@@ -270,22 +285,14 @@ function pledgeStackRollupPlugin(config: PledgeConfig) {
 
     async load(id: string) {
       if (id.endsWith('.psx') || id.endsWith('.ps')) {
-        const format = id.endsWith('.ps') ? 'ps' : 'psx';
-        const source = await readFile(id, 'utf-8');
-        const moduleName = basename(id, extname(id));
-
-        const result = transformPSX(source, {
-          moduleName,
-          compileRust: true,
-          addonPath: `./${moduleName}.node`,
-          format,
+        // Compile the Rust addon, write the NAPI wrapper (or fallback stub)
+        // and return the module source. Rollup builds are production builds.
+        return loadPSXModule(id, {
+          isDev: false,
+          projectRoot: config.rootDir,
+          cargoConfig: config.cargo,
+          build: opts.build,
         });
-
-        if (format === 'ps') {
-          return result.napiWrapper ?? generateRustFallback(moduleName);
-        }
-
-        return result.tsx;
       }
 
       // Transform TS/TSX via esbuild
@@ -360,6 +367,8 @@ async function transformPSXFile(
     moduleName,
     compileRust: true,
     addonPath: `./${moduleName}.node`,
+    // The wrapper is written next to the emitted module as <name>.napi.js.
+    wrapperImportPath: `./${moduleName}.napi.js`,
     format,
   });
 
@@ -497,15 +506,26 @@ async function compileRustAddon(
         timeout: cargoConfig?.timeout ?? (isDev ? 30000 : 120000),
         env: cargoEnv,
       });
+      // Always drain the pipes: cargo blocks once an unread pipe fills (~64KB),
+      // which turned a noisy build into a hang until the timeout. Keep stderr
+      // so a failed build says why instead of silently falling back.
+      let stderr = '';
+      child.stdout?.resume();
+      child.stderr?.on('data', (data: Buffer) => {
+        if (stderr.length < 64 * 1024) stderr += data.toString();
+      });
       child.on('error', reject);
       child.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`cargo exited with ${code}`));
+        else {
+          console.error(`[pledgestack] Rust compilation failed for ${moduleName}:\n${stderr}`);
+          reject(new Error(`cargo exited with ${code}`));
+        }
       });
     });
 
     const targetDir = join(sharedTargetDir, isDev ? 'debug' : 'release');
-    const libName = `pledge_${moduleName}`;
+    const libName = rustLibName(moduleName);
     const candidates = [
       join(targetDir, `lib${libName}.so`),
       join(targetDir, `lib${libName}.dylib`),
@@ -527,3 +547,37 @@ async function compileRustAddon(
 }
 
 export default rollupAdapter;
+
+const FALLBACK_SCRIPT_EXTS = new Set(['.ts', '.tsx', '.jsx', '.mjs', '.js', '.cjs', '.psx', '.ps']);
+const FALLBACK_CONTENT_TYPES: Record<string, string> = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+};
+
+/** Whether the dev-server fallback serves this file as (transformed) JavaScript. */
+export function isFallbackScript(filePath: string): boolean {
+  return FALLBACK_SCRIPT_EXTS.has(extname(filePath).toLowerCase());
+}
+
+/** Content-Type for a file served by the dev-server fallback, chosen by extension. */
+export function fallbackContentType(filePath: string): string {
+  if (isFallbackScript(filePath)) return 'application/javascript; charset=utf-8';
+  return FALLBACK_CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+}

@@ -45,8 +45,11 @@ function parseEnvFile(content: string): void {
       value = value.slice(1, -1);
     }
 
-    // Don't override existing process.env values
-    if (!(key in process.env)) {
+    // Don't override real process.env values, but let a later (more specific)
+    // file override an earlier one: .env < .env.local < .env.<mode> <
+    // .env.<mode>.local. Previously the FIRST file to define a key won, so
+    // .env silently beat every override file.
+    if (!(key in process.env) || loadedEnv.has(key)) {
       process.env[key] = value;
       loadedEnv.set(key, value);
     }
@@ -73,10 +76,16 @@ export function getPublicEnv(): Record<string, string> {
 
 /**
  * Returns a script tag that injects public env vars into the client.
+ * Left angle brackets are unicode-escaped so a PLEDGE_PUBLIC_ value
+ * containing a closing script tag cannot break out of the script block.
+ * `cspNonce` stamps the request's CSP nonce so the inline script survives
+ * a strict script-src policy.
  */
-export function getPublicEnvScript(): string {
+export function getPublicEnvScript(cspNonce?: string): string {
   const publicEnv = getPublicEnv();
-  return `<script>window.__PLEDGE_ENV__ = ${JSON.stringify(publicEnv)};</script>`;
+  const json = JSON.stringify(publicEnv).replace(/</g, '\\u003c');
+  const nonceAttr = cspNonce ? ` nonce="${cspNonce}"` : '';
+  return `<script${nonceAttr}>window.__PLEDGE_ENV__ = ${json};</script>`;
 }
 
 /**

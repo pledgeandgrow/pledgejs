@@ -46,8 +46,12 @@ export const DEFAULT_SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Cross-Origin-Opener-Policy': 'same-origin',
-  'Cross-Origin-Resource-Policy': 'same-site',
+  // same-origin-allow-popups keeps OAuth popup flows working while severing
+  // cross-origin window.opener access.
+  'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Origin-Agent-Cluster': '?1',
+  'X-Permitted-Cross-Domain-Policies': 'none',
 };
 
 /**
@@ -58,8 +62,10 @@ export function generateSecurityHeaders(options: SecurityHeadersOptions = {}): R
     'X-Content-Type-Options': options.contentTypeOptions ?? 'nosniff',
     'X-Frame-Options': options.frameOptions ?? 'DENY',
     'Referrer-Policy': options.referrerPolicy ?? 'strict-origin-when-cross-origin',
-    'Cross-Origin-Opener-Policy': options.coop ?? 'same-origin',
-    'Cross-Origin-Resource-Policy': options.corp ?? 'same-site',
+    'Cross-Origin-Opener-Policy': options.coop ?? 'same-origin-allow-popups',
+    'Cross-Origin-Resource-Policy': options.corp ?? 'same-origin',
+    'Origin-Agent-Cluster': '?1',
+    'X-Permitted-Cross-Domain-Policies': 'none',
   };
 
   if (options.coep) {

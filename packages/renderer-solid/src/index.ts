@@ -16,7 +16,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
@@ -208,7 +208,9 @@ export class SolidRendererAdapter implements RendererAdapter {
   }
 
   async renderToReadableStream(ctx: RenderContext): Promise<ReadableStream<Uint8Array>> {
-    const html = await this.renderToString(ctx);
+    // Streamed output can't be post-processed by the handler — stamp the
+    // request's CSP nonce / SRI hashes on emitted scripts here.
+    const html = applyScriptSecurity(await this.renderToString(ctx), ctx.security);
     const encoder = new TextEncoder();
     return new ReadableStream<Uint8Array>({
       start(controller) {
@@ -261,13 +263,19 @@ if (root) {
   // Solid hydration — the SSR content is already in the DOM
   try {
     const routeData = window.__PLEDGE_ROUTE__ || { params: {}, searchParams: {}, pattern: window.location.pathname };
-    const { routes } = await import('/__pledge_router');
-    // Look up by the matched pattern (from the server), falling back to the
-    // pathname; then hydrate with the SAME params the server used so the
-    // client render matches the SSR output.
-    const pageRoute = routes[routeData.pattern] || routes[window.location.pathname];
-    if (pageRoute && pageRoute.component) {
-      hydrate(() => pageRoute.component({ params: routeData.params, searchParams: routeData.searchParams }), root);
+    const { routes, resolveRouteChain } = await import('/__pledge_router');
+    // Resolve page + layout chain by the matched pattern and hydrate with the
+    // SAME params the server used so the client render matches the SSR output.
+    const chain = resolveRouteChain(routes, routeData);
+    if (chain) {
+      const props = { params: routeData.params, searchParams: routeData.searchParams };
+      hydrate(() => {
+        let content = chain.page(props);
+        for (let i = chain.layouts.length - 1; i >= 0; i--) {
+          content = chain.layouts[i]({ ...props, children: content });
+        }
+        return content;
+      }, root);
     }
   } catch (e) {
     console.error('[pledgestack] Solid hydration error:', e);

@@ -38,6 +38,7 @@ export function useUrlState<T>(
       // history entry or dispatch a popstate event — that would create a
       // no-op history entry and trigger a needless re-render cycle.
       if (Object.is(next, stateRef.current)) return;
+      stateRef.current = next;
       if (typeof window !== 'undefined') {
         const params = new URLSearchParams(window.location.search);
         params.set(key, JSON.stringify(next));

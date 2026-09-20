@@ -9,10 +9,16 @@ routing, SSR/SSG/ISR, RSC, API routes, server actions, plus a `.psx` native-Rust
 extension surface).
 
 - `packages/cli` — the published `pledgestack` package (the `pledge` binary).
-  Everything is bundled into this via esbuild.
-- `packages/*` — internal packages (server, core, client, shared, bundlers,
-  renderers, integrations). All `private: true`; never published on their own.
-- `apps/` — example/test apps.
+  Everything it needs is bundled into it via esbuild, so it works on its own.
+- `packages/*` — the library packages (server, core, client, shared, bundlers,
+  renderers, integrations, eslint plugin, `create-pledge-app`). 34 packages are
+  public and released together at one version; only the two VS Code extensions
+  (`vscode-extension`, `vscode-psx`) are `private: true`. Each library's `build`
+  is `tsc --build` (declarations only) + `scripts/bundle-package.mjs` (esbuild ESM).
+- `packages/create-pledge-app/templates/` — the 11 scaffolded app templates
+  (8 base + vue/solid/svelte starters); there is currently no top-level
+  `apps/` directory (the `apps/*` pnpm-workspace glob exists for when one is
+  added).
 - `scripts/` — repo tooling (e.g. `typecheck-workspace.mjs`).
 - `types/optional-deps.d.ts` — ambient module declarations for optional runtime
   integrations (see "Optional dependencies" below).
@@ -64,21 +70,21 @@ weakening the config.
 Versioning uses [Changesets](https://github.com/changesets/changesets)
 (`@changesets/cli` is a root devDep, config in `.changeset/config.json`).
 
-**Policy:** only the `pledgestack` CLI package is published to npm. Every other
-package is `private: true` and listed in the changesets `ignore` array — their
-individual version numbers are not meaningful because they are never published
-and are consumed through `workspace:*` ranges (always the local version). Do not
-hand-bump internal package versions; the CLI version is the only one that
-matters.
+**Policy:** all 34 public packages share one version (a Changesets `fixed`
+group in `.changeset/config.json`) — never hand-bump versions, never add a public
+package to `ignore`, and add any new public package to the `fixed` group.
+The repo is in prerelease mode (`.changeset/pre.json`, tag `rc`): versions are
+`1.0.0-rc.N`, published under the `rc` dist-tag. `pnpm check:release`
+(`scripts/check-release.mjs`) enforces metadata, versions, READMEs/CHANGELOGs,
+declared workspace dependencies and (with `--dist`) that built entry points exist.
 
 Release flow:
 
-1. Add a changeset describing your change: `pnpm changeset`
-   (select `pledgestack`; the internal packages are ignored).
-2. Bump the version + changelog: `pnpm version-packages`
-   (runs `changeset version`).
-3. Build + publish: `pnpm release` (`changeset publish`), or push a `v*.*.*`
-   tag and let `.github/workflows/release.yml` publish.
+1. Add a changeset describing your change: `pnpm changeset`.
+2. Push to `main`: `.github/workflows/release.yml` runs the full gate and the
+   Changesets action opens a "Version Packages" PR (`pnpm version-packages`).
+3. Merging that PR publishes to npm (`pnpm release`). Agents must not run
+   `npm publish` / `changeset publish` locally.
 
 ## Optional runtime dependencies
 
@@ -113,7 +119,7 @@ Contract: `pledgepack/docs/CONNECTION.md` (in the sibling pledgepack repo).
   duplicating the logic.
 - The transform result cache is a bounded `BoundedLRUMap` (from
   `pledgestack-shared`) to avoid unbounded growth in dev.
-- Keep the `pledgepack` dependency at `^0.3.2` across `package.json`,
+- Keep the `pledgepack` dependency at `^0.3.3` across `package.json`,
   `packages/cli`, and `packages/server` — ranges drifted before and caused
   mismatches.
 

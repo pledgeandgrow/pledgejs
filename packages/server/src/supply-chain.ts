@@ -36,23 +36,108 @@ export interface SBOMDocument {
   };
 }
 
+/** Reads the `license` of a package.json (string, `{ type }` or legacy `licenses[]`), or undefined. */
+function readPackageLicense(pkgJsonPath: string): string | undefined {
+  try {
+    const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf-8')) as {
+      license?: string | { type?: string };
+      licenses?: Array<{ type?: string }>;
+    };
+    if (typeof pkg.license === 'string') return pkg.license;
+    if (pkg.license && typeof pkg.license === 'object' && pkg.license.type) return pkg.license.type;
+    const legacy = pkg.licenses?.map((l) => l.type).filter(Boolean);
+    if (legacy && legacy.length > 0) return legacy.join(' OR ');
+  } catch {
+    // unreadable / not installed
+  }
+  return undefined;
+}
+
+/** Parses the `packages:` section of a pnpm lockfile (v6 `/name@1.0.0:` and v9 `name@1.0.0:` keys). */
+function parsePnpmLockfile(lockfile: string): Array<{ name: string; version: string }> {
+  const found = new Map<string, { name: string; version: string }>();
+  let inPackages = false;
+
+  for (const line of lockfile.split(/\r?\n/)) {
+    if (/^\S/.test(line)) {
+      inPackages = /^packages:\s*$/.test(line);
+      continue;
+    }
+    if (!inPackages) continue;
+    // Two-space-indented key: '@scope/name@1.2.3(peer@1.0.0)': or /name@1.2.3:
+    const m = line.match(/^ {2}['"]?\/?((?:@[^/@\s'"]+\/)?[^@/\s'"]+)@([^\s'"(:]+)[^\s]*?['"]?:\s*(?:\{\})?\s*$/);
+    if (!m) continue;
+    found.set(`${m[1]}@${m[2]}`, { name: m[1], version: m[2] });
+  }
+  return [...found.values()];
+}
+
+/** Locates an installed package's package.json (top-level node_modules first, then pnpm's virtual store). */
+function findInstalledPackageJson(rootDir: string, name: string, version: string, pnpmStore: string[] | null): string | undefined {
+  const direct = join(rootDir, 'node_modules', name, 'package.json');
+  if (existsSync(direct)) return direct;
+  if (pnpmStore) {
+    const prefix = `${name.replace('/', '+')}@${version}`;
+    const dir = pnpmStore.find((d) => d === prefix || d.startsWith(`${prefix}_`) || d.startsWith(`${prefix}(`));
+    if (dir) {
+      const candidate = join(rootDir, 'node_modules', '.pnpm', dir, 'node_modules', name, 'package.json');
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
 function extractDependencies(rootDir: string): SBOMComponent[] {
-  const lockfilePath = join(rootDir, 'pnpm-lock.yaml');
   const components: SBOMComponent[] = [];
 
+  const lockfilePath = join(rootDir, 'pnpm-lock.yaml');
+  const npmLockPath = join(rootDir, 'package-lock.json');
+
   if (existsSync(lockfilePath)) {
-    const lockfile = readFileSync(lockfilePath, 'utf-8');
-    const packageRegex = /\/(.+)@([^:]+):/g;
-    let match: RegExpExecArray | null;
-    while ((match = packageRegex.exec(lockfile)) !== null) {
-      const [, name, version] = match;
+    let pnpmStore: string[] | null = null;
+    try {
+      const storeDir = join(rootDir, 'node_modules', '.pnpm');
+      if (existsSync(storeDir)) pnpmStore = readdirSync(storeDir);
+    } catch {
+      pnpmStore = null;
+    }
+
+    for (const { name, version } of parsePnpmLockfile(readFileSync(lockfilePath, 'utf-8'))) {
+      const pkgJson = findInstalledPackageJson(rootDir, name, version, pnpmStore);
+      const license = pkgJson ? readPackageLicense(pkgJson) : undefined;
       components.push({
         name,
         version,
         type: 'library',
         purl: `pkg:npm/${name}@${version}`,
         scope: 'required',
+        ...(license ? { licenses: [license] } : {}),
       });
+    }
+  } else if (existsSync(npmLockPath)) {
+    try {
+      const lock = JSON.parse(readFileSync(npmLockPath, 'utf-8')) as {
+        packages?: Record<string, { version?: string; license?: string | string[]; dev?: boolean }>;
+      };
+      const seen = new Set<string>();
+      for (const [key, info] of Object.entries(lock.packages ?? {})) {
+        const idx = key.lastIndexOf('node_modules/');
+        if (idx === -1 || !info.version) continue;
+        const name = key.slice(idx + 'node_modules/'.length);
+        if (seen.has(`${name}@${info.version}`)) continue;
+        seen.add(`${name}@${info.version}`);
+        const license = Array.isArray(info.license) ? info.license.join(' OR ') : info.license;
+        components.push({
+          name,
+          version: info.version,
+          type: 'library',
+          purl: `pkg:npm/${name}@${info.version}`,
+          scope: info.dev ? 'optional' : 'required',
+          ...(license ? { licenses: [license] } : {}),
+        });
+      }
+    } catch {
+      // malformed lockfile — report nothing rather than throwing from a build hook
     }
   }
 
@@ -125,6 +210,38 @@ const LICENSE_MAP: Record<string, LicenseCategory> = {
   'Elastic-2.0': 'restricted',
 };
 
+const CATEGORY_RISK: Record<LicenseCategory, number> = { permissive: 0, unknown: 1, copyleft: 2, restricted: 3 };
+
+function classifySingleLicense(license: string): LicenseCategory {
+  const id = license.trim().replace(/^\(|\)$/g, '').replace(/\+$/, '');
+  if (LICENSE_MAP[id]) return LICENSE_MAP[id];
+  // "-or-later" / "-only" variants and the other GPL-family ids
+  if (/^(?:A|L)?GPL-/i.test(id)) return 'copyleft';
+  if (/^(?:SSPL|BUSL|Elastic)/i.test(id)) return 'restricted';
+  return 'unknown';
+}
+
+/**
+ * Classifies an SPDX licence expression. `A OR B` can be satisfied by either
+ * side (best case wins); `A AND B` requires both (worst case wins).
+ */
+function classifyLicense(expression: string): LicenseCategory {
+  const stripped = expression.trim().replace(/^\((.*)\)$/, '$1');
+  const orParts = stripped.split(/\s+OR\s+/i);
+  if (orParts.length > 1) {
+    return orParts
+      .map(classifyLicense)
+      .reduce((best, c) => (CATEGORY_RISK[c] < CATEGORY_RISK[best] ? c : best));
+  }
+  const andParts = stripped.split(/\s+AND\s+/i);
+  if (andParts.length > 1) {
+    return andParts
+      .map(classifyLicense)
+      .reduce((worst, c) => (CATEGORY_RISK[c] > CATEGORY_RISK[worst] ? c : worst));
+  }
+  return classifySingleLicense(stripped);
+}
+
 export interface LicenseViolation {
   packageName: string;
   version: string;
@@ -149,7 +266,7 @@ export function checkLicenseCompliance(
 
   for (const comp of components) {
     const license = comp.licenses?.[0] ?? 'unknown';
-    const category = LICENSE_MAP[license] ?? 'unknown';
+    const category = license === 'unknown' ? 'unknown' : classifyLicense(license);
     if (allowList.includes(comp.name)) continue;
     if (blockCopyleft && category === 'copyleft') {
       violations.push({ packageName: comp.name, version: comp.version, license, category });
@@ -474,6 +591,19 @@ const SECRET_PATTERNS: Array<{ type: string; pattern: RegExp; severity: 'high' |
 const IGNORED_PATHS = ['node_modules', '.git', '.pledge', 'dist', 'coverage', 'pnpm-lock.yaml'];
 
 /**
+ * Checks arbitrary text against the secret patterns — used by the build to
+ * warn when a PLEDGE_PUBLIC_ value looks like a credential (the prefix gate
+ * controls *which* vars reach the client, not what they contain).
+ */
+export function matchSecretPatterns(text: string): Array<{ type: string; severity: 'high' | 'medium' | 'low' }> {
+  const matches: Array<{ type: string; severity: 'high' | 'medium' | 'low' }> = [];
+  for (const { type, pattern, severity } of SECRET_PATTERNS) {
+    if (pattern.test(text)) matches.push({ type, severity });
+  }
+  return matches;
+}
+
+/**
  * Scans source files for secrets using pattern matching.
  * Similar to TruffleHog/Gitleaks but built-in for PledgeStack CI.
  *
@@ -488,7 +618,16 @@ export function scanForSecrets(rootDir: string, options: { extensions?: string[]
   let scannedFiles = 0;
 
   function scanDir(dir: string): void {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    // A missing/unreadable directory (e.g. no build output yet) must not abort
+    // the whole scan — the build wraps this in one try/catch that would then
+    // also skip the licence check that follows.
+    let dirEntries: import('node:fs').Dirent[];
+    try {
+      dirEntries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of dirEntries) {
       const fullPath = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (allIgnored.includes(entry.name)) continue;
@@ -496,8 +635,13 @@ export function scanForSecrets(rootDir: string, options: { extensions?: string[]
       } else if (entry.isFile()) {
         const ext = '.' + entry.name.split('.').pop();
         if (!extensions.includes(ext) && !entry.name.startsWith('.env')) continue;
+        let content: string;
+        try {
+          content = readFileSync(fullPath, 'utf-8');
+        } catch {
+          continue; // unreadable file (permissions, broken symlink)
+        }
         scannedFiles++;
-        const content = readFileSync(fullPath, 'utf-8');
         const lines = content.split('\n');
         for (let i = 0; i < lines.length; i++) {
           for (const { type, pattern, severity } of SECRET_PATTERNS) {
@@ -508,7 +652,9 @@ export function scanForSecrets(rootDir: string, options: { extensions?: string[]
                 line: i + 1,
                 type,
                 severity,
-                snippet: match[0].slice(0, 40) + '...',
+                // Only a short prefix: findings end up in CI logs and reports, and
+                // must not carry the credential they are warning about.
+                snippet: match[0].slice(0, 6) + '...[redacted]',
               });
             }
           }

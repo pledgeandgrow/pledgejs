@@ -16,6 +16,8 @@
  */
 
 import { createHash } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { FetchCacheOptions } from './fetch-cache';
 
 export interface PersistentCacheConfig {
@@ -34,6 +36,28 @@ export interface PersistentCacheEntry {
   timestamp: number;
   revalidate?: number;
   tags: string[];
+}
+
+/** The subset of better-sqlite3's Database that is actually used here. */
+interface RawSqliteDatabase {
+  prepare: (sql: string) => { get: (...params: any[]) => any; all: (...params: any[]) => any[]; run: (...params: any[]) => { changes: number } };
+  close: () => void;
+}
+
+/**
+ * better-sqlite3 has no Database#run/get/all — those exist only on prepared
+ * statements. Casting the raw Database to `DB` made every `dbInstance.run(...)`
+ * throw TypeError during init, which the catch block turned into a silent
+ * in-memory fallback, so nothing was ever persisted.
+ */
+function wrapDatabase(raw: RawSqliteDatabase): DB {
+  return {
+    get: (sql, ...params) => raw.prepare(sql).get(...params),
+    all: (sql, ...params) => raw.prepare(sql).all(...params),
+    run: (sql, ...params) => raw.prepare(sql).run(...params),
+    prepare: (sql) => raw.prepare(sql),
+    close: () => raw.close(),
+  };
 }
 
 interface DB {
@@ -73,7 +97,9 @@ export async function initPersistentCache(config: PersistentCacheConfig = {}): P
 
   try {
     const Database = (await import('better-sqlite3')).default;
-    dbInstance = new Database(dbPath) as unknown as DB;
+    if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
+    dbInstance = wrapDatabase(new Database(dbPath) as unknown as RawSqliteDatabase);
+    useInMemory = false;
 
     // Create tables
     dbInstance.run(`
@@ -105,7 +131,11 @@ export async function initPersistentCache(config: PersistentCacheConfig = {}): P
       CREATE INDEX IF NOT EXISTS idx_fetch_cache_timestamp ON fetch_cache(timestamp)
     `);
   } catch {
-    // better-sqlite3 not available — fall back to in-memory
+    // better-sqlite3 not available (or the DB could not be opened) — fall back to in-memory
+    if (dbInstance) {
+      try { dbInstance.close(); } catch { /* ignore */ }
+      dbInstance = null;
+    }
     useInMemory = true;
   }
 }
@@ -242,6 +272,8 @@ export function revalidatePersistentTag(tag: string): string[] {
 
   for (const key of keys) {
     dbInstance.run('DELETE FROM fetch_cache WHERE key = ?', key);
+    // Drop the key's rows under its OTHER tags too, or the tag index keeps dangling entries.
+    dbInstance.run('DELETE FROM cache_tags WHERE cache_key = ?', key);
   }
   dbInstance.run('DELETE FROM cache_tags WHERE tag = ?', tag);
 
@@ -266,7 +298,9 @@ export function revalidatePersistentPath(path: string): string[] {
     return keys;
   }
 
-  const rows = dbInstance.prepare('SELECT key FROM fetch_cache WHERE url LIKE ?').all(`%${path}%`) as { key: string }[];
+  // instr() = literal substring match, same as the in-memory branch. LIKE would
+  // treat '%' and '_' in the path as wildcards.
+  const rows = dbInstance.prepare('SELECT key FROM fetch_cache WHERE instr(url, ?) > 0').all(path) as { key: string }[];
   const keys = rows.map((r) => r.key);
 
   for (const key of keys) {

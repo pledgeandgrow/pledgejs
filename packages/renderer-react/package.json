@@ -1,7 +1,21 @@
 {
   "name": "pledgestack-renderer-react",
-  "version": "0.1.0",
+  "version": "1.0.0-rc.0",
   "description": "React renderer adapter for PledgeStack — SSR, streaming, RSC, hydration",
+  "keywords": [
+    "pledgestack"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/renderer-react#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/renderer-react"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -9,13 +23,21 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
     "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "pledgestack-shared": "workspace:*"
@@ -34,8 +56,8 @@
     "pledgestack-core": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
     "rimraf": "^6.0.0",
+    "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -43,6 +65,10 @@
     "react-dom": "^19.2.8",
     "react-server-dom-webpack": "^19.2.8"
   },
-  "license": "MIT",
-  "author": "PledgeStack Contributors"
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

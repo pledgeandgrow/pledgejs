@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { finalizeTypes } from './finalize-types.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcDir = join(__dirname, '..', 'src');
@@ -87,6 +88,13 @@ const commonOptions = {
     'pledgestack-ws': join(__dirname, '..', '..', 'ws', 'src', 'index.ts'),
     'pledgestack-adapters': join(__dirname, '..', '..', 'adapters', 'src', 'index.ts'),
     'pledgestack-privacy': join(__dirname, '..', '..', 'privacy', 'src', 'index.ts'),
+    // Renderer adapters — inlined (src/renderers.ts imports them for
+    // side-effect registration) so user apps don't need unpublished
+    // `pledgestack-renderer-*` packages installed.
+    'pledgestack-renderer-react': join(__dirname, '..', '..', 'renderer-react', 'src', 'index.ts'),
+    'pledgestack-renderer-vue': join(__dirname, '..', '..', 'renderer-vue', 'src', 'index.ts'),
+    'pledgestack-renderer-solid': join(__dirname, '..', '..', 'renderer-solid', 'src', 'index.ts'),
+    'pledgestack-renderer-svelte': join(__dirname, '..', '..', 'renderer-svelte', 'src', 'index.ts'),
     // Bundler adapters — inlined so they work without separate npm packages
     'pledgestack-bundler-pledgepack': join(__dirname, '..', '..', 'bundler-pledgepack', 'src', 'index.ts'),
     'pledgestack-bundler-vite': join(__dirname, '..', '..', 'bundler-vite', 'src', 'index.ts'),
@@ -102,17 +110,9 @@ async function main() {
   await rm(outDir, { recursive: true, force: true });
 
   const { execSync } = await import('node:child_process');
-  const packagesRoot = join(__dirname, '..', '..');
-
-  // Build sub-packages (best-effort — esbuild bundles from source anyway)
-  try {
-    execSync('pnpm --filter pledgestack-shared --filter pledgestack-core --filter pledgestack-server --filter pledgestack-client --filter pledgestack-auth --filter pledgestack-state --filter pledgestack-api --filter pledgestack-a11y --filter pledgestack-overlay --filter pledgestack-seo --filter pledgestack-image --filter pledgestack-font --filter pledgestack-mdx --filter pledgestack-og --filter pledgestack-sitemap --filter pledgestack-rss --filter pledgestack-ws --filter pledgestack-adapters --filter pledgestack-privacy run build', {
-      cwd: packagesRoot,
-      stdio: 'inherit',
-    });
-  } catch {
-    console.warn('Sub-package tsc build had errors — continuing with esbuild bundle (uses source aliases).');
-  }
+  // Workspace packages are bundled from source via the aliases below, so their own
+  // dist builds are NOT needed here. `pnpm build:packages` builds every public library
+  // package (in dependency order) before this one, for publishing.
 
   // Bundle JS with esbuild (bundles from source via aliases)
   await build({
@@ -131,6 +131,9 @@ async function main() {
   } catch {
     console.warn('Type declaration generation had errors — dist JS is still valid.');
   }
+
+  // Make the declarations consumable: relative workspace imports + entry .d.ts files.
+  finalizeTypes(outDir, entryPoints.map((e) => e.out));
 
   console.log('Build complete.');
 }

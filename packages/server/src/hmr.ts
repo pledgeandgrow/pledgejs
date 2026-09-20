@@ -71,8 +71,13 @@ export function createHMRWatcher(options: HMRWatcherOptions): HMRWatcher {
 
 /**
  * Determines if a file should trigger HMR based on its extension.
+ * Ignores generated/dependency dirs — in particular `.pledge-cache`, where
+ * dev transforms are written; without the exclusion, each transform write
+ * would itself trigger invalidation and every request would re-transform.
  */
 function isWatchableFile(filename: string): boolean {
+  const segments = filename.split(/[\\/]/);
+  if (segments.some((s) => IGNORED_DIRS.has(s))) return false;
   const watchableExtensions = [
     '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
     '.css', '.json', '.html',
@@ -80,3 +85,12 @@ function isWatchableFile(filename: string): boolean {
   ];
   return watchableExtensions.some((ext) => filename.endsWith(ext));
 }
+
+const IGNORED_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.pledge',
+  '.pledge-cache',
+  'dist',
+  'public',
+]);

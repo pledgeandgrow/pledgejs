@@ -1,4 +1,4 @@
-import { join, dirname, basename, extname, relative, isAbsolute } from 'node:path';
+import { join, dirname, basename, extname, relative, isAbsolute, resolve as resolvePath } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -9,6 +9,7 @@ import {
   generateModuleCargoToml,
   ensureRootCargoToml,
   serializeSourceMap,
+  rustLibName,
 } from 'pledgestack-core';
 import { generateRustFallback, BoundedLRUMap, MAX_TRANSFORM_CACHE_ENTRIES } from 'pledgestack-shared';
 import type {
@@ -78,6 +79,7 @@ export const turbopackAdapter: BundlerAdapter = {
               clean: true,
             },
             sourceMaps: true,
+            resolve: { alias: buildAliasMap(config) },
           },
         });
 
@@ -151,6 +153,7 @@ export const turbopackAdapter: BundlerAdapter = {
             clean: true,
           },
           sourceMaps: true,
+          resolve: { alias: buildAliasMap(config) },
         },
       });
 
@@ -170,7 +173,7 @@ export const turbopackAdapter: BundlerAdapter = {
     const { createServer } = await import('node:http');
 
     const server = createServer(async (req, res) => {
-      const cwd = process.cwd();
+      const cwd = resolvePath(config.rootDir);
       // Resolve within cwd and reject path traversal (`GET /../../secrets.ts`).
       let filePath: string;
       try {
@@ -193,8 +196,10 @@ export const turbopackAdapter: BundlerAdapter = {
         const { fileUrl } = await turbopackAdapter.transformFile(filePath, {
           isDev: true,
         });
-        const code = await readFile(new URL(fileUrl), 'utf-8');
-        res.writeHead(200, { 'Content-Type': 'application/javascript' });
+        const code = isFallbackScript(filePath)
+          ? await readFile(new URL(fileUrl), 'utf-8')
+          : await readFile(new URL(fileUrl));
+        res.writeHead(200, { 'Content-Type': fallbackContentType(filePath) });
         res.end(code);
       } catch (err) {
         res.writeHead(500);
@@ -351,6 +356,8 @@ async function transformPSXFile(
     moduleName,
     compileRust: true,
     addonPath: `./${moduleName}.node`,
+    // The wrapper is written next to the emitted module as <name>.napi.js.
+    wrapperImportPath: `./${moduleName}.napi.js`,
     format,
   });
 
@@ -488,15 +495,26 @@ async function compileRustAddon(
         timeout: cargoConfig?.timeout ?? (isDev ? 30000 : 120000),
         env: cargoEnv,
       });
+      // Always drain the pipes: cargo blocks once an unread pipe fills (~64KB),
+      // which turned a noisy build into a hang until the timeout. Keep stderr
+      // so a failed build says why instead of silently falling back.
+      let stderr = '';
+      child.stdout?.resume();
+      child.stderr?.on('data', (data: Buffer) => {
+        if (stderr.length < 64 * 1024) stderr += data.toString();
+      });
       child.on('error', reject);
       child.on('close', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`cargo exited with ${code}`));
+        else {
+          console.error(`[pledgestack] Rust compilation failed for ${moduleName}:\n${stderr}`);
+          reject(new Error(`cargo exited with ${code}`));
+        }
       });
     });
 
     const targetDir = join(sharedTargetDir, isDev ? 'debug' : 'release');
-    const libName = `pledge_${moduleName}`;
+    const libName = rustLibName(moduleName);
     const candidates = [
       join(targetDir, `lib${libName}.so`),
       join(targetDir, `lib${libName}.dylib`),
@@ -518,3 +536,53 @@ async function compileRustAddon(
 }
 
 export default turbopackAdapter;
+
+const FALLBACK_SCRIPT_EXTS = new Set(['.ts', '.tsx', '.jsx', '.mjs', '.js', '.cjs', '.psx', '.ps']);
+const FALLBACK_CONTENT_TYPES: Record<string, string> = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
+};
+
+/** Whether the dev-server fallback serves this file as (transformed) JavaScript. */
+export function isFallbackScript(filePath: string): boolean {
+  return FALLBACK_SCRIPT_EXTS.has(extname(filePath).toLowerCase());
+}
+
+/** Content-Type for a file served by the dev-server fallback, chosen by extension. */
+export function fallbackContentType(filePath: string): string {
+  if (isFallbackScript(filePath)) return 'application/javascript; charset=utf-8';
+  return FALLBACK_CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+}
+
+/**
+ * Resolve aliases in the plain-prefix form utoopack (`resolve.alias`) expects:
+ * tsconfig-style `@/lib/*` -> `lib/*` becomes `@/lib` -> `<root>/lib`.
+ * Mirrors the webpack/rsbuild adapters, including the default `@` -> appDir.
+ */
+export function buildAliasMap(config: PledgeConfig): Record<string, string> {
+  const alias: Record<string, string> = {};
+  if (config.alias) {
+    for (const [name, path] of Object.entries(config.alias)) {
+      alias[name.replace(/\/\*$/, '')] = join(config.rootDir, path.replace(/\/\*$/, ''));
+    }
+  }
+  alias['@'] = join(config.rootDir, config.appDir);
+  return alias;
+}

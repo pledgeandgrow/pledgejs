@@ -27,7 +27,17 @@ import { getPledgeRegistry } from './pledge';
  * - 'media'   — hydrate when media query matches
  */
 
-const hydratedPledges = new Set<string>();
+/**
+ * Hydration state per DOM element. A pledged component has ONE pledge id for
+ * its definition, shared by every instance rendered on the page — keying
+ * state by id meant only the first instance ever hydrated. A null value marks
+ * an element whose hydration is scheduled (idle / visible / media) but has not
+ * happened yet.
+ */
+const hydratedElements = new Map<HTMLElement, { unmount(): void } | null>();
+
+/** IntersectionObservers for pending 'visible' pledges — disconnected on route change. */
+const activeObservers: IntersectionObserver[] = [];
 
 /**
  * Active media-query listeners installed for pending `media`-strategy
@@ -79,7 +89,11 @@ export function initPledgeHydration(): void {
   const manifest = loadManifest();
   if (manifest) {
     for (const entry of manifest.pledges) {
-      hydratePledge(entry);
+      // Every instance of the pledged component (they share the id).
+      const selector = `[${PLEDGE_ID}="${entry.id.replace(/["\\]/g, '\\$&')}"]`;
+      for (const element of document.querySelectorAll(selector)) {
+        if (element instanceof HTMLElement) hydratePledge(entry, element);
+      }
     }
   }
 
@@ -111,7 +125,7 @@ function scanDomForPledges(): void {
     if (!(el instanceof HTMLElement)) continue;
 
     const id = el.getAttribute(PLEDGE_ID);
-    if (!id || hydratedPledges.has(id)) continue;
+    if (!id || hydratedElements.has(el)) continue;
 
     const entry: PledgeManifestEntry = {
       id,
@@ -126,18 +140,15 @@ function scanDomForPledges(): void {
         : undefined,
     };
 
-    hydratePledge(entry);
+    hydratePledge(entry, el);
   }
 }
 
 /**
  * Hydrates a single pledge based on its strategy.
  */
-function hydratePledge(entry: PledgeManifestEntry): void {
-  if (hydratedPledges.has(entry.id)) return;
-
-  const element = document.querySelector(`[${PLEDGE_ID}="${entry.id}"]`);
-  if (!(element instanceof HTMLElement)) return;
+function hydratePledge(entry: PledgeManifestEntry, element: HTMLElement): void {
+  if (hydratedElements.has(element)) return;
 
   const Component = resolvePledgeComponent(entry.id);
   if (!Component) {
@@ -147,23 +158,29 @@ function hydratePledge(entry: PledgeManifestEntry): void {
 
   let props: Record<string, unknown>;
   try {
-    props = JSON.parse(entry.props) as Record<string, unknown>;
+    // Each instance carries its own serialised props on its element.
+    props = JSON.parse(element.getAttribute(PLEDGE_PROPS) ?? entry.props) as Record<string, unknown>;
   } catch {
     return;
   }
 
+  // Mark as scheduled right away so a second scan cannot schedule it again.
+  hydratedElements.set(element, null);
+
   const doHydrate = () => {
-    if (hydratedPledges.has(entry.id)) return;
-    hydratedPledges.add(entry.id);
+    // Skip if this element was already hydrated, or was removed from the page
+    // (e.g. by a route change) while its hydration was pending.
+    if (hydratedElements.get(element) !== null || !element.isConnected) return;
 
     if (entry.strategy === 'only') {
       // No SSR content — create fresh root
       element.innerHTML = '';
       const root = createRoot(element);
       root.render(createElement(Component, props));
+      hydratedElements.set(element, root);
     } else {
       // Hydrate existing SSR content
-      hydrateRoot(element, createElement(Component, props));
+      hydratedElements.set(element, hydrateRoot(element, createElement(Component, props)));
     }
   };
 
@@ -196,6 +213,7 @@ function hydratePledge(entry: PledgeManifestEntry): void {
         },
       );
       observer.observe(element);
+      activeObservers.push(observer);
       break;
     }
 
@@ -243,6 +261,19 @@ export function rehydratePledges(): void {
     mql.removeEventListener('change', handler);
   }
   activeMediaListeners.length = 0;
-  hydratedPledges.clear();
+  for (const observer of activeObservers) observer.disconnect();
+  activeObservers.length = 0;
+
+  // Release React roots whose elements left the page. Elements that are still
+  // connected (e.g. inside a persistent layout) stay hydrated — hydrating a
+  // container that already has a root throws in React.
+  // Pending (never-hydrated) elements are forgotten too: their observers and
+  // media listeners were just torn down, so the scan below re-schedules them.
+  for (const [element, root] of hydratedElements) {
+    if (!element.isConnected || root === null) {
+      root?.unmount();
+      hydratedElements.delete(element);
+    }
+  }
   scanDomForPledges();
 }

@@ -20,6 +20,10 @@ export interface WSAuthConfig {
   authFailureCode?: number;
   /** Close reason for auth failure */
   authFailureReason?: string;
+  /** Maximum accepted message size in bytes (default: 1 MiB). Oversized
+   * messages close the connection with 4003 — a single huge frame otherwise
+   * allocates fully regardless of the per-second rate limit. */
+  maxMessageBytes?: number;
 }
 
 const DEFAULT_RATE_LIMIT = 10;
@@ -98,12 +102,20 @@ export function createAuthenticatedWSRoute(
   const rateLimitBurst = config.rateLimitBurst ?? DEFAULT_BURST;
   const authFailureCode = config.authFailureCode ?? AUTH_FAILURE_CODE;
   const authFailureReason = config.authFailureReason ?? AUTH_FAILURE_REASON;
+  const maxMessageBytes = config.maxMessageBytes ?? 1024 * 1024;
 
   const connections = new Map<string, AuthenticatedConnection>();
 
   return {
     async onOpen(ws: PledgeWebSocket) {
-      const userId = await config.authenticate(ws.meta.headers, ws.meta.query);
+      let userId: string | null = null;
+      try {
+        userId = await config.authenticate(ws.meta.headers, ws.meta.query);
+      } catch {
+        // A throwing/rejecting authenticator must fail closed, not surface as
+        // an unhandled rejection with the socket left open.
+        userId = null;
+      }
       if (!userId) {
         ws.close(authFailureCode, authFailureReason);
         return;
@@ -130,6 +142,14 @@ export function createAuthenticatedWSRoute(
         return;
       }
 
+      // Size cap — the token bucket limits message frequency, not size; a
+      // single oversized frame would otherwise allocate fully on receipt.
+      const size = typeof data.data === 'string' ? utf8ByteLength(data.data) : data.data.byteLength;
+      if (size > maxMessageBytes) {
+        ws.close(4003, 'Message too large');
+        return;
+      }
+
       handler.onMessage?.(ws, data);
     },
 
@@ -145,6 +165,11 @@ export function createAuthenticatedWSRoute(
       handler.onError?.(ws, error);
     },
   };
+}
+
+function utf8ByteLength(s: string): number {
+  // UTF-16 length undercounts multi-byte characters by up to 3x.
+  return new TextEncoder().encode(s).byteLength;
 }
 
 /** Associates each authenticated socket with its user id (see getWSUserId). */
@@ -169,8 +194,12 @@ export function extractWSToken(headers: Record<string, string>, _query: Record<s
   // them in URLs. The `query` parameter is accepted for API compatibility but
   // intentionally ignored.
   const subprotocol = headers['sec-websocket-protocol'];
-  if (subprotocol?.startsWith('bearer.')) {
-    return subprotocol.slice(7);
+  if (subprotocol) {
+    // The header is a comma-separated list of offered protocols.
+    for (const part of subprotocol.split(',')) {
+      const p = part.trim();
+      if (p.startsWith('bearer.') && p.length > 7) return p.slice(7);
+    }
   }
 
   return null;

@@ -33,3 +33,4 @@ export * from './rate-limiter';
 export * from './security-headers';
 export * from './cors';
 export * from './virtual-modules';
+export * from './trusted-proxy';

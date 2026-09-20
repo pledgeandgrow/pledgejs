@@ -6,4 +6,6 @@ export * from './plugin-runner';
 export * from './bundler';
 export * from './transforms';
 export * from './renderer';
+export * from './render-security';
 export * from './escape';
+export * from './crypto';

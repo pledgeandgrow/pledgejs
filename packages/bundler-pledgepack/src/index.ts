@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
-import { join, extname } from 'node:path';
+import { join, extname, relative } from 'node:path';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import type {
   BundlerAdapter,
   BuildResult,
@@ -53,7 +55,12 @@ export const pledgepackAdapter: BundlerAdapter = {
   async build(config: PledgeConfig): Promise<BuildResult> {
     const start = Date.now();
     try {
-      await runPledgepack(['build', '--out-dir', config.outDir]);
+      const aliasArgs = await pledgepackAliasArgs(config);
+      await runPledgepack([...aliasArgs, 'build', '--out-dir', config.outDir]);
+      // PledgePack only emits client chunks — bundle each route module into
+      // .pledge/server/ for SSG/SSR, matching the layout every other adapter
+      // produces and resolveProductionPath expects.
+      await buildServerModules(config);
       return {
         outDir: join(config.rootDir, config.outDir),
         success: true,
@@ -95,7 +102,8 @@ export const pledgepackAdapter: BundlerAdapter = {
     // timeout from waitForServer with no indication of why.
     await checkPortAvailable(hostname, port);
 
-    const spawnArgs = ['dev', '--port', String(port), '--host', hostname];
+    const aliasArgs = await pledgepackAliasArgs(config);
+    const spawnArgs = [...aliasArgs, 'dev', '--port', String(port), '--host', hostname];
     const spawnOpts = { stdio: 'inherit' as const, cwd: config.rootDir };
 
     let proc = spawn(binary, spawnArgs, spawnOpts);
@@ -258,6 +266,104 @@ export const pledgepackAdapter: BundlerAdapter = {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Recursively collects route source files under the app directory — same
+ * convention as the other adapters' collectRouteFiles.
+ */
+async function collectRouteFiles(dir: string): Promise<string[]> {
+  const files: string[] = [];
+  if (!existsSync(dir)) return files;
+
+  async function walk(d: string) {
+    const entries = await readdir(d, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(d, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+        await walk(fullPath);
+      } else if (
+        entry.name.endsWith('.ts') ||
+        entry.name.endsWith('.tsx') ||
+        entry.name.endsWith('.jsx') ||
+        entry.name.endsWith('.psx') ||
+        entry.name.endsWith('.ps')
+      ) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  await walk(dir);
+  return files;
+}
+
+/**
+ * Bundles each app route module into `.pledge/server/<rel>.js` (ESM) so
+ * `resolveProductionPath` can find production modules for SSG and the Node
+ * production server. PledgePack's own build output is client-only — this
+ * mirrors the server build every other adapter does on top of its client
+ * bundle.
+ */
+async function buildServerModules(config: PledgeConfig): Promise<void> {
+  const appDir = join(config.rootDir, config.appDir);
+  const routeFiles = await collectRouteFiles(appDir);
+  if (routeFiles.length === 0) return;
+
+  const serverOutDir = join(config.rootDir, config.outDir, 'server');
+  await mkdir(serverOutDir, { recursive: true });
+
+  const { build: esbuild } = await import('esbuild');
+  const external = [
+    'react',
+    'react-dom',
+    'react/jsx-runtime',
+    'react-dom/server',
+    'pledgestack-core',
+    'pledgestack-shared',
+    'pledgestack-server',
+  ];
+
+  for (const routeFile of routeFiles) {
+    const ext = extname(routeFile);
+    const relPath = relative(appDir, routeFile);
+    const outName = relPath.slice(0, -ext.length) + '.js';
+
+    let input = routeFile;
+    // esbuild can't parse .psx/.ps — run them through the shared transform
+    // pipeline first and bundle the transformed JS instead.
+    if (ext === '.psx' || ext === '.ps') {
+      const { fileUrl } = await pledgepackAdapter.transformFile(routeFile, {
+        isDev: false,
+        rootDir: config.rootDir,
+      });
+      input = fileURLToPath(fileUrl);
+    }
+
+    await esbuild({
+      entryPoints: [input],
+      bundle: true,
+      format: 'esm',
+      platform: 'node',
+      jsx: 'automatic',
+      target: 'es2022',
+      external,
+      alias: buildPledgepackAliasMap(config),
+      // Server modules render markup, not styles — stub stylesheet imports so
+      // esbuild never parses them (a `@import "tailwindcss"` would otherwise
+      // fail to resolve: the package's `.` export only maps under the `style`
+      // condition, and PledgePack already expands it for the client bundle).
+      loader: {
+        '.css': 'empty',
+        '.scss': 'empty',
+        '.sass': 'empty',
+        '.less': 'empty',
+      },
+      outfile: join(serverOutDir, outName),
+      logLevel: 'warning',
+    });
+  }
+}
 
 /**
  * Expected `RouteManifest` schema version — must match
@@ -478,3 +584,49 @@ function stopProcessGracefully(proc: ChildProcess, gracefulTimeoutMs = 5000): Pr
 }
 
 export default pledgepackAdapter;
+
+/**
+ * `config.alias` as plain-prefix, root-anchored absolute paths: tsconfig-style
+ * `@/lib/*` -> `lib/*` becomes `@/lib` -> `<root>/lib`.
+ */
+export function buildPledgepackAliasMap(config: PledgeConfig): Record<string, string> {
+  const alias: Record<string, string> = {};
+  for (const [name, target] of Object.entries(config.alias ?? {})) {
+    alias[name.replace(/\/\*$/, '')] = join(config.rootDir, target.replace(/\/\*$/, ''));
+  }
+  return alias;
+}
+
+/**
+ * The pledgepack binary reads its own config (`pledge.json`), not
+ * pledge.config.ts, so `config.alias` would otherwise be ignored by the client
+ * build/dev server. When aliases are configured, write a merged config
+ * (existing `pledge.json` + `resolve.alias`) into the out dir and return the
+ * `--root/--config` flags that point the binary at it. Returns `[]` when there
+ * are no aliases, leaving the binary's own config discovery untouched.
+ */
+export async function pledgepackAliasArgs(config: PledgeConfig): Promise<string[]> {
+  const alias = buildPledgepackAliasMap(config);
+  if (Object.keys(alias).length === 0) return [];
+
+  let base: Record<string, unknown> = {};
+  const userConfigPath = join(config.rootDir, 'pledge.json');
+  if (existsSync(userConfigPath)) {
+    try {
+      base = JSON.parse(readFileSync(userConfigPath, 'utf-8')) as Record<string, unknown>;
+    } catch {
+      base = {};
+    }
+  }
+  const resolve = (base.resolve && typeof base.resolve === 'object' ? base.resolve : {}) as Record<string, unknown>;
+  const merged = {
+    ...base,
+    resolve: { ...resolve, alias: { ...((resolve.alias as Record<string, string>) ?? {}), ...alias } },
+  };
+
+  const outDir = join(config.rootDir, config.outDir);
+  await mkdir(outDir, { recursive: true });
+  const configPath = join(outDir, 'pledgepack.alias.config.json');
+  await writeFile(configPath, JSON.stringify(merged, null, 2), 'utf-8');
+  return ['--root', config.rootDir, '--config', configPath];
+}

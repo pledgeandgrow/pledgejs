@@ -26,3 +26,10 @@ describe('DNS Rebinding Protection (#15)', () => {
     expect(validateHost('evil.com:3000', { blockDisallowed: false })).toBe(true);
   });
 });
+
+describe('IPv6 loopback host', () => {
+  it('allows [::1] with a port', () => {
+    expect(validateHost('[::1]:3000')).toBe(true);
+    expect(validateHost('[::2]:3000')).toBe(false);
+  });
+});

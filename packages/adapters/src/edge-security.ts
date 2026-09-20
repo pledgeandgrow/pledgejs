@@ -19,8 +19,24 @@ export interface EdgeSecretsConfig {
   cloudflare?: Record<string, string>;
   /** Vercel Edge Config store ID */
   vercelEdgeConfig?: string;
-  /** Deno KV namespace */
+  /** Deno KV namespace (key prefix; default 'secrets') */
   denoKvNamespace?: string;
+  /** Pre-built Vercel Edge Config client (else `@vercel/edge-config` is imported lazily) */
+  vercelClient?: VercelEdgeConfigClient;
+  /** Pre-opened Deno KV handle (else `Deno.openKv()`) */
+  denoKv?: DenoKvLike;
+}
+
+/** The subset of the `@vercel/edge-config` client used for secrets. */
+export interface VercelEdgeConfigClient {
+  get(key: string): Promise<unknown>;
+  getAll(): Promise<Record<string, unknown>>;
+}
+
+/** The subset of a Deno.Kv handle used for secrets. */
+export interface DenoKvLike {
+  get(key: readonly unknown[]): Promise<{ value: unknown }>;
+  list(selector: { prefix: readonly unknown[] }): AsyncIterable<{ key: readonly unknown[] }>;
 }
 
 export interface EdgeSecretProvider {
@@ -32,8 +48,8 @@ export interface EdgeSecretProvider {
  * Creates a platform-specific secret provider for edge runtime.
  *
  * Cloudflare: uses env bindings (e.g. `env.MY_SECRET`)
- * Vercel: uses `@vercel/edge-config`
- * Deno: uses `Deno.KV`
+ * Vercel: uses `@vercel/edge-config` (lazily imported; install it)
+ * Deno: uses `Deno.openKv()` under the `denoKvNamespace` key prefix
  */
 export function createEdgeSecretProvider(config: EdgeSecretsConfig): EdgeSecretProvider {
   switch (config.target) {
@@ -47,30 +63,76 @@ export function createEdgeSecretProvider(config: EdgeSecretsConfig): EdgeSecretP
         },
       };
 
-    case 'vercel':
+    case 'vercel': {
+      // Vercel Edge Config. `vercelEdgeConfig` may be a connection string
+      // ("https://edge-config.vercel.com/ecfg_…?token=…"); otherwise the
+      // default client reads the EDGE_CONFIG env var. A pre-built client can be
+      // injected via `vercelClient`.
+      let clientPromise: Promise<VercelEdgeConfigClient> | undefined;
+      const getClient = (): Promise<VercelEdgeConfigClient> => {
+        clientPromise ??= (async () => {
+          if (config.vercelClient) return config.vercelClient;
+          const specifier = '@vercel/edge-config';
+          let mod: { createClient?: (conn: string) => VercelEdgeConfigClient } & VercelEdgeConfigClient;
+          try {
+            mod = await import(/* @vite-ignore */ specifier);
+          } catch {
+            throw new Error(
+              'Vercel edge secrets require the "@vercel/edge-config" package — install it (or pass `vercelClient`).',
+            );
+          }
+          return config.vercelEdgeConfig?.startsWith('https://') && mod.createClient
+            ? mod.createClient(config.vercelEdgeConfig)
+            : mod;
+        })();
+        return clientPromise;
+      };
       return {
         async get(key: string) {
-          // Dynamic import for Vercel Edge Config
-          // In production: `import { get } from '@vercel/edge-config'`
-          // This is a framework-level interface; the actual import
-          // is resolved by the adapter at deploy time.
-          throw new Error(`Vercel Edge Config: implement get('${key}') in adapter`);
+          const value = await (await getClient()).get(key);
+          if (value === undefined || value === null) return undefined;
+          return typeof value === 'string' ? value : JSON.stringify(value);
         },
         async keys() {
-          throw new Error('Vercel Edge Config: implement keys() in adapter');
+          return Object.keys(await (await getClient()).getAll());
         },
       };
+    }
 
-    case 'deno':
+    case 'deno': {
+      // Deno KV: secrets live under the key prefix [denoKvNamespace, <name>].
+      // A KV handle can be injected via `denoKv`; otherwise Deno.openKv().
+      const namespace = config.denoKvNamespace ?? 'secrets';
+      let kvPromise: Promise<DenoKvLike> | undefined;
+      const getKv = (): Promise<DenoKvLike> => {
+        kvPromise ??= (async () => {
+          if (config.denoKv) return config.denoKv;
+          const deno = (globalThis as { Deno?: { openKv?: () => Promise<DenoKvLike> } }).Deno;
+          if (!deno?.openKv) {
+            throw new Error('Deno KV secrets require the Deno runtime with KV enabled (Deno.openKv) — or pass `denoKv`.');
+          }
+          return deno.openKv();
+        })();
+        return kvPromise;
+      };
       return {
         async get(key: string) {
-          // Deno KV: `const kv = await Deno.openKv(); await kv.get([key])`
-          throw new Error(`Deno KV: implement get('${key}') in adapter`);
+          const entry = await (await getKv()).get([namespace, key]);
+          const value = entry.value;
+          if (value === undefined || value === null) return undefined;
+          return typeof value === 'string' ? value : JSON.stringify(value);
         },
         async keys() {
-          throw new Error('Deno KV: implement keys() in adapter');
+          const kv = await getKv();
+          const out: string[] = [];
+          for await (const entry of kv.list({ prefix: [namespace] })) {
+            const name = entry.key[1];
+            if (typeof name === 'string') out.push(name);
+          }
+          return out;
         },
       };
+    }
 
     default:
       return {
@@ -237,7 +299,12 @@ function webCryptoAlgParams(alg: EdgeJwtAlgorithm):
 interface CachedJwks {
   keys: Record<string, JsonWebKey>;
   expiresAt: number;
+  /** When a kid-miss forced refresh last happened (0 = never). */
+  lastForcedRefreshAt: number;
 }
+
+/** Minimum gap between kid-miss forced JWKS refreshes (stops unknown-kid floods hammering the IdP). */
+const FORCED_REFRESH_COOLDOWN_MS = 10_000;
 
 // Cache keyed by JWKS URI. A single global cache would serve one issuer's keys
 // for another issuer's tokens whenever a `kid` collides — so each distinct
@@ -250,10 +317,10 @@ const jwksCacheByUri = new Map<string, CachedJwks>();
 /** Cap on distinct JWKS URIs cached, to bound memory. */
 const MAX_JWKS_URIS = 64;
 
-export async function getJwks(config: EdgeJwtConfig): Promise<Record<string, JsonWebKey>> {
+export async function getJwks(config: EdgeJwtConfig, forceRefresh = false): Promise<Record<string, JsonWebKey>> {
   const ttl = (config.cacheTtl ?? 3600) * 1000;
   const cached = jwksCacheByUri.get(config.jwksUri);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && cached.expiresAt > Date.now() && !forceRefresh) {
     return cached.keys;
   }
 
@@ -274,7 +341,11 @@ export async function getJwks(config: EdgeJwtConfig): Promise<Record<string, Jso
     const oldest = jwksCacheByUri.keys().next().value;
     if (oldest !== undefined) jwksCacheByUri.delete(oldest);
   }
-  jwksCacheByUri.set(config.jwksUri, { keys, expiresAt: Date.now() + ttl });
+  jwksCacheByUri.set(config.jwksUri, {
+    keys,
+    expiresAt: Date.now() + ttl,
+    lastForcedRefreshAt: forceRefresh ? Date.now() : (cached?.lastForcedRefreshAt ?? 0),
+  });
   return keys;
 }
 
@@ -324,8 +395,17 @@ export async function verifyEdgeJwt(
       return { valid: false, error: 'Token not yet valid' };
     }
 
-    const keys = await getJwks(config);
-    const key = keys[header.kid];
+    let keys = await getJwks(config);
+    let key = keys[header.kid];
+    if (!key) {
+      // The IdP may have rotated in a new signing key since we cached the set —
+      // refetch once (rate-limited) before rejecting.
+      const last = jwksCacheByUri.get(config.jwksUri)?.lastForcedRefreshAt ?? 0;
+      if (Date.now() - last >= FORCED_REFRESH_COOLDOWN_MS) {
+        keys = await getJwks(config, true);
+        key = keys[header.kid];
+      }
+    }
     if (!key) return { valid: false, error: 'Key not found in JWKS' };
 
     const cryptoKey = await crypto.subtle.importKey(
@@ -616,7 +696,22 @@ export function withEdgeTimeout(
 ): (req: Request) => Promise<Response> {
   return async (req: Request): Promise<Response> => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
+    // `timedOut` is set BEFORE aborting: a handler that reacts to the abort
+    // synchronously (fetch(req.signal) rejecting with AbortError) can
+    // otherwise win the race against our own timeout rejection and surface as
+    // a 500 instead of a 504.
+    let timedOut = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        timedOut = true;
+        reject(new Error('EDGE_TIMEOUT'));
+        controller.abort();
+      }, config.timeoutMs);
+    });
+    // The handler may still be running (and later reject) after we return
+    // 504 — never leave that rejection unhandled.
+    timeout.catch(() => undefined);
 
     // Hand the handler a request whose signal aborts on timeout, so the handler
     // (and any fetch() it makes with req.signal) is actually cancelled rather
@@ -628,25 +723,22 @@ export function withEdgeTimeout(
       abortableReq = req;
     }
 
+    const gatewayTimeout = () => new Response(
+      JSON.stringify({ error: config.message ?? 'Gateway Timeout' }),
+      { status: 504, headers: { 'Content-Type': 'application/json' } },
+    );
+
     try {
-      const response = await Promise.race([
-        handler(abortableReq),
-        new Promise<Response>((_, reject) => {
-          controller.signal.addEventListener('abort', () => {
-            reject(new Error('EDGE_TIMEOUT'));
-          });
-        }),
-      ]);
+      const handled = Promise.resolve().then(() => handler(abortableReq));
+      handled.catch(() => undefined);
+      const response = await Promise.race([handled, timeout]);
       clearTimeout(timeoutId);
       return response;
     } catch (err) {
       clearTimeout(timeoutId);
-      if (err instanceof Error && err.message === 'EDGE_TIMEOUT') {
-        return new Response(
-          JSON.stringify({ error: config.message ?? 'Gateway Timeout' }),
-          { status: 504, headers: { 'Content-Type': 'application/json' } },
-        );
-      }
+      // Any failure once the deadline has passed is a timeout, whatever shape
+      // the handler's abort error took.
+      if (timedOut) return gatewayTimeout();
       throw err;
     }
   };

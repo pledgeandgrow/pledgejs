@@ -1,7 +1,27 @@
 {
   "name": "pledgestack-server",
-  "version": "0.0.2",
+  "version": "1.0.0-rc.0",
   "description": "Node.js and Edge server runtime for PledgeStack",
+  "keywords": [
+    "pledgestack",
+    "react",
+    "framework",
+    "server",
+    "node",
+    "edge",
+    "ssr"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/server#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/server"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,47 +37,50 @@
     "./edge": {
       "types": "./dist/edge.d.ts",
       "import": "./dist/edge.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
     "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
-    "pledgepack": "^0.3.2",
     "esbuild": "^0.24.0",
-    "pledgestack-shared": "workspace:*",
-    "pledgestack-core": "workspace:*",
-    "pledgestack-sitemap": "workspace:*",
+    "pledgepack": "^0.3.3",
     "pledgestack-auth": "workspace:*",
-    "pledgestack-rss": "workspace:*"
+    "pledgestack-core": "workspace:*",
+    "pledgestack-rss": "workspace:*",
+    "pledgestack-shared": "workspace:*",
+    "pledgestack-sitemap": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
     "rimraf": "^6.0.0",
-    "@types/node": "^22.0.0"
+    "sharp": "^0.35.4",
+    "typescript": "^5.7.0",
+    "ws": "8.21.3"
   },
-  "license": "MIT",
-  "author": "PledgeStack Contributors",
-  "homepage": "https://github.com/pledgeandgrow/pledgejs#readme",
-  "bugs": {
-    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  "peerDependencies": {
+    "ws": ">=8.0.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/pledgeandgrow/pledgejs.git",
-    "directory": "packages/server"
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    }
   },
-  "keywords": [
-    "pledgestack",
-    "react",
-    "framework",
-    "server",
-    "node",
-    "edge",
-    "ssr"
-  ],
-  "private": true
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

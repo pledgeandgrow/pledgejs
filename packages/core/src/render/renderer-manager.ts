@@ -20,10 +20,14 @@ let initialized = false;
  */
 export async function initRenderer(config: PledgeConfig): Promise<RendererAdapter> {
   const framework: Framework = config.framework ?? 'react';
+  // 'pledge' is the full-stack React + Rust backend mode — the UI layer is
+  // React, so it resolves the React adapter (there is no separate
+  // 'pledgestack-renderer-pledge' package).
+  const adapterFramework: Framework = framework === 'pledge' ? 'react' : framework;
   const registry = getRendererRegistry();
 
   // If the adapter is already registered, use it
-  let adapter = registry.get(framework);
+  let adapter = registry.get(adapterFramework);
 
   if (!adapter) {
     // Try to dynamically import the adapter package. The specifier is built
@@ -33,10 +37,10 @@ export async function initRenderer(config: PledgeConfig): Promise<RendererAdapte
     // dependency on renderer-* packages, since they depend on core, not the
     // other way around (a literal specifier here creates a circular project
     // reference and breaks `tsc -b` for every renderer package).
-    const rendererModuleName: string = `pledgestack-renderer-${framework}`;
+    const rendererModuleName: string = `pledgestack-renderer-${adapterFramework}`;
     try {
       await import(rendererModuleName);
-      adapter = registry.get(framework);
+      adapter = registry.get(adapterFramework);
     } catch {
       // Adapter package not installed
     }
@@ -44,8 +48,8 @@ export async function initRenderer(config: PledgeConfig): Promise<RendererAdapte
 
   if (!adapter) {
     // Fall back to React if the requested framework's adapter isn't available
-    if (framework !== 'react') {
-      console.warn(`[pledgestack] Renderer adapter for "${framework}" not found. Install pledgestack-renderer-${framework} or use framework: 'react'.`);
+    if (adapterFramework !== 'react') {
+      console.warn(`[pledgestack] Renderer adapter for "${adapterFramework}" not found. Install pledgestack-renderer-${adapterFramework} or use framework: 'react'.`);
       try {
         const reactModuleName: string = 'pledgestack-renderer-react';
         await import(reactModuleName);
@@ -56,11 +60,11 @@ export async function initRenderer(config: PledgeConfig): Promise<RendererAdapte
     }
 
     if (!adapter) {
-      throw new Error(`No renderer adapter available for framework "${framework}". Install pledgestack-renderer-${framework}.`);
+      throw new Error(`No renderer adapter available for framework "${framework}". Install pledgestack-renderer-${adapterFramework}.`);
     }
   }
 
-  registry.setDefault(framework);
+  registry.setDefault(adapter.framework);
   initialized = true;
   return adapter;
 }

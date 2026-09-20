@@ -1,7 +1,26 @@
 {
   "name": "pledgestack-api",
-  "version": "0.0.2",
+  "version": "1.0.0-rc.0",
   "description": "API utilities for PledgeStack — versioning, validation, OpenAPI, file uploads, cron, job queue, middleware",
+  "keywords": [
+    "pledgestack",
+    "react",
+    "framework",
+    "api",
+    "validation",
+    "openapi"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/api#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/api"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,40 +32,34 @@
     "./*": {
       "types": "./dist/*.d.ts",
       "import": "./dist/*.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.map",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node ../../scripts/bundle-package.mjs",
     "dev": "tsc --watch",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit"
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "pledgestack-shared": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
     "rimraf": "^6.0.0",
+    "typescript": "^5.7.0",
     "@types/node": "^22.0.0"
   },
-  "license": "MIT",
-  "author": "PledgeStack Contributors",
-  "homepage": "https://github.com/pledgeandgrow/pledgejs#readme",
-  "bugs": {
-    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  "engines": {
+    "node": ">=20.0.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/pledgeandgrow/pledgejs.git",
-    "directory": "packages/api"
-  },
-  "keywords": [
-    "pledgestack",
-    "react",
-    "framework",
-    "api",
-    "validation",
-    "openapi"
-  ],
-  "private": true
+  "publishConfig": {
+    "access": "public"
+  }
 }

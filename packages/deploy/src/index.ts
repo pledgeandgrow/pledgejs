@@ -53,6 +53,25 @@ export interface DeployAdapter {
   generateConfig(config: PledgeConfig): string;
 }
 
+/**
+ * Project/site/branch names are interpolated into a shell command line
+ * (`npx wrangler ... --branch="..."`). Branch names in particular come from
+ * CI (attacker-controlled on pull requests), so only a conservative allowlist
+ * of characters is accepted.
+ */
+const SAFE_ARG = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
+
+function validateDeployArgs(config: PledgeConfig, options: DeployOptions): string | null {
+  const project = options.project ?? config.rootDir.split(/[\\/]/).pop() ?? 'pledgestack-app';
+  if (!SAFE_ARG.test(project)) {
+    return `Invalid project name "${project}": use letters, digits, ".", "_", "-" (pass --project to override)`;
+  }
+  if (options.branch !== undefined && !SAFE_ARG.test(options.branch)) {
+    return `Invalid branch name "${options.branch}": use letters, digits, ".", "_", "-", "/"`;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Cloudflare Pages Adapter
 // ---------------------------------------------------------------------------
@@ -85,6 +104,8 @@ NODE_VERSION = "20"
 
   async deploy(config, options) {
     const start = Date.now();
+    const argError = validateDeployArgs(config, options);
+    if (argError) return { success: false, target: 'cloudflare', message: argError, durationMs: Date.now() - start };
     const outDir = join(config.rootDir, config.outDir ?? '.pledge', 'public');
     const projectName = options.project ?? config.rootDir.split(/[\\/]/).pop() ?? 'pledgestack-app';
 
@@ -172,6 +193,8 @@ export const vercelAdapter: DeployAdapter = {
 
   async deploy(config, options) {
     const start = Date.now();
+    const argError = validateDeployArgs(config, options);
+    if (argError) return { success: false, target: 'vercel', message: argError, durationMs: Date.now() - start };
 
     if (options.dryRun) {
       return {
@@ -248,6 +271,8 @@ status = 200
 
   async deploy(config, options) {
     const start = Date.now();
+    const argError = validateDeployArgs(config, options);
+    if (argError) return { success: false, target: 'netlify', message: argError, durationMs: Date.now() - start };
 
     if (options.dryRun) {
       return {

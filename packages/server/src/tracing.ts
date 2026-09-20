@@ -50,7 +50,58 @@ export interface Span {
 
 let currentConfig: TracingConfig = { enabled: false };
 let spans: Span[] = [];
-let currentSpan: Span | null = null;
+
+/**
+ * Per-async-context active span. A module-level variable would be shared by
+ * every in-flight request, so concurrent requests would parent/annotate each
+ * other's spans. AsyncLocalStorage isolates them. On runtimes without
+ * node:async_hooks (some edge runtimes) we fall back to a single shared slot,
+ * which is only correct for sequential use.
+ */
+interface SpanStore {
+  getStore(): Span | null | undefined;
+  enterWith(span: Span | null): void;
+  run<T>(span: Span | null, fn: () => T): T;
+}
+
+function createSpanStore(): SpanStore {
+  try {
+    const getBuiltin = (globalThis as { process?: { getBuiltinModule?: (id: string) => unknown } }).process?.getBuiltinModule;
+    const mod = getBuiltin?.('node:async_hooks') as
+      | { AsyncLocalStorage?: new () => SpanStore }
+      | undefined;
+    if (mod?.AsyncLocalStorage) return new mod.AsyncLocalStorage();
+  } catch {
+    // fall through to the shared-slot fallback
+  }
+  let slot: Span | null = null;
+  return {
+    getStore: () => slot,
+    enterWith: (span) => { slot = span; },
+    run: (span, fn) => {
+      const prev = slot;
+      slot = span;
+      try { return fn(); } finally { slot = prev; }
+    },
+  };
+}
+
+const spanStore = createSpanStore();
+
+function activeSpan(): Span | null {
+  return spanStore.getStore() ?? null;
+}
+
+/**
+ * Run `fn` with its own span context, so spans started inside (and any async
+ * work they spawn) never leak into the caller's context.
+ */
+export function runInSpanContext<T>(fn: () => T): T {
+  return spanStore.run(activeSpan(), fn);
+}
+
+/** Upper bound on buffered spans, so an unflushed buffer (exporter 'none', or nobody calling flushTraces) cannot grow without limit. */
+const MAX_BUFFERED_SPANS = 10_000;
 
 /**
  * Initialize tracing with the given configuration.
@@ -89,7 +140,11 @@ export function startSpan(
   attributes?: SpanAttributes,
   parentSpan?: Span | null,
 ): { span: Span; end: (error?: Error) => void } {
-  if (!isTracingEnabled()) {
+  // sampleRate applies to root spans; children follow their parent's decision
+  // (a child only exists if its parent was recorded).
+  const rate = currentConfig.sampleRate ?? 1;
+  const sampled = parentSpan ? parentSpan.spanId !== '' : rate >= 1 || Math.random() < rate;
+  if (!isTracingEnabled() || !sampled) {
     const noopSpan: Span = {
       name,
       startTime: 0,
@@ -119,8 +174,8 @@ export function startSpan(
     parentSpanId: parentSpan?.spanId,
   };
 
-  const previousSpan = currentSpan;
-  currentSpan = span;
+  const previousSpan = activeSpan();
+  spanStore.enterWith(span);
 
   return {
     span,
@@ -136,7 +191,8 @@ export function startSpan(
         span.status = 'ok';
       }
       spans.push(span);
-      currentSpan = previousSpan;
+      if (spans.length > MAX_BUFFERED_SPANS) spans.splice(0, spans.length - MAX_BUFFERED_SPANS);
+      spanStore.enterWith(previousSpan);
     },
   };
 }
@@ -145,13 +201,14 @@ export function startSpan(
  * Get the current active span.
  */
 export function getCurrentSpan(): Span | null {
-  return currentSpan;
+  return activeSpan();
 }
 
 /**
  * Add an attribute to the current span.
  */
 export function setSpanAttribute(key: string, value: string | number | boolean): void {
+  const currentSpan = activeSpan();
   if (currentSpan) {
     currentSpan.attributes[key] = value;
   }
@@ -161,6 +218,7 @@ export function setSpanAttribute(key: string, value: string | number | boolean):
  * Record an error on the current span.
  */
 export function recordError(error: Error): void {
+  const currentSpan = activeSpan();
   if (currentSpan) {
     currentSpan.status = 'error';
     currentSpan.errorMessage = error.message;
@@ -210,13 +268,21 @@ export async function flushTraces(): Promise<void> {
     }
   } else if (exporter === 'otlp' && currentConfig.endpoint) {
     try {
-      await fetch(currentConfig.endpoint, {
+      const response = await fetch(currentConfig.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        // A hung collector must not pin the request that triggered the flush.
+        signal: AbortSignal.timeout(5000),
         body: JSON.stringify({
           resourceSpans: [{
             resource: {
-              attributes: Object.entries(currentConfig.attributes ?? {}).map(([k, v]) => ({ key: k, value: { stringValue: v } })),
+              // service.name must be a *resource* attribute — backends group
+              // and label services by it (span attributes alone show up as
+              // "unknown_service").
+              attributes: Object.entries({
+                'service.name': currentConfig.serviceName ?? 'pledgestack-app',
+                ...currentConfig.attributes,
+              }).map(([k, v]) => ({ key: k, value: { stringValue: v } })),
             },
             scopeSpans: [{
               spans: toExport.map((s) => ({
@@ -239,6 +305,9 @@ export async function flushTraces(): Promise<void> {
           }],
         }),
       });
+      if (!response.ok) {
+        console.error(`[pledgestack] Trace export rejected by ${currentConfig.endpoint}: HTTP ${response.status}`);
+      }
     } catch (err) {
       console.error('[pledgestack] Failed to export traces:', err);
     }

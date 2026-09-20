@@ -7,15 +7,26 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Programming Languages", "Other"],
-  "activationEvents": ["onLanguage:typescript", "onLanguage:typescriptreact"],
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "languages": [
       {
         "id": "pledgestack",
-        "aliases": ["PledgeStack"],
-        "extensions": [".pledge.ts", ".pledge.tsx"],
+        "aliases": [
+          "PledgeStack"
+        ],
+        "extensions": [
+          ".pledge.ts",
+          ".pledge.tsx"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -29,27 +40,37 @@
     "icons": {
       "pledge-page": {
         "description": "PledgeStack page file",
-        "default": { "fontPath": "./icons/pledge.woff", "fontCharacter": "\\E001"
+        "default": {
+          "fontPath": "./icons/pledge.woff",
+          "fontCharacter": "\\E001"
         }
       },
       "pledge-layout": {
         "description": "PledgeStack layout file",
-        "default": { "fontPath": "./icons/pledge.woff", "fontCharacter": "\\E002"
+        "default": {
+          "fontPath": "./icons/pledge.woff",
+          "fontCharacter": "\\E002"
         }
       },
       "pledge-route": {
         "description": "PledgeStack route file",
-        "default": { "fontPath": "./icons/pledge.woff", "fontCharacter": "\\E003"
+        "default": {
+          "fontPath": "./icons/pledge.woff",
+          "fontCharacter": "\\E003"
         }
       },
       "pledge-loading": {
         "description": "PledgeStack loading file",
-        "default": { "fontPath": "./icons/pledge.woff", "fontCharacter": "\\E004"
+        "default": {
+          "fontPath": "./icons/pledge.woff",
+          "fontCharacter": "\\E004"
         }
       },
       "pledge-error": {
         "description": "PledgeStack error file",
-        "default": { "fontPath": "./icons/pledge.woff", "fontCharacter": "\\E005"
+        "default": {
+          "fontPath": "./icons/pledge.woff",
+          "fontCharacter": "\\E005"
         }
       }
     },
@@ -109,5 +130,7 @@
     "@types/vscode": "^1.85.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
-  }
+  },
+  "private": true,
+  "license": "MIT"
 }

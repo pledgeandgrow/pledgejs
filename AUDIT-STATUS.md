@@ -1,122 +1,125 @@
-# PledgeStack — Working vs Not-Working Status (re-audit after commit 1678b3f)
+# PledgeStack — Audit Status (1.0.0-rc.0)
 
-Full-codebase re-audit on 2026-08-25, after the three-tier fix commit. Six parallel
-subsystem audits, verified in source. `pnpm test` = 1023 passing, 2 failing (new MDX/server-fn tests), 5 skipped / 112 files (as of 2026-09-14). All 50 production-readiness goals from `docs/roadmap.md` are now IMPLEMENTED and VERIFIED.
+Single source of truth for what is **fixed** and what is **open**. Every item is
+in exactly one of the two sections below; the historical audit lists that used
+to contradict each other ("still open" items that were already fixed) have been
+folded in. Last verified: **2026-09-20**.
 
-> **Status update (2026-09-14):** Re-verified by running `pnpm typecheck` (0 errors)
-> and `pnpm test` (1023 passing, 2 failing in new tests, 5 skipped). The previously-listed "Security still open" items
-> (9–17) and "Broken features" items (18–29) were fixed in commit `3a4dd5a` —
-> confirmed in source (PKCE AES-256-GCM, SAML digest-bound, edge-JWT response.ok
-> check, Sentry envelope format, bundler path-traversal rejection, image handler,
-> ISR SWR cache, state setValue, JSON-LD escaping, a11y heading-order, api template
-> shared store, sitemap buildEnd). The remaining open items are the stub layer
-> (PSX integrations with no Rust crates, playground/bench simulations) and
-> workspace version drift. See [SESSION-LOG.md](./SESSION-LOG.md) for the
-> 2026-09-14 session details.
+## Verified numbers (fresh runs on 2026-09-20)
 
-Legend: 🔴 blocks a working app · 🟠 security still open · 🟡 broken/incomplete feature · ⚪ stub/unwired · 📄 doc drift
+| Check | Result |
+|---|---|
+| `pnpm typecheck` | 0 errors across all projects |
+| `pnpm lint` | 0 errors (75 pre-existing warnings) |
+| `pnpm build:packages` | passes (34 public packages + CLI) |
+| `pnpm test` | **206 files, 1697 tests: 1691 passing, 6 skipped, 0 failing** |
+| `pnpm test:coverage` | 29.2% statements / 27.7% branches / 30.9% functions / 29.9% lines; thresholds in `vitest.config.ts` (28 / 26 / 29 / 29) enforced |
+| `pnpm check:release` | passes — 34 public packages at `1.0.0-rc.0`, metadata, READMEs, changelogs, dist entry points |
+| `pnpm audit` | no known vulnerabilities (vitest upgraded to 4.1.11) |
 
----
+The 5 skipped tests are the Netlify real-CLI deploy tests, gated on
+`NETLIFY_AUTH_TOKEN`.
 
-## ✅ Verified working (the ~90 fixes all landed correctly)
-
-Every fix from Tiers 1–3 is present and correct in source. Confirmed:
-
-- **Auth crypto** — scrypt password hashing, PKCE SHA-256, JWT ES256 P1363 + real JWKS export, TOTP base32, WebAuthn CBOR/COSE + real assertion signature verification, SAML fail-closed with digest binding + NotOnOrAfter.
-- **Server pipeline** — server-action CSRF, fail-closed `passesCsrf`, `clientIdentifier` (no more X-Request-Id), bot-detection gate fixed, CORS 403 preflight + wildcard-credentials reflection, `runRouteMatch` wired in, edge handler passes body, health tri-state, metrics `_sum`/`_count` placement.
-- **Edge adapters** — geo fail-closed, per-issuer JWKS cache, JWT alg allow-list, bounded rate buckets, Cloudflare security-before-assets + real CSP, Lambda stage-strip + base64, Netlify real host.
-- **Render/router** — layout routes no longer match as pages, weighted specificity, PPR threads searchParams + reuses shell envelope, static-export filename substitution, flight moduleMap round-trip, rust-rsc Fragment, progressive `renderRSCStream`, buffered `renderSSRStream` real head tags, JIT cache gated to static routes, OG URL from real pathname.
-- **Client/renderers** — Pledge hydration reconnected (`resolvePledgeComponent`), Vue nests all layouts, Solid/Svelte emit `__PLEDGE_ROUTE__` with real params.
-- **Feature packages** — RSS guid/Atom, font axis-tuple URL, api `binary()`/`defineApiRoute`/graphql tokenizer/cron/upload/nosql, privacy consent HMAC + CSV escape, ws `getWSUserId`, seo XSS, sitemap `buildEnd`, state identity-guard, a11y heading-order.
-- **PSX/docs** — rate-limiter bounded + honest, KV atomic flush, README counts/PSX count/CI claim/TypeDoc/version drift/dead link all corrected.
+Legend: 🔴 blocks a working app · 🟠 security · 🟡 feature · ⚪ stub/unwired · 📄 docs
 
 ---
 
-## 🔴 Critical — ✅ FIXED (2026-08-25)
+## ✅ Fixed (verified in source and covered by tests)
 
-All eight critical end-to-end blockers are now fixed, typechecked, and the suite is green (901 tests):
+### End-to-end blockers (2026-08-25)
+- 🔴 Server actions (deterministic ids), binary responses, React hydration
+  (real page + layout tree), pledge islands, multiple `Set-Cookie`, request
+  bodies, static-export filenames, the `api` starter template.
 
-1. ✅ **Server actions** — `server/src/actions.ts` now derives a **deterministic** id (portable FNV-1a hash of name + function source via `stableActionId`), so the server and client bundles produce the same id and the POST matches the registry.
-2. ✅ **Binary responses** — `server/src/node.ts` decodes base64 bodies to a Buffer and sends them (the branch is now reachable); OG images and `binary()` responses work.
-3. ✅ **React hydration** — the client script now rebuilds the real page+layout tree via `resolveRouteElement(routes, window.__PLEDGE_ROUTE__)` and hydrates it (the SSR now emits `__PLEDGE_ROUTE__`; the generated `/__pledge_router` re-exports the runtime).
-4. ✅ **Pledge hydration** — the React client script now calls `initPledgeHydration()` after hydration.
-5. ✅ **Multiple Set-Cookie** — added `PledgeResponse.cookies`; the handler extracts Set-Cookie via `getSetCookie()`, and node/edge/Lambda(v2 `cookies`)/Netlify(`multiValueHeaders`) emit them separately.
-6. ✅ **Request body** — `node.ts` reads the body for any non-GET/HEAD method as a Buffer (binary-safe); the handler decodes it for JSON actions.
-7. ✅ **Static export filenames** — `generateStaticExport` now writes the HTML itself at the param-substituted path; the build callback only renders. Dynamic routes no longer collide.
-8. ✅ **api starter template** — `route.ts` and `[id]/route.ts` now import a shared `store.ts`, so CRUD works out of the box.
+### Security
+- 🟠 Auth: scrypt hashing, PKCE (AES-GCM-protected verifier), SAML fail-closed
+  with digest binding and issuer check, JWT ES256/JWKS and `typ` enforcement,
+  TOTP replay guard, account lockout, session regeneration, open-redirect
+  validation, CSRF fail-closed.
+- 🟠 **WebAuthn** enforces the UV flag when `userVerification: 'required'` and
+  stores the real user id (`options.userId`) — `webauthn.test.ts`.
+- 🟠 Edge adapters: geo fail-closed, JWKS caching/`response.ok`/`aud`/`nbf`,
+  bounded rate buckets, timeouts that cancel.
+- 🟠 **API rate limiter** buckets pruned and hard-capped —
+  `packages/api/src/rc-hardening.test.ts`.
+- 🟠 **NoSQL sanitizers** drop `__proto__` / `constructor` / `prototype` —
+  same test file.
+- 🟠 Sentry envelope format, bundler dev-server path traversal (all esbuild
+  fallback servers; covered by the new bundler adapter tests), JSON-LD escaping,
+  RSS element-name validation.
+- 🟠 **Prometheus** label values quoted/escaped, names sanitized —
+  `packages/server/src/metrics.test.ts`.
 
-Bonus fixes in the same pass: the `405 Allow` header now lists only HTTP methods; `useRouter().params` seeds from the SSR route data.
+### Features
+- 🟡 Image handler (real `sharp` resize), ISR stale-while-revalidate, PPR shell
+  lookup, client router re-hydration and params, state package fixes, a11y
+  heading-order, sitemap `buildEnd`, font axis URLs, privacy consent HMAC and
+  encryption salt.
+- 🟡 **Open Graph images**: `ImageResponse` renders to a real PNG (flexbox subset
+  -> SVG -> native addon or `sharp`), otherwise a clear `501` —
+  `packages/server/src/og-response.test.ts`.
+- 🟡 **`pledge init --skip-install`** works and init installs otherwise —
+  `packages/cli/src/commands/init.test.ts`.
+- 🟡 **`pledge upgrade`** has no dead codemod stage; prerelease-aware version
+  compare — `upgrade.test.ts`.
+- 🟡 **Vue renderer** hydrates with real route params —
+  `packages/renderer-vue/src/index.test.ts`.
+- 🟡 eslint-plugin Windows paths / exact `page|layout` names, a11y
+  `extractTranslations` duplicates, image `sizes`/`srcset`/CSS-url, overlay
+  `0ms` and devtools script injection.
+- 🟡 VS Code PSX debug adapter (real CDP/WebSocket), `pledge playground`
+  (real `cargo --target wasm32` when available), `pledge bench --psx`
+  (real `rust-bench` crate / real JS fallbacks), `multi-region` latency lookup,
+  SBOM generation in `pledge build`.
 
-## 🟠 Security backlog — ✅ FIXED (2026-08-25)
+### Release engineering (this pass)
+- 34 public packages with full npm metadata, one shared version, per-package
+  README / LICENSE / CHANGELOG; Changesets `fixed` group + prerelease (`rc`) mode;
+  release workflow publishes through Changesets after the full gate; ESM bundles
+  that load in Node; type declarations for the CLI package; vitest 4.1.11.
+- Tests added for every package that had none (renderers, bundlers,
+  create-pledge-app, eslint plugin, a11y, image, og, overlay) and for each fix.
+- Sea-ORM and ML inference wrappers fail at construction with an actionable
+  error unless a `driver` / `executor` is supplied (or work through it).
 
-- ✅ **PKCE** — the `code_verifier` is now AES-256-GCM encrypted inside the state, so observers can't recover it ([oauth.ts](packages/auth/src/oauth.ts)).
-- ✅ **SAML signature-wrapping** — claims are parsed only from the digest-bound assertion (chosen among all assertions by matching digest), and the issuer is checked against the configured IdP ([saml.ts](packages/auth/src/saml.ts)).
-- ✅ **Edge-JWT** — checks `response.ok` before parsing JWKS, bounds the cache, handles array `aud`, and enforces `nbf` ([edge-security.ts](packages/adapters/src/edge-security.ts)).
-- ✅ **Timeouts** — `withEdgeTimeout` now passes an abort signal to the handler so it's actually cancelled.
-- ✅ **Sentry** — correct newline-delimited envelope to the right ingest URL with the key in `X-Sentry-Auth` (no DSN in the body) ([observability.ts](packages/server/src/observability.ts)).
-- ✅ **Bundler dev-server path traversal** — all four esbuild fallback servers reject `/../` escapes.
+### Docs
+- 📄 README/architecture/capabilities counts, roadmap status, changelog,
+  limitations and this file were reconciled on 2026-09-20.
 
-## 🟠 Security still open (remaining, not yet addressed)
+---
 
-9. **PKCE defeated** — `auth/oauth.ts:91-100` embeds the `code_verifier` in the browser-visible signed `state`; anyone observing it recovers the verifier. Callback also never validates the OIDC `id_token`/`nonce`.
-10. **SAML signature-wrapping** — `auth/saml.ts:127-133` extracts claims by regex over the whole document while only the first `<Assertion>` is digest-bound; a forged outer assertion yields attacker-chosen identity. No issuer/Destination/InResponseTo/audience/replay checks.
-11. **Edge JWT gaps** — `adapters/edge-security.ts`: `getJwks` never checks `response.ok` (refetches on every request); `aud` compared with `!==` so array `aud` always fails; `nbf` unchecked; JWKS cache map unbounded.
-12. **`withEdgeTimeout`/`withTimeout` don't cancel** — `adapters/edge-security.ts:591` and `handler.ts:722` return 504 but the handler keeps running; the server one's `finally` can wipe an unrelated request's async-local context.
-13. **Sentry DSN leak + broken format** — `server/src/observability.ts:266-290` POSTs a single JSON object (not the newline-delimited envelope) and leaks the full DSN in the body; every report is rejected.
-14. **Bundler dev-server path traversal** — the esbuild fallback servers in bundler-webpack/turbopack/rsbuild/rollup build the path as `join(cwd, url)` with no containment, so `GET /../../secrets.ts` reads arbitrary files.
-15. **WebAuthn**: user-verification never enforced even when `required` (`webauthn.ts:264`); stored credential `userId` is always empty (`:233`).
-16. **api hardening gaps** — `route.ts` rate-limit buckets never pruned (memory leak) + `x-forwarded-for` trusted unconditionally; nosql sanitizer lets `__proto__`/dotted keys through; upload MIME is client-declared (no magic-byte check).
-17. **Prometheus still invalid** — `server/src/metrics.ts:17` emits unquoted label values (`{k=v}`) and dotted metric names; the scrape still fails despite the `_sum` fix.
+## ⏳ Open (known, documented, not blocking an RC)
 
-## 🟡 Broken features — partially FIXED (2026-08-25)
+Details and workarounds are in [docs/limitations.md](./docs/limitations.md).
 
-- ✅ **Image optimization** — the server now serves both `/_pledge/image?src=` and `/__pledge__/image/`, does real sharp resize/convert when sharp is installed, and never mislabels content-type on passthrough ([virtual-modules.ts](packages/server/src/virtual-modules.ts)).
-- ✅ **ISR** — added a stale-while-revalidate cache wired into the SSR path (pages exporting `revalidate`), with `revalidatePath()` invalidation ([isr-cache.ts](packages/core/src/render/isr-cache.ts), [handler.ts](packages/server/src/handler.ts)).
-- ✅ **State package** — fixed persistence re-hydration, optimistic `serverState` propagation, derived memo, url-state/cross-tab side-effects-in-reducer, and store notify-on-identical ([packages/state/src](packages/state/src)).
-- ⚠️ **OG `ImageResponse`** — still returns serialized JSX (needs a Satori render step); the file-based OG path (`opengraph-image.tsx`) works via `tryServeOgImage`.
-- ⚠️ **Bundler HMR** — the path-traversal hole is closed, but the HMR no-ops (sourcemap hardcoded, `full-reload` misuse) remain (dev-experience only).
-
-## 🟡 Broken / incomplete features (original list, for reference)
-
-18. **Image optimization has no server** — `image/src/types.ts` only emits `/_pledge/image?...` URLs; nothing serves that path, so every `src`/`srcSet` 404s. `generateResponsiveSrcSet` also emits an invalid multi-format srcset; `generateSizesAttr('fixed')` returns `'1px'`.
-19. **OG image rendering has no interceptor** — `og/src/index.ts` returns serialized JSX labeled `image/png`; nothing reads `X-Pledge-OG`, so it never becomes a PNG (docs are honest, feature is absent). Custom font bytes dropped.
-20. **ISR entirely absent** — `revalidate` is only a type field; no revalidation timer / SWR / cache invalidation anywhere in `render/**`.
-21. **PPR isn't streaming and can't find shells** — `render/ppr.ts:259` buffers then emits in `onAllReady`; `handler.ts:538` omits the param suffix that shells are written with, so dynamic-route shells are never found.
-22. **hybrid-ssr / lazy-layouts / rust-ppr / rust-ssr / streaming-metadata** — dead code, but `server.ts` still routes SSR through `renderHybridSSR` when the (uncompiled) Rust addon exists.
-23. **Route-group sibling layouts + root layout** — `router.ts` pushes every `(group)/layout` onto pattern `/` so all render on every route; `fs/resolver.ts:91` drops `app/layout.tsx` when `app/page.tsx` exists (root layout never renders).
-24. **Client router broken** — `client/src/router.ts`: `swapRootContent` never re-hydrates (pledges/islands dead after navigation), `params` always `{}`, `prefetchedPages` unbounded/never-invalidated (stale HTML), content extraction keys off a literal `</div>\n  <script`.
-25. **Non-React 404 pages skip layouts** — Vue/Solid/Svelte `renderNotFound` don't run the layout chain; Vue's client script still hydrates by exact pathname with empty props; Solid/Svelte hydrate only the page (not layout-wrapped SSR) → mismatch.
-26. **selective-hydration / islands render empty SSR** — content dropped until JS runs (blank + layout shift); `concurrent.ts` `useDeferredState` misuses React 19's `initialValue` param; `client-only.ts` throws unconditionally; `fast-refresh.ts` calls a non-existent runtime export.
-27. **Bundler HMR is no-ops** — vite/rollup hardcode `sourcemap:false`; vite/webpack "reload" broadcasts a Vite-only `full-reload` (webpack) or forces full reload on targeted reload (vite); turbopack fallback has no HMR; `collectRouteFiles` compiles every `.ts` under `app/` as an entry (all 6 adapters).
-28. **state package** — persistence re-hydrates every render (clobbers live state); optimistic ignores later `serverState`; derived memo defeated; url-state/cross-tab run side effects inside the reducer + seed from browser storage (SSR mismatch); store notifies on identical values.
-29. **Misc** — i18n redirect drops query string (`handler.ts:414`); middleware rewrite doesn't refresh `pledgeReq.url/query`; ETag only on the non-streaming path; 405 `Allow` lists non-HTTP exports; a11y audit is O(n²) + SVG-unsafe; overlay `devtools.ts` still truthy-checks `renderTime`/`loadTime` (0ms → `-`) and injects a `/__pledge/devtools` script nothing serves; rss `item.custom` keys unescaped; encryption never returns its random salt (unrecoverable after restart).
-
-## ⚪ Stubs — partially hardened (2026-08-25)
-
-- ✅ **PSX unguarded native calls** — `SqlxPool.transaction`, `SqlxTransaction.query`, Redis `subscribe`/`publish`, and `PdfGenerator.fromTemplate` now throw a clear, actionable error via `loadNativeAddon()` instead of a cryptic `MODULE_NOT_FOUND` crash ([integrations.ts](packages/core/src/psx/integrations.ts)).
-- ✅ **Optional deps** — documented in core's package.json as intentionally-undeclared optional runtime packages (declaring them as peers made pnpm auto-install heavy native modules); each is dynamically imported with a clear error when missing.
-- ⚠️ **Still stubs** (advertised, no backing implementation — would need real work): the 15 integrations have no Rust crates; `pledge playground` simulates Rust→WASM; `pledge bench --psx` targets a nonexistent addon. These are honestly labeled in their output/docs.
-
-## ⚪ Stubs & unwired (original list, for reference)
-
-30. **The 15 "PSX Integrations" have zero backing Rust crates** — `native/Cargo.toml` lists 16 members, none of which are sqlx/redis/auth/image/pdf/jobs/cron/email/etc. Every `require('../../native/X.node')` is unreachable; several call it **unguarded** (PdfGenerator.fromTemplate/invoice, SqlxPool.transaction, MlModel.infer, Redis pub/sub) → hard throw instead of JS fallback. Fallbacks need `pg`/`sharp`/`argon2`/`puppeteer`/`nodemailer`/`xlsx`, still undeclared in `core/package.json`. JobQueue.start drains once; parseCronToInterval silently defaults unparsed expressions to every-60s.
-31. **`pledge playground`** — Rust→WASM compile/execute/save are all simulated (fabricated results).
-32. **`pledge bench --psx`** — targets a nonexistent `rust-bench.node` with a wrong `@pledgestack/core` specifier; always "No addon found"; NAPI overhead is a fabricated 10%-of-TS number.
-33. **Orphaned PSX modules** — multi-region, monitoring-dashboard, lambda-psx, serverless-cold-start, edge-durable-objects, worker-pool, rollback, canary, dead-code, cross-compile, sccache, jit-templates: exported, never wired to any command/request path.
-34. **Native jit-templates hash logic wrong** — `native/rust-jit-templates/src/lib.rs:64` compares only the last hash, initializes to 0 (false positive), and f64→u64 casts collide above 2^53.
-35. **`pledge upgrade`** — codemod path is dead (`minVersion > from` never true for shipped versions); only bumps `pledgestack`, not core/renderers; swallows codemod errors.
-36. **`pledge init --skip-install`** — no-op (init never installs); `pledge create` has 3 templates vs the documented 7 (`-t dashboard` silently yields default); vscode-psx debug adapter fakes stepping; `env-check.ts` exported but unreachable.
-
-## 📄 Doc drift — ✅ FIXED (2026-09-14)
-
-37. ✅ **`docs/roadmap-issues.md`** — updated to reflect current verified state; the "13 wrappers" count corrected.
-38. ✅ **`docs/roadmap.md`** — all 50 goals IMPLEMENTED and VERIFIED (1023 tests / 112 files, 2026-09-14).
-39. ⚠️ **Workspace versions** remain unsynced across packages (0.0.1 … 0.2.8); no stated versioning policy.
+| Area | What is open |
+|---|---|
+| ⚪ PSX integrations | 13 of the 15 wrappers (SQLx, Redis, Auth, Image, PDF, Jobs, Cron, Email, HTTP, WebSocket, Files, Observability, Crypto) have no compiled Rust crate: they run JS fallbacks (which need optional packages you install) or throw a clear error for the few calls without one |
+| ⚪ Native addons | The 17 crates in `packages/core/native/` are not compiled or shipped in the npm packages; all paths fall back to JavaScript |
+| ⚪ Orphaned PSX modules | `multi-region`, `monitoring-dashboard`, `lambda-psx`, `serverless-cold-start`, `edge-durable-objects`, `worker-pool`, `rollback`, `canary`, `dead-code`, `cross-compile`, `sccache`, `jit-templates` are exported and unit-tested but not wired to any command or request path (left exported: removing them would be a breaking API change) |
+| ⚪ jit-templates (native) | `native/rust-jit-templates/src/lib.rs` profiling logic only compares the previous render's hash (first render can look like a repeat); the crate is not built by default |
+| 🟡 Bundler HMR | Only real where the bundler's own dev server provides it (Vite, webpack-dev-server, Rsbuild, PledgePack binary). Rollup, Turbopack-without-`@utoo/pack` and the esbuild fallbacks have no live reload; `reload()`/`reloadAll()` are optional and not called by `pledge dev` |
+| 🟡 Bundler entry collection | `collectRouteFiles` compiles every `.ts` under `app/` as an entry in all adapters |
+| 🟡 OG images | Flexbox subset only; custom font bytes are not embedded; approximate text wrapping; requires `sharp` or the native addon |
+| 🟡 Asset fingerprinting | Bundlers can hash filenames, but renderers still emit the literal `/__pledge__/client.js` / `client.css` URLs |
+| 🟡 Scaffolding | Vue, Solid and Svelte only have the `default` template; the React-only content templates fall back to it with a warning (`pledge create` delegates to `create-pledge-app`, so both behave identically) |
+| 🟡 Stable hydration IDs | Still import-order counters (`packages/client/src/pledge.ts`) |
+| 🟡 Build manifests | `__pledge_ps_manifest.json` comes from PledgePack only, not from the other adapters |
+| 🟠 SAML | XML canonicalization (C14N) is not implemented — use a dedicated SAML library for production SSO |
+| 🟠 Sessions | Stateless HMAC cookies: "regeneration" rotates the cookie but cannot revoke a retained old one |
+| 🟠 OAuth | `email_verified` is surfaced, not enforced — the app must check it |
+| 🟠 Supply chain | SBOMs are generated; release provenance/signing is only configured through npm provenance in the release workflow (not yet exercised) |
+| 🟡 ISR keys | Keys use the pathname; cookie-based locale detection collides across locales |
+| 🟡 Platforms | The PledgePack native binary is downloaded by the `pledgepack` package postinstall (GitHub Releases); the pnpm build script must be allowed (`allowBuilds`) |
+| 📄 Lint | 75 pre-existing `pnpm lint` warnings (unused vars, `prefer-const`, `no-unsafe-fetch` suggestions) |
 
 ---
 
 ## Bottom line
 
-The three tiers did exactly what they targeted — every one of those ~90 fixes is verified correct, and the security primitives (auth crypto, CSRF, edge hardening) are genuinely fixed. The 2026-09-14 re-verification confirmed that the previously-listed "still open" security items (PKCE/SAML/edge-JWT) and broken core features (image, OG, ISR, PPR, client router, state) are **also now fixed** in commit `3a4dd5a`. The framework can serve a working app end-to-end: server actions resolve, the Node server handles binary bodies, the React client hydrates the real tree, and multiple cookies emit correctly.
-
-What remains is the **stub layer** (15 Rust integrations with no backing crates, `pledge playground`/`bench --psx` simulations) and **workspace version drift** (0.0.1 … 0.2.8, no versioning policy). The green test suite (1023 tests across 112 files, 2 failing in new MDX/server-fn tests) covers unit behavior of the fixed pieces; the 2026-09-14 session also implemented all 50 production-readiness goals from `docs/roadmap.md` across security, reliability, rendering, performance, and build/CI tiers.
+The framework serves a working app end to end, the security primitives are
+fixed and tested, the whole workspace builds, typechecks, lints and tests
+green, and the 34 public packages are set up to publish as `1.0.0-rc.0` through
+Changesets. What remains is the stub layer (Rust integrations without crates,
+optional native addons), HMR only where bundlers provide it, and the documented
+feature gaps above.

@@ -35,15 +35,12 @@ export function generateRequestId(): string {
  */
 export function resolveRequestId(headers: Record<string, string>): string {
   // Check for incoming request ID (from upstream proxy/gateway)
+  // Client-supplied ids end up in logs and response headers — accept only a
+  // safe token so a crafted value can't inject log lines or header content.
+  const SAFE_ID = /^[a-zA-Z0-9_-]{1,128}$/;
   const incoming = headers[REQUEST_ID_HEADER.toLowerCase()] ?? headers[REQUEST_ID_HEADER];
-  if (incoming && typeof incoming === 'string') {
+  if (incoming && typeof incoming === 'string' && SAFE_ID.test(incoming)) {
     return incoming;
-  }
-
-  // Check X-Request-ID (common proxy header)
-  const xRequestId = headers['x-request-id'];
-  if (xRequestId && typeof xRequestId === 'string') {
-    return xRequestId;
   }
 
   return generateRequestId();

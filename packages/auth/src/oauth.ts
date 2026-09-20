@@ -70,6 +70,11 @@ export interface OAuthState {
   codeVerifier: string;
   nonce: string;
   timestamp: number;
+  /**
+   * SHA-256 (base64url) of the per-browser binding secret held in a cookie.
+   * Ties the state to the browser that started the flow (login-CSRF defense).
+   */
+  bind?: string;
 }
 
 export interface OAuthTokens {
@@ -112,6 +117,16 @@ export function generatePKCE(): PKCEChallenge {
 }
 
 /**
+ * Cookie the app must set (HttpOnly, Secure, SameSite=Lax, short-lived) to
+ * the `browserBinding` value returned by OAuthManager.initiateAuth().
+ */
+export const OAUTH_BINDING_COOKIE = '__Host-pledge_oauth';
+
+function hashBinding(binding: string): string {
+  return createHash('sha256').update(binding).digest('base64url');
+}
+
+/**
  * Create a signed OAuth state parameter.
  * The state encodes the provider, redirect URL, PKCE verifier, and nonce.
  */
@@ -120,6 +135,7 @@ export function createOAuthStateParam(
   redirect: string,
   codeVerifier: string,
   secret: string,
+  browserBinding?: string,
 ): string {
   const nonce = generateToken(16);
   const payload: OAuthState = {
@@ -129,6 +145,7 @@ export function createOAuthStateParam(
     codeVerifier: encryptVerifier(codeVerifier, secret),
     nonce,
     timestamp: Date.now(),
+    ...(browserBinding ? { bind: hashBinding(browserBinding) } : {}),
   };
   const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = createHmac('sha256', secret).update(encoded).digest('base64url');
@@ -318,7 +335,14 @@ export class OAuthManager {
     return this.providers.get(name);
   }
 
-  initiateAuth(providerName: string, redirect: string): { url: string; state: string } {
+  /**
+   * Starts an authorization flow. The returned `browserBinding` MUST be stored
+   * in the initiating browser (cookie `OAUTH_BINDING_COOKIE`, HttpOnly, Secure,
+   * SameSite=Lax) and passed back to handleCallback() — otherwise an attacker
+   * could start a flow themselves and trick a victim into completing it
+   * (login CSRF / session fixation onto the attacker's account).
+   */
+  initiateAuth(providerName: string, redirect: string): { url: string; state: string; browserBinding: string } {
     const provider = this.providers.get(providerName);
     if (!provider) throw new Error(`Unknown provider: ${providerName}`);
 
@@ -329,15 +353,18 @@ export class OAuthManager {
     }
 
     const pkce = generatePKCE();
-    const state = createOAuthStateParam(providerName, redirect, pkce.codeVerifier, this.secret);
+    const browserBinding = generateToken(32);
+    const state = createOAuthStateParam(providerName, redirect, pkce.codeVerifier, this.secret, browserBinding);
     const url = buildAuthorizeUrl(provider, state, pkce);
-    return { url, state };
+    return { url, state, browserBinding };
   }
 
   async handleCallback(
     providerName: string,
     code: string,
     state: string,
+    /** Value of the OAUTH_BINDING_COOKIE cookie sent by the callback request. */
+    browserBinding: string | undefined,
   ): Promise<{ tokens: OAuthTokens; userInfo: OAuthUserInfo; redirect: string }> {
     const provider = this.providers.get(providerName);
     if (!provider) throw new Error(`Unknown provider: ${providerName}`);
@@ -345,6 +372,15 @@ export class OAuthManager {
     const stateData = verifyOAuthStateParam(state, this.secret);
     if (!stateData || stateData.provider !== providerName) {
       throw new Error('Invalid or expired OAuth state');
+    }
+    // Bind to the initiating browser: the state alone is attacker-obtainable.
+    if (!browserBinding || !stateData.bind) {
+      throw new Error('OAuth state is not bound to this browser');
+    }
+    const a = Buffer.from(hashBinding(browserBinding));
+    const b = Buffer.from(stateData.bind);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) {
+      throw new Error('OAuth state does not belong to this browser session');
     }
 
     const tokens = await exchangeCodeForTokens(provider, code, stateData.codeVerifier);
@@ -370,6 +406,10 @@ function normalizeUserInfo(data: any, provider: string): OAuthUserInfo {
  * the allowed base). Prevents open redirect via crafted OAuth state.
  */
 function isSafeRedirect(redirect: string, allowedBase: string): boolean {
+  // Backslashes and control characters are normalised by browsers ("/\evil.com"
+  // becomes "//evil.com"), so they must never appear in a same-origin path.
+  // eslint-disable-next-line no-control-regex
+  if (/[\\\x00-\x20]/.test(redirect)) return false;
   // Relative paths (starting with /) are same-origin.
   if (redirect.startsWith('/') && !redirect.startsWith('//')) return true;
   try {

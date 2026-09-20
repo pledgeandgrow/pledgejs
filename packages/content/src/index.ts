@@ -127,7 +127,7 @@ export function renderMarkdown(md: string): string {
 
   function flushCode() {
     if (inCodeBlock) {
-      html.push(`<pre><code class="language-${codeLang}">${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+      html.push(`<pre><code class="language-${escapeHtml(codeLang)}">${escapeHtml(codeLines.join('\n'))}</code></pre>`);
       inCodeBlock = false;
       codeLines = [];
       codeLang = '';
@@ -218,10 +218,23 @@ export function renderMarkdown(md: string): string {
 
 function escapeHtml(s: string): string {
   return s
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"');
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Neutralise URLs that execute script when followed (javascript:, vbscript:,
+ * data:) and escape attribute-breaking characters. Browsers ignore embedded
+ * control characters/whitespace inside the scheme ("java\tscript:"), so those
+ * are stripped before the scheme test.
+ */
+function safeUrl(url: string): string {
+  // eslint-disable-next-line no-control-regex
+  const probe = url.replace(/[\u0000-\u0020]/g, '').toLowerCase();
+  if (/^(?:javascript|vbscript|data):/.test(probe)) return '#';
+  return escapeHtml(url);
 }
 
 function inlineMd(s: string): string {
@@ -233,9 +246,9 @@ function inlineMd(s: string): string {
   // Italic
   result = result.replace(/\*([^*]+)\*/g, '<em>$1</em>');
   // Images
-  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1"/>');
+  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_m, alt: string, url: string) => `<img src="${safeUrl(url)}" alt="${escapeHtml(alt)}"/>`);
   // Links
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, text: string, url: string) => `<a href="${safeUrl(url)}">${text}</a>`);
   return result;
 }
 
@@ -310,7 +323,8 @@ export function compileMdx(source: string): string {
   // Re-insert rendered JSX components
   for (let i = 0; i < jsxBlocks.length; i++) {
     const rendered = renderJsxBlock(jsxBlocks[i]);
-    html = html.replace(`${PLACEHOLDER_PREFIX}${i}${PLACEHOLDER_SUFFIX}`, rendered);
+    // Function replacer: `rendered` may contain `$&`/`$1` sequences that a string replacement would expand.
+    html = html.replace(`${PLACEHOLDER_PREFIX}${i}${PLACEHOLDER_SUFFIX}`, () => rendered);
   }
 
   return html;
@@ -431,7 +445,8 @@ export function renderBody<S extends SchemaDefinition>(entry: ContentEntry<S>): 
 // ---------------------------------------------------------------------------
 
 interface CacheEntry {
-  mtimeMs: number;
+  /** Per-file fingerprint at load time — catches rewrites that reuse an mtime tick. */
+  fingerprints: Map<string, { mtimeMs: number; size: number }>;
   entries: Map<string, ContentEntry>;
   loadedAt: number;
 }
@@ -459,7 +474,8 @@ export function isCacheStale(name: string, rootDir: string): boolean {
   for (const [, entry] of cached.entries) {
     try {
       const stat = statSync(entry.filePath);
-      if (stat.mtimeMs > cached.mtimeMs) return true;
+      const fp = cached.fingerprints.get(entry.filePath);
+      if (!fp || stat.mtimeMs !== fp.mtimeMs || stat.size !== fp.size) return true;
     } catch {
       return true; // File deleted
     }
@@ -705,16 +721,18 @@ export function loadCollection<S extends SchemaDefinition>(
     entries: entries as Map<string, ContentEntry>,
   });
 
-  // Populate the cache with current mtimes
-  const maxMtime = Array.from(entries.values()).reduce((max, e) => {
+  // Populate the cache with a per-file fingerprint (mtime + size)
+  const fingerprints = new Map<string, { mtimeMs: number; size: number }>();
+  for (const e of entries.values()) {
     try {
-      return Math.max(max, statSync(e.filePath).mtimeMs);
+      const stat = statSync(e.filePath);
+      fingerprints.set(e.filePath, { mtimeMs: stat.mtimeMs, size: stat.size });
     } catch {
-      return max;
+      // File vanished between scan and stat — treat as never-fresh
     }
-  }, 0);
+  }
   collectionCache.set(name, {
-    mtimeMs: maxMtime,
+    fingerprints,
     entries: entries as Map<string, ContentEntry>,
     loadedAt: Date.now(),
   });

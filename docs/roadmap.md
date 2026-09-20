@@ -8,12 +8,24 @@ safely enough for production. Ordered by severity within each tier.
 
 Legend: 🔴 security-critical · 🟠 reliability/correctness · 🟡 performance/ops · ⚊ build/devops
 
-> **Status (2026-09-14):** All 50 goals IMPLEMENTED and VERIFIED.
-> `pnpm typecheck`: 0 errors. `pnpm test`: **1023 passing, 2 failing (new
-> MDX/server-fn tests), 5 skipped across 112 files**.
-> Previous tiers (1–3, 2026-08-25): All COMPLETE — see
-> [SESSION-LOG.md](./SESSION-LOG.md) for history. The 50 goals below were
-> found by deeper full-codebase analysis and have now been implemented.
+> **Status (2026-09-20, 1.0.0-rc.0):** The 50 goals below were worked through in
+> source with unit tests, and the workspace is green (`pnpm typecheck`: 0 errors;
+> `pnpm test`: **1691 passing, 0 failing, 6 skipped across 206 files**). An earlier
+> revision of this page claimed "all 50 IMPLEMENTED and VERIFIED"; that overstated
+> it — the goals were not each independently re-verified, and a 2026-09-20 spot
+> check found at least one only partially done:
+>
+> - **#46 asset fingerprinting — partial.** Webpack now emits `[contenthash]`
+>   bundle names, but the renderers still emit the literal
+>   `/__pledge__/client.js` / `client.css` URLs, so browsers/CDNs still cannot
+>   cache them immutably.
+>
+> Treat [AUDIT-STATUS.md](../AUDIT-STATUS.md) as the single source of truth for
+> what is fixed and what is open, and [limitations.md](./limitations.md) for the
+> known gaps. The history of the earlier tiers (1–3, 2026-08-25) is in
+> [SESSION-LOG.md](../SESSION-LOG.md). Goals in this file were found by deeper
+> full-codebase analysis on 2026-09-14; their descriptions below are kept as
+> originally written (file paths and line numbers are as of commit `3a4dd5a`).
 
 ---
 
@@ -202,22 +214,24 @@ Production error stack traces are useless. Enable sourcemaps (hidden, not inline
 
 ## CI/CD gaps (not in the 50, but critical for production)
 
-- **CI lint job runs typecheck only, never lint** — `.github/workflows/ci.yml:32`. Job named "Lint & Typecheck" but only runs `pnpm typecheck`.
-- **CI doesn't run `pnpm build`** — A broken esbuild/TS emit build won't be caught.
-- **CI doesn't generate coverage** — `vitest.config.ts` has coverage configured but CI never enables `--coverage`.
-- **CI doesn't run `cargo test`** — Rust unit tests in native addons are not executed.
-- **Release workflow has no test gate** — `.github/workflows/release.yml` publishes on tag push without running tests/typecheck first.
-- **Release only publishes CLI** — Other packages (`pledgestack-core`, `pledgestack-server`, etc.) are never published to npm.
-- **No `.dockerignore` at repo root** — `COPY . .` includes `node_modules`, `.git`, `target/`, test files.
+Status as of 2026-09-20:
+
+- ✅ **CI lint job** now runs `pnpm typecheck`, `pnpm lint`, `pnpm build:packages` and the release check.
+- ✅ **CI runs the build** (`pnpm build:packages`) and an end-to-end smoke job.
+- ✅ **CI generates coverage** (`vitest run --coverage`) and enforces the thresholds in `vitest.config.ts`.
+- ✅ **CI runs the Rust crates' checks** (`cargo fmt`, `clippy`, `build`, `test` in the Rust Checks job).
+- ✅ **Release workflow has a test gate** (typecheck, lint, build, test, release check) and publishes all 34 public packages through Changesets.
+- ✅ **Root `.dockerignore`** exists.
 
 ---
 
 ## Verification status
 
-- `pnpm typecheck`: 0 errors (as of 2026-09-14)
-- `pnpm test`: 1023 passing, 2 failing (new MDX/server-fn tests), 5 skipped across 112 files
-- `pnpm audit --audit-level=high`: 3 findings (all `js-yaml` via `@changesets/cli`)
+- `pnpm typecheck`: 0 errors (2026-09-20)
+- `pnpm lint`: 0 errors, 75 warnings (2026-09-20)
+- `pnpm test`: 1691 passing, 0 failing, 6 skipped across 206 files (2026-09-20)
+- `pnpm audit`: no known vulnerabilities (2026-09-20; vitest 4.1.11)
 
 Each of the 50 goals above was found by reading actual source files, not from
 generic checklists. File paths and line numbers are accurate as of commit
-`3a4dd5a` + the 2026-09-14 operational fixes.
+`3a4dd5a` + the 2026-09-14 operational fixes and may have drifted since.

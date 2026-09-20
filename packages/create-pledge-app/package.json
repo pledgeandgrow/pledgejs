@@ -1,22 +1,57 @@
 {
   "name": "create-pledge-app",
-  "version": "0.1.3",
+  "version": "1.0.0-rc.0",
   "description": "Scaffold a new PledgeStack application",
+  "keywords": [
+    "create-pledge-app",
+    "pledgestack",
+    "scaffold",
+    "cli",
+    "starter",
+    "template"
+  ],
+  "homepage": "https://github.com/pledgeandgrow/pledgejs/tree/main/packages/create-pledge-app#readme",
+  "bugs": {
+    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
+  },
+  "license": "MIT",
+  "author": "PledgeStack Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pledgeandgrow/pledgejs.git",
+    "directory": "packages/create-pledge-app"
+  },
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "create-pledge-app": "bin/create-pledge-app.js"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "files": [
+    "bin",
+    "dist",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc --build",
     "dev": "tsc --watch",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm run build",
+    "clean": "rimraf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
     "prompts": "^2.4.2"
   },
   "devDependencies": {
+    "rimraf": "^6.0.0",
     "@types/prompts": "^2.4.9",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
@@ -26,33 +61,7 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "files": [
-    "bin/",
-    "dist/",
-    "templates/",
-    "README.md",
-    "LICENSE"
-  ],
   "publishConfig": {
     "access": "public"
-  },
-  "license": "MIT",
-  "author": "PledgeStack Contributors",
-  "homepage": "https://github.com/pledgeandgrow/pledgejs#readme",
-  "bugs": {
-    "url": "https://github.com/pledgeandgrow/pledgejs/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/pledgeandgrow/pledgejs.git",
-    "directory": "packages/create-pledge-app"
-  },
-  "keywords": [
-    "create-pledge-app",
-    "pledgestack",
-    "scaffold",
-    "cli",
-    "starter",
-    "template"
-  ]
+  }
 }

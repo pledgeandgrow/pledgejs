@@ -64,6 +64,7 @@ export function useCrossTabState<T>(
       // Compute next and do the localStorage/broadcast side effects OUTSIDE the
       // updater — a setState updater must be pure (StrictMode runs it twice).
       const next = typeof value === 'function' ? (value as (p: T) => T)(stateRef.current) : value;
+      stateRef.current = next;
       if (typeof window !== 'undefined') {
         try {
           localStorage.setItem(fullKey, JSON.stringify(next));

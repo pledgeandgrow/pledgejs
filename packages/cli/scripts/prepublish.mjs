@@ -3,8 +3,8 @@ import { join } from 'node:path';
 
 const distDir = join(import.meta.dirname, '..', 'dist');
 
-// Remove type declaration subdirectory (saves ~2MB)
-rmSync(join(distDir, 'packages'), { recursive: true, force: true });
+// NOTE: dist/packages holds the type declarations that dist/index.d.ts (etc.) re-export —
+// the package.json `types` conditions depend on it, so it must ship.
 
 // Remove all .map files
 function removeMaps(dir) {
@@ -19,4 +19,4 @@ function removeMaps(dir) {
 }
 
 removeMaps(distDir);
-console.log('Prepublish cleanup complete: removed sourcemaps and type declarations.');
+console.log('Prepublish cleanup complete: removed sourcemaps.');

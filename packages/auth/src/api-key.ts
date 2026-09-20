@@ -162,7 +162,7 @@ export class ApiKeyRotationManager {
 
     if (!record) return null;
 
-    if (!record.active && record.expiresAt && Date.now() > record.expiresAt) {
+    if (!record.active && record.expiresAt && Date.now() >= record.expiresAt) {
       this.keys.delete(keyId);
       return null;
     }
@@ -212,7 +212,7 @@ export class ApiKeyRotationManager {
     let removed = 0;
     const now = Date.now();
     for (const [keyId, record] of this.keys) {
-      if (!record.active && record.expiresAt && now > record.expiresAt) {
+      if (!record.active && record.expiresAt && now >= record.expiresAt) {
         this.keys.delete(keyId);
         removed++;
       }

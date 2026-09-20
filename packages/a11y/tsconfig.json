@@ -5,15 +5,24 @@
     "rootDir": "src",
     "composite": true,
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "noEmit": false
+    "declarationMap": false,
+    "sourceMap": false,
+    "noEmit": false,
+    "emitDeclarationOnly": true
   },
-  "include": ["src"]
-,
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../shared" }
+    {
+      "path": "../shared"
+    }
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "dist",
+    "node_modules",
+    "src/**/*.test.tsx"
   ]
-,
-  "exclude": ["src/**/*.test.ts", "src/**/*.spec.ts"]
 }

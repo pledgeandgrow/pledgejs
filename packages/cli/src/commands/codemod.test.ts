@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { REGISTERED_CODEMODS, listCodemods } from './codemod';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { REGISTERED_CODEMODS, listCodemods, runCodemod } from './codemod';
 
 describe('Codemod Transforms (#50)', () => {
   it('has registered codemods', () => {
@@ -57,5 +60,34 @@ describe('Codemod Transforms (#50)', () => {
       expect(typeof codemod.description).toBe('string');
       expect(typeof codemod.transform).toBe('function');
     }
+  });
+});
+
+describe('runCodemod file handling', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'pledge-codemod-'));
+    mkdirSync(join(dir, 'sub'), { recursive: true });
+    mkdirSync(join(dir, 'node_modules', 'x'), { recursive: true });
+    writeFileSync(join(dir, 'a.tsx'), "import Link from 'next/link';\n");
+    writeFileSync(join(dir, 'sub', 'b.ts'), "import { useRouter } from 'next/router';\n");
+    writeFileSync(join(dir, 'node_modules', 'x', 'c.ts'), "import Link from 'next/link';\n");
+    writeFileSync(join(dir, 'notes.md'), "import Link from 'next/link';\n");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('walks directories (as documented: `pledge codemod <name> src/`)', async () => {
+    const res = await runCodemod({ name: 'next-router-to-pledge-router', path: dir });
+    expect(res.filesChanged).toBe(2);
+    expect(readFileSync(join(dir, 'sub', 'b.ts'), 'utf-8')).toContain("'pledgestack/router'");
+    // vendored and non-source files are left alone
+    expect(readFileSync(join(dir, 'node_modules', 'x', 'c.ts'), 'utf-8')).toContain('next/link');
+    expect(readFileSync(join(dir, 'notes.md'), 'utf-8')).toContain('next/link');
+  });
+
+  it('does not write anything in dry-run mode', async () => {
+    const res = await runCodemod({ name: 'next-router-to-pledge-router', path: dir, dryRun: true });
+    expect(res.filesChanged).toBe(2);
+    expect(readFileSync(join(dir, 'sub', 'b.ts'), 'utf-8')).toContain('next/router');
   });
 });
