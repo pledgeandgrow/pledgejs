@@ -220,7 +220,7 @@ Status as of 2026-09-20:
 - ✅ **CI runs the build** (`pnpm build:packages`) and an end-to-end smoke job.
 - ✅ **CI generates coverage** (`vitest run --coverage`) and enforces the thresholds in `vitest.config.ts`.
 - ✅ **CI runs the Rust crates' checks** (`cargo fmt`, `clippy`, `build`, `test` in the Rust Checks job).
-- ✅ **Release workflow has a test gate** (typecheck, lint, build, test, release check) and publishes all 34 public packages through Changesets.
+- ✅ **Release workflow has a test gate** (typecheck, lint, build, test, release check) and publishes all 34 public packages through Changesets (33 in the shared-version `fixed` group; `create-pledge-app` versions independently).
 - ✅ **Root `.dockerignore`** exists.
 
 ---

@@ -42,6 +42,11 @@ const publicPkgs = packages.filter((p) => p.isPublic);
 const publicNames = new Set(publicPkgs.map((p) => p.json.name));
 const releaseVersion = publicPkgs.find((p) => p.json.name === 'pledgestack')?.json.version;
 
+// Public packages that version independently of the `fixed` group.
+// create-pledge-app has its own npm line (0.1.x) — scaffolds are released on
+// their own cadence, not lockstepped with the framework.
+const INDEPENDENT = new Set(['create-pledge-app']);
+
 /** Recursively collects non-test source files. */
 function sourceFiles(dir, out = []) {
   if (!existsSync(dir)) return out;
@@ -98,7 +103,7 @@ for (const { dir, path, json, isPublic } of packages) {
     continue;
   }
 
-  if (releaseVersion && json.version !== releaseVersion) fail(label, `version ${json.version} != release version ${releaseVersion}`);
+  if (releaseVersion && !INDEPENDENT.has(json.name) && json.version !== releaseVersion) fail(label, `version ${json.version} != release version ${releaseVersion}`);
   if (json.license !== 'MIT') fail(label, 'missing license "MIT"');
   if (!json.repository?.url || json.repository.directory !== `packages/${dir}`) fail(label, 'repository.url / repository.directory missing or wrong');
   if (!json.homepage) fail(label, 'missing homepage');
@@ -193,8 +198,8 @@ if (!existsSync(csPath)) {
   const ignored = new Set(cs.ignore ?? []);
   for (const name of publicNames) if (ignored.has(name)) problems.push(`.changeset/config.json ignores public package ${name}`);
   const grouped = new Set((cs.fixed ?? []).flat());
-  for (const name of publicNames) if (!grouped.has(name)) problems.push(`.changeset/config.json "fixed" group does not include ${name}`);
-  for (const name of grouped) if (!publicNames.has(name)) problems.push(`.changeset/config.json "fixed" group lists unknown/private package ${name}`);
+  for (const name of publicNames) if (!grouped.has(name) && !INDEPENDENT.has(name)) problems.push(`.changeset/config.json "fixed" group does not include ${name}`);
+  for (const name of grouped) if (!publicNames.has(name) || INDEPENDENT.has(name)) problems.push(`.changeset/config.json "fixed" group lists unknown/private/independent package ${name}`);
 }
 
 // --- release workflow ------------------------------------------------------------
@@ -209,4 +214,9 @@ if (problems.length > 0) {
   console.error('');
   process.exit(1);
 }
-console.log(`Release check passed: ${publicPkgs.length} public packages @ ${releaseVersion}${checkDist ? ' (dist verified)' : ''}.`);
+const sharedCount = publicPkgs.filter((p) => !INDEPENDENT.has(p.json.name)).length;
+const independent = publicPkgs
+  .filter((p) => INDEPENDENT.has(p.json.name))
+  .map((p) => `${p.json.name}@${p.json.version}`)
+  .join(', ');
+console.log(`Release check passed: ${sharedCount} packages @ ${releaseVersion}${independent ? ` + ${independent}` : ''}${checkDist ? ' (dist verified)' : ''}.`);

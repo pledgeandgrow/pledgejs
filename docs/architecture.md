@@ -247,7 +247,8 @@ ESM output that Node can't resolve).
    action opens/updates a "Version Packages" PR (`pnpm version-packages`).
 3. Merging that PR publishes every public package (`pnpm release` = build all
    packages → `scripts/check-release.mjs --dist` → `changeset publish`).
-4. 34 packages are public and share one version (Changesets `fixed` group);
+4. 34 packages are public; 33 share one version (Changesets `fixed` group)
+   while `create-pledge-app` versions independently on its own npm line;
    versions are `0.x.y`, published under the `latest` dist-tag. Library packages ship esbuild-bundled ESM
    (`scripts/bundle-package.mjs`) plus `tsc` declarations; the CLI bundles
    everything it needs so it works on its own. The VS Code extensions are private.

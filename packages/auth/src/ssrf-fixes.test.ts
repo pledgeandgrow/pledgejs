@@ -49,7 +49,10 @@ describe('createSafeFetch responses', () => {
     const tport = (target.address() as AddressInfo).port;
     const origin = createServer((_req, res) => {
       res.statusCode = 302;
-      res.setHeader('Location', `http://127.0.0.2:${tport}/`);
+      // Different port = different origin, so Authorization must be stripped.
+      // (127.0.0.2 would only work on Linux — macOS/Windows don't alias the
+      // whole 127/8 loopback range, so the request would hang to timeout.)
+      res.setHeader('Location', `http://127.0.0.1:${tport}/`);
       res.end();
     });
     await new Promise<void>((r) => origin.listen(0, '127.0.0.1', r));

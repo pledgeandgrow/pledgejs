@@ -164,8 +164,9 @@ compile the addons. The framework auto-detects their presence.
 
 All 34 public packages (the CLI `pledgestack`, `create-pledge-app`, every
 `pledgestack-*` library, the four `pledgestack-renderer-*` adapters and six
-`pledgestack-bundler-*` adapters, and `pledgestack-eslint-plugin`) share one
-version, managed by Changesets' `fixed` group, and are published together
+`pledgestack-bundler-*` adapters, and `pledgestack-eslint-plugin`) are published
+together; the 33 framework packages share one version, managed by Changesets'
+`fixed` group (`create-pledge-app` versions independently on its own npm line)
 through `.github/workflows/release.yml`. Versions are plain semver `0.x.y`,
 published under the `latest` dist-tag. The two VS Code extensions
 (`pledgestack-vscode`, `pledgestack-psx`) are private and ship through the

@@ -44,8 +44,8 @@ pub fn build_string(parts: u32) -> String {
 /// JSON round-trip of the provided payload.
 #[napi]
 pub fn json_roundtrip(payload: String) -> String {
-    let value: Value = serde_json::from_str(&payload)
-        .unwrap_or_else(|_| Value::String(payload.clone()));
+    let value: Value =
+        serde_json::from_str(&payload).unwrap_or_else(|_| Value::String(payload.clone()));
     serde_json::to_string(&value).unwrap_or(payload)
 }
 

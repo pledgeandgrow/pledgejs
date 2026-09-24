@@ -16,7 +16,7 @@
 import { spawn, execSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
 import { tmpdir, platform, arch } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -113,15 +113,39 @@ async function main() {
   console.log(`\x1b[36mSmoke workspace:\x1b[0m ${workDir}`);
 
   // ── 1. Pack the CLI into a real tarball (tests the published artifact) ──
-  console.log('\n\x1b[1m[1/6] Pack CLI tarball\x1b[0m');
-  const packOut = execSync('npm pack --pack-destination .', {
-    cwd: join(repoRoot, 'packages/cli'),
-    encoding: 'utf8',
-  }).trim();
-  const tgzName = packOut.split('\n').pop().trim();
-  const tgzPath = join(repoRoot, 'packages/cli', tgzName);
-  if (!existsSync(tgzPath)) throw new Error(`npm pack did not produce ${tgzName}`);
-  console.log(`  → ${tgzName}`);
+  console.log('\n\x1b[1m[1/6] Pack tarballs\x1b[0m');
+  // The CLI's only workspace dep is `create-pledge-app` (workspace:*). npm
+  // pack keeps the spec verbatim and `npm install` can't resolve it — pack
+  // create-pledge-app too and point the CLI manifest at the tarball first.
+  const cpaDir = join(repoRoot, 'packages/create-pledge-app');
+  const cpaTgz = join(
+    cpaDir,
+    execSync('npm pack --pack-destination .', { cwd: cpaDir, encoding: 'utf8' }).trim().split('\n').pop().trim(),
+  );
+  if (!existsSync(cpaTgz)) throw new Error(`npm pack did not produce ${cpaTgz}`);
+  console.log(`  → ${basename(cpaTgz)}`);
+
+  const cliPkgPath = join(repoRoot, 'packages/cli/package.json');
+  const cliPkgRaw = readFileSync(cliPkgPath, 'utf8');
+  const cliPkg = JSON.parse(cliPkgRaw);
+  cliPkg.dependencies['create-pledge-app'] = `file:${cpaTgz.replace(/\\/g, '/')}`;
+  writeFileSync(cliPkgPath, JSON.stringify(cliPkg, null, 2) + '\n');
+
+  let tgzPath;
+  try {
+    const packOut = execSync('npm pack --pack-destination .', {
+      cwd: join(repoRoot, 'packages/cli'),
+      encoding: 'utf8',
+    }).trim();
+    const tgzName = packOut.split('\n').pop().trim();
+    tgzPath = join(repoRoot, 'packages/cli', tgzName);
+    if (!existsSync(tgzPath)) throw new Error(`npm pack did not produce ${tgzName}`);
+    console.log(`  → ${tgzName}`);
+  } finally {
+    writeFileSync(cliPkgPath, cliPkgRaw);
+    // cpaTgz stays alive — the packed CLI's manifest references it via file:;
+    // it is removed in the outer cleanup below.
+  }
 
   try {
     // ── 2. Scaffold a real app (non-interactive) ──────────────────────────
@@ -150,9 +174,8 @@ async function main() {
     if (!existsSync(appBin)) throw new Error(`Installed pledgestack has no dist/bin.js at ${appBin}`);
 
     // Optional: override the installed pledgepack binary with a local build.
-    // Needed on Windows until a release ships the relative-path resolver fix
-    // (published 0.3.3 resolves `./x` to `base/./x`, which fails exists() on
-    // verbatim \\?\ paths). CI on Linux exercises the published artifact.
+    // (Published 0.3.3 mishandled verbatim \\?\ paths on Windows; fixed in
+    // 0.4.0 — the override remains for testing a locally-built binary.)
     const ppBinOverride = process.env.PLEDGEPACK_BINARY;
     if (ppBinOverride) {
       const platformKey = `${platform()}-${arch()}`;
@@ -201,6 +224,7 @@ async function main() {
     console.log('\n\x1b[32m✓ E2E smoke passed\x1b[0m — scaffold → install → build → start → dev all serve real responses\n');
   } finally {
     rmSync(tgzPath, { force: true });
+    rmSync(cpaTgz, { force: true });
     if (keep) {
       console.log(`  (kept workspace: ${workDir})`);
     } else {

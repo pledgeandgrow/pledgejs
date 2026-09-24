@@ -28,14 +28,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Build must precede typecheck: the package tsconfigs use composite
+      # project references, so cross-package imports resolve to the
+      # referenced packages' dist/*.d.ts (TS6305 on a clean checkout).
+      - name: Build packages
+        run: pnpm build:packages
+
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Lint
         run: pnpm lint
-
-      - name: Build verification
-        run: pnpm build:packages
 
       - name: Release check (metadata, versions, dist entry points)
         run: pnpm check:release
@@ -62,6 +65,12 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # The webpack .cjs PSX loader require()s pledgestack-core's built
+      # bundle — outside vitest's source aliases — so build core (and its
+      # workspace deps via `...`) before running the suite.
+      - name: Build core (needed by the webpack loader test)
+        run: pnpm --filter "pledgestack-core..." run build
 
       - name: Run tests
         run: npx vitest run --coverage

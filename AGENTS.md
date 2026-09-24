@@ -31,7 +31,7 @@ Run from the repo root. Requires Node >= 20 and pnpm 11.13.1 (Corepack:
 | Command | What it does |
 | --- | --- |
 | `pnpm install` | Install the workspace. |
-| `pnpm typecheck` | Typecheck all packages (via `scripts/typecheck-workspace.mjs`). Should report "No type errors". |
+| `pnpm typecheck` | Typecheck all packages (via `scripts/typecheck-workspace.mjs`). Requires `pnpm build:packages` first — composite project references resolve cross-package imports to `dist/*.d.ts` (TS6305 on a clean checkout). Should report "No type errors". |
 | `pnpm test` | Run the Vitest suite via the CLI (`node packages/cli/dist/bin.js test`). Requires the CLI built first. |
 | `pnpm lint` | Build the local ESLint plugin, then run ESLint on the repo. |
 | `pnpm lint:psx` | Run the `.psx`/`.ps` (Rust) linter via the CLI. |
@@ -70,9 +70,13 @@ weakening the config.
 Versioning uses [Changesets](https://github.com/changesets/changesets)
 (`@changesets/cli` is a root devDep, config in `.changeset/config.json`).
 
-**Policy:** all 34 public packages share one version (a Changesets `fixed`
+**Policy:** 33 of the 34 public packages share one version (a Changesets `fixed`
 group in `.changeset/config.json`) — never hand-bump versions, never add a public
 package to `ignore`, and add any new public package to the `fixed` group.
+`create-pledge-app` is the exception: it versions independently on its own
+npm line (currently `0.1.x`) since scaffolds release on their own cadence —
+it must stay out of the `fixed` group and is exempted in
+`scripts/check-release.mjs` (`INDEPENDENT`).
 The repo is in normal (non-prerelease) mode: versions are `0.x.y`, published
 under the `latest` dist-tag. `pnpm check:release`
 (`scripts/check-release.mjs`) enforces metadata, versions, READMEs/CHANGELOGs,

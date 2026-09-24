@@ -4,7 +4,6 @@
   "commit": false,
   "fixed": [
     [
-      "create-pledge-app",
       "pledgestack",
       "pledgestack-a11y",
       "pledgestack-adapters",

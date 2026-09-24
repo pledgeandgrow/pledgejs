@@ -5,7 +5,7 @@
 
 A full-stack **multi-framework** web framework with file-based routing, SSR/SSG/ISR, React Server Components, API routes, middleware, edge runtime support, and Rust native addons for rendering, compression, search, rate limiting, and more. Supports **React, Vue, Solid, and Svelte** via pluggable renderer adapters. Uses PledgePack (Rust+Zig bundler) to build user apps.
 
-> **206 test files · 1698 tests · 36 packages (34 published)** — 1692 passing, 6 skipped, 0 failing (2026-09-21). Current version: **0.2.0** (all 34 public packages are versioned together; published under the `latest` dist-tag). `pnpm typecheck` runs a real `tsc --noEmit -p` sweep across every package (see `scripts/typecheck-workspace.mjs`).
+> **206 test files · 1698 tests · 36 packages (34 published)** — 1692 passing, 6 skipped, 0 failing (2026-09-21). Current version: **0.2.0** (the 33 framework packages are versioned together and published under the `latest` dist-tag; `create-pledge-app` versions independently). `pnpm typecheck` runs a real `tsc --noEmit -p` sweep across every package (see `scripts/typecheck-workspace.mjs`).
 
 ## Requirements
 
@@ -325,7 +325,7 @@ pledgestack/
 Releases go through [Changesets](https://github.com/changesets/changesets) and `.github/workflows/release.yml`:
 
 1. Add a changeset with your PR: `pnpm changeset`.
-2. Merging to `main` runs the full gate (typecheck, lint, build, tests, `pnpm check:release`) and opens/updates a **Version Packages** PR (`pnpm version-packages` bumps every public package together and writes each `packages/*/CHANGELOG.md`).
+2. Merging to `main` runs the full gate (typecheck, lint, build, tests, `pnpm check:release`) and opens/updates a **Version Packages** PR (`pnpm version-packages` bumps the `fixed`-group packages together and writes each `packages/*/CHANGELOG.md`; `create-pledge-app` bumps independently).
 3. Merging that PR publishes all 34 public packages to npm (`pnpm release`). Versions are plain semver `0.x.y` under the `latest` dist-tag; if a prerelease line is ever needed again, `pnpm changeset pre enter <tag>` re-enters prerelease mode.
 
 `pnpm check:release` (also run in CI) verifies package metadata, versions, READMEs, changelogs, declared workspace dependencies and — after `pnpm build:packages` — that every `exports` target exists. The project changelog is [docs/changelog.md](./docs/changelog.md).

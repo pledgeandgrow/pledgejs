@@ -17,12 +17,12 @@
  * output with tsc's unbundled emit (extensionless `import('./commands/x')`
  * calls that Node ESM can't resolve, breaking `pnpm test`/`dev`/`build`).
  * `tsc -b --noEmit` doesn't work either: composite referenced projects may not
- * disable emit (TS6310). So we use `tsc --noEmit -p` per leaf project instead —
- * the root tsconfig's `paths` mapping resolves all workspace imports to source
- * files directly, so project references aren't needed for typechecking. This
- * script runs `tsc --noEmit -p` against every leaf project that isn't itself
- * referenced by another project, plus the standalone projects (create-pledge-app,
- * eslint-plugin-pledge, the two VS Code extensions).
+ * disable emit (TS6310). So we use `tsc --noEmit -p` per leaf project instead.
+ *
+ * NOTE: the packages' own `references` still apply — a `paths`-resolved import
+ * into a referenced composite project is redirected to its dist/*.d.ts, so
+ * this script requires `pnpm build:packages` to have run first (TS6305
+ * otherwise). CI builds packages before typechecking.
  */
 
 import { spawnSync } from 'node:child_process';
