@@ -160,15 +160,14 @@ rust-bench.
 **Workaround:** Run `cd packages/core/native && cargo build --release` to
 compile the addons. The framework auto-detects their presence.
 
-## Release model (1.0.0-rc)
+## Release model
 
 All 34 public packages (the CLI `pledgestack`, `create-pledge-app`, every
 `pledgestack-*` library, the four `pledgestack-renderer-*` adapters and six
 `pledgestack-bundler-*` adapters, and `pledgestack-eslint-plugin`) share one
 version, managed by Changesets' `fixed` group, and are published together
-through `.github/workflows/release.yml`. While `.changeset/pre.json` exists the
-repo is in prerelease mode: versions are `1.0.0-rc.N` and are published under
-the `rc` dist-tag (`npm i pledgestack@rc`). The two VS Code extensions
+through `.github/workflows/release.yml`. Versions are plain semver `0.x.y`,
+published under the `latest` dist-tag. The two VS Code extensions
 (`pledgestack-vscode`, `pledgestack-psx`) are private and ship through the
 Marketplace, not npm.
 

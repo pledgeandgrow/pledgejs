@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-a11y",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Accessibility utilities for PledgeStack — audit, focus management, keyboard nav, RTL, translation management",
   "keywords": [
     "pledgestack"

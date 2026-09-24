@@ -68,7 +68,9 @@ Each scaffold writes:
 - `app/` — file-based routes from the chosen template
 - `pledge.config.ts` — framework config
 - `package.json` — with `pledgestack` + `pledgepack` versions resolved from the
-  npm registry (`latest` dist-tag when offline)
+  npm registry. The dist-tag matches the scaffolder's own release channel
+  (an rc build resolves `rc`, falling back to `latest` when that tag isn't
+  published yet; `latest` is used when offline)
 - `tsconfig.json` — per-framework JSX settings
 - `.gitignore`, `pnpm-workspace.yaml` — the workspace file pre-approves
   `pledgepack`/`esbuild` build scripts (`allowBuilds` for pnpm 11,

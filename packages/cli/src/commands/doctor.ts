@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execSync, execFileSync } from 'node:child_process';
 import { scanAppDir, resolveRoutes } from 'pledgestack-core';
+import { FILE_CONVENTIONS } from 'pledgestack-shared';
 import type { PledgeConfig, ResolvedRoute } from 'pledgestack-shared';
 
 interface Diagnostic {
@@ -156,9 +157,11 @@ async function checkRoutes(config: PledgeConfig, diags: Diagnostic[]): Promise<v
       }
     }
 
-    // Check for not-found
-    const notFound = routes.find((r: ResolvedRoute) => r.isNotFound);
-    if (!notFound) {
+    // Check for not-found — a not-found.tsx grouped with a page/layout sets
+    // `notFoundFilePath` on that route rather than producing a standalone
+    // isNotFound route, so check the scanned files directly.
+    const hasNotFound = files.some((f) => f.convention === FILE_CONVENTIONS['not-found']);
+    if (!hasNotFound) {
       diags.push({
         level: 'info',
         category: 'Routes',
@@ -237,12 +240,14 @@ function checkPackageJson(config: PledgeConfig, diags: Diagnostic[]): void {
 
     const allDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
 
-    if (!allDeps['pledgestack-core']) {
+    // The `pledgestack` meta package bundles core — depending on it satisfies
+    // this check; only flag when neither is present.
+    if (!allDeps['pledgestack'] && !allDeps['pledgestack-core']) {
       diags.push({
         level: 'error',
         category: 'Package',
-        message: 'pledgestack-core not in dependencies',
-        fix: 'Run: pnpm add pledgestack-core',
+        message: 'pledgestack not in dependencies',
+        fix: 'Run: pnpm add pledgestack',
       });
     }
 
@@ -313,8 +318,19 @@ function checkEnvFiles(config: PledgeConfig, diags: Diagnostic[]): void {
 
 function checkBuildOutput(config: PledgeConfig, diags: Diagnostic[]): void {
   const outPath = join(config.rootDir, config.outDir);
-  if (existsSync(outPath)) {
+  // An existing out dir isn't proof of a build — stray files (logs, caches)
+  // land there too. Look for artifacts a real `pledge build` produces.
+  const hasArtifacts = existsSync(outPath) && readdirSync(outPath).some((e) =>
+    e === 'index.html' || e === 'manifest.json' || e === 'server' || e === 'public' || e.endsWith('.js'),
+  );
+  if (hasArtifacts) {
     diags.push({ level: 'ok', category: 'Build', message: `Build output exists: ${outPath}` });
+  } else if (existsSync(outPath)) {
+    diags.push({
+      level: 'info',
+      category: 'Build',
+      message: `${outPath} exists but has no build artifacts — run: pledge build`,
+    });
   } else {
     diags.push({
       level: 'info',

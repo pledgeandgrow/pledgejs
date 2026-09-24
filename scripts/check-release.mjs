@@ -171,6 +171,19 @@ for (const { dir, path, json, isPublic } of packages) {
   }
 }
 
+// --- version consistency ------------------------------------------------------
+// PLEDGE_VERSION in pledgestack-shared must match the release version — it is
+// the framework version reported by `pledge info` and scaffolded health routes.
+// This constant has drifted stale before; check it here so a release can't ship
+// with a mismatched version string.
+const constantsPath = join(ROOT, 'packages', 'shared', 'src', 'constants.ts');
+if (existsSync(constantsPath) && releaseVersion) {
+  const constants = readFileSync(constantsPath, 'utf8');
+  const m = constants.match(/PLEDGE_VERSION\s*=\s*'([^']+)'/);
+  if (!m) problems.push('PLEDGE_VERSION not found in packages/shared/src/constants.ts');
+  else if (m[1] !== releaseVersion) problems.push(`PLEDGE_VERSION ${m[1]} != release version ${releaseVersion} — update packages/shared/src/constants.ts`);
+}
+
 // --- changesets ---------------------------------------------------------------
 const csPath = join(ROOT, '.changeset', 'config.json');
 if (!existsSync(csPath)) {

@@ -5,7 +5,7 @@
 
 A full-stack **multi-framework** web framework with file-based routing, SSR/SSG/ISR, React Server Components, API routes, middleware, edge runtime support, and Rust native addons for rendering, compression, search, rate limiting, and more. Supports **React, Vue, Solid, and Svelte** via pluggable renderer adapters. Uses PledgePack (Rust+Zig bundler) to build user apps.
 
-> **206 test files · 1697 tests · 36 packages (34 published)** — 1691 passing, 6 skipped, 0 failing (2026-09-20). Release candidate: **1.0.0-rc.0** (all 34 public packages are versioned together; prereleases publish under the `rc` dist-tag). `pnpm typecheck` runs a real `tsc --noEmit -p` sweep across every package (see `scripts/typecheck-workspace.mjs`).
+> **206 test files · 1698 tests · 36 packages (34 published)** — 1692 passing, 6 skipped, 0 failing (2026-09-21). Current version: **0.2.0** (all 34 public packages are versioned together; published under the `latest` dist-tag). `pnpm typecheck` runs a real `tsc --noEmit -p` sweep across every package (see `scripts/typecheck-workspace.mjs`).
 
 ## Requirements
 
@@ -55,6 +55,7 @@ npx pledge start    # Start production server
 | `pledge init` | Initialize PledgeStack in existing project |
 | `pledge info` | Show project diagnostics |
 | `pledge doctor` | Health checks (Rust toolchain, Cargo, env, production readiness) |
+| `pledge env-check` | Validate environment variables against `envSchema` in `pledge.config.ts` |
 | `pledge lint` | Run ESLint with PledgeStack rules |
 | `pledge typecheck` | TypeScript type checking |
 | `pledge test` | Run Vitest + Rust test runner |
@@ -224,7 +225,7 @@ SQLx, Redis, Auth (Argon2/JWT), Image processing, PDF generation, Background job
 
 ### Testing
 
-206 test files across the monorepo using Vitest (1697 tests: 1691 passing, 6 skipped — the skips are real-CLI-gated deploy tests that require a Netlify token and similar external credentials):
+206 test files across the monorepo using Vitest (1698 tests: 1692 passing, 6 skipped — the skips are real-CLI-gated deploy tests that require a Netlify token and similar external credentials):
 
 - **PSX Integration tests** — Fallback behavior for all 15 Rust wrappers
 - **Render tests** — `rust-html`, `rust-ssr`, `rust-rsc`, `rust-dom-renderer`, `rust-html-transformer`, `rust-hydration`, `rust-ssr-profiler`, PPR, JIT templates
@@ -317,7 +318,7 @@ pledgestack/
 └── pnpm-workspace.yaml
 ```
 
-> **Publishing:** 34 packages are public (everything above except the two VS Code extensions, which ship through the Marketplace) and are released together at one version through [Changesets](https://github.com/changesets/changesets) — see [Releasing](#releasing). The `pledgestack` CLI still bundles every sub-package via esbuild, so it alone is enough to build an app. PledgePack is installed from npm (`pledgepack@^0.3.3`) and used to build user apps — the framework itself uses esbuild.
+> **Publishing:** 34 packages are public (everything above except the two VS Code extensions, which ship through the Marketplace) and are released together at one version through [Changesets](https://github.com/changesets/changesets) — see [Releasing](#releasing). The `pledgestack` CLI still bundles every sub-package via esbuild, so it alone is enough to build an app. PledgePack is installed from npm (`pledgepack@^0.4.0`, published — `latest` dist-tag) and used to build user apps — the framework itself uses esbuild.
 
 ## Releasing
 
@@ -325,7 +326,7 @@ Releases go through [Changesets](https://github.com/changesets/changesets) and `
 
 1. Add a changeset with your PR: `pnpm changeset`.
 2. Merging to `main` runs the full gate (typecheck, lint, build, tests, `pnpm check:release`) and opens/updates a **Version Packages** PR (`pnpm version-packages` bumps every public package together and writes each `packages/*/CHANGELOG.md`).
-3. Merging that PR publishes all 34 public packages to npm (`pnpm release`). While `.changeset/pre.json` exists the repo is in prerelease mode (`1.0.0-rc.N`, published under the `rc` dist-tag); run `pnpm changeset pre exit` for the stable 1.0.0.
+3. Merging that PR publishes all 34 public packages to npm (`pnpm release`). Versions are plain semver `0.x.y` under the `latest` dist-tag; if a prerelease line is ever needed again, `pnpm changeset pre enter <tag>` re-enters prerelease mode.
 
 `pnpm check:release` (also run in CI) verifies package metadata, versions, READMEs, changelogs, declared workspace dependencies and — after `pnpm build:packages` — that every `exports` target exists. The project changelog is [docs/changelog.md](./docs/changelog.md).
 

@@ -73,8 +73,8 @@ Versioning uses [Changesets](https://github.com/changesets/changesets)
 **Policy:** all 34 public packages share one version (a Changesets `fixed`
 group in `.changeset/config.json`) — never hand-bump versions, never add a public
 package to `ignore`, and add any new public package to the `fixed` group.
-The repo is in prerelease mode (`.changeset/pre.json`, tag `rc`): versions are
-`1.0.0-rc.N`, published under the `rc` dist-tag. `pnpm check:release`
+The repo is in normal (non-prerelease) mode: versions are `0.x.y`, published
+under the `latest` dist-tag. `pnpm check:release`
 (`scripts/check-release.mjs`) enforces metadata, versions, READMEs/CHANGELOGs,
 declared workspace dependencies and (with `--dist`) that built entry points exist.
 
@@ -119,9 +119,19 @@ Contract: `pledgepack/docs/CONNECTION.md` (in the sibling pledgepack repo).
   duplicating the logic.
 - The transform result cache is a bounded `BoundedLRUMap` (from
   `pledgestack-shared`) to avoid unbounded growth in dev.
-- Keep the `pledgepack` dependency at `^0.3.3` across `package.json`,
-  `packages/cli`, and `packages/server` — ranges drifted before and caused
-  mismatches.
+- Keep the `pledgepack` dependency at `^0.4.0` across `package.json`,
+  `packages/cli`, `packages/server`, and `packages/bundler-pledgepack` —
+  ranges drifted before and caused mismatches. Bump all four
+  package.jsons (plus the `minimumReleaseAgeExclude` pin in
+  `pnpm-workspace.yaml`) together whenever the pinned version changes.
+- `PLEDGEPACK_BINARY` env var overrides binary resolution (validated as an
+  existing file in `packages/bundler-pledgepack/src/binary-resolver.ts`) —
+  needed on Windows to test a locally-built pledgepack binary — published
+  builds through 0.3.3 mishandled verbatim `\\?\` paths and failed `pledge build`
+  with `Cannot resolve module: ./__pledge_router`.
+- `pledge start` prefers the Rust `pledge serve` static server, but falls back
+  to the Node.js server automatically when the app has API routes (`route.ts`)
+  — the Rust server cannot execute route handlers.
 
 ## Docker
 

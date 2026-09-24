@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-content",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Type-safe content collections with schema validation and query API for PledgeStack",
   "keywords": [
     "pledgestack"

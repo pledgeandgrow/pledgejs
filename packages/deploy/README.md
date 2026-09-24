@@ -30,6 +30,8 @@ console.log(result);
 
 ## Notes
 
+The build step re-invokes the currently-running CLI (`process.execPath` + `process.argv[1]`), so deploy works when `pledge` isn't on `PATH` (e.g. `node dist/bin.js deploy`).
+
 Real deploys require the provider CLI (`wrangler`, `vercel`, `netlify`) to be installed and authenticated; tests that need them are skipped when absent.
 
 ## License

@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-core",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Core framework for PledgeStack — routing, rendering, and build pipeline",
   "keywords": [
     "pledgestack",

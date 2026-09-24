@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { parsePort } from './parse-port';
 // Registers all bundled renderer adapters (side-effect) — required by
@@ -119,6 +120,13 @@ async function main() {
       await doctorCommand(config, { production: values.production as boolean | undefined });
       break;
     }
+    case 'env-check': {
+      const { envCheckCommand } = await import('./commands/env-check');
+      const { loadConfig } = await import('./config-loader');
+      const config = await loadConfig();
+      await envCheckCommand(config);
+      break;
+    }
     case 'fmt': {
       const { fmtCommand } = await import('./commands/fmt');
       await fmtCommand({
@@ -202,6 +210,11 @@ async function main() {
       const { writeRouteTypes } = await import('pledgestack-core');
       const { loadConfig } = await import('./config-loader');
       const config = await loadConfig();
+      if (!existsSync(join(config.rootDir, config.appDir))) {
+        console.error(`\n  Error: App directory not found at ${join(config.rootDir, config.appDir)}`);
+        console.error('  Run this command in a PledgeStack app, or set appDir in pledge.config.ts.\n');
+        process.exit(1);
+      }
       const outPath = await writeRouteTypes(config);
       console.log(`\n  ✓ Generated route types at ${outPath}\n`);
       break;
@@ -211,6 +224,11 @@ async function main() {
       const { loadConfig } = await import('./config-loader');
       const config = await loadConfig();
       const appDir = join(config.rootDir, config.appDir);
+      if (!existsSync(appDir)) {
+        console.error(`\n  Error: App directory not found at ${appDir}`);
+        console.error('  Run this command in a PledgeStack app, or set appDir in pledge.config.ts.\n');
+        process.exit(1);
+      }
       const files = await scanAppDir(appDir);
       const routes = resolveRoutes(files, config);
       const conflicts = detectRouteConflicts(routes);
@@ -409,6 +427,7 @@ function printHelp() {
     create   Scaffold a new PledgeStack project
     info     Print project diagnostics
     doctor   Diagnose and fix common issues (--production for prod checks)
+    env-check  Validate environment variables against envSchema in pledge.config.ts
     analyze  Analyze PSX bundle size and Cargo dependencies
     bench    Benchmark Rust NAPI functions (pledge bench --psx)
     fmt      Format Rust code in .psx/.ps files

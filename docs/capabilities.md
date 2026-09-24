@@ -1,7 +1,7 @@
 # Capabilities — What's Working
 
 All features below are implemented, tested, and verified working as of
-2026-09-20. Tests: 1691 passing, 0 failing, 6 skipped (real-CLI deploy
+2026-09-21. Tests: 1692 passing, 0 failing, 6 skipped (real-CLI deploy
 tests gated on external tokens) across 206 files. Typecheck: 0 errors.
 Where a capability depends on optional pieces (native addons, `sharp`, a
 bundler's own dev server) it is qualified below and in [limitations.md](./limitations.md).

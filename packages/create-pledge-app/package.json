@@ -1,6 +1,6 @@
 {
   "name": "create-pledge-app",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Scaffold a new PledgeStack application",
   "keywords": [
     "create-pledge-app",

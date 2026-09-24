@@ -92,14 +92,15 @@ export async function benchCommand(
   const iterations = opts?.iterations ? parseInt(opts.iterations, 10) : 10_000;
   const concurrency = opts?.concurrency ? parseInt(opts.concurrency, 10) : 1;
 
-  console.log(bold('\n=== PledgeStack Benchmark ===\n'));
-  console.log(`Iterations: ${iterations}  Concurrency: ${concurrency}\n`);
-
   if (!opts?.psx) {
+    console.log(bold('\n=== PledgeStack Benchmark ===\n'));
     console.log(yellow('Use --psx flag to benchmark Rust NAPI functions'));
     console.log(dim('Example: pledge bench --psx --save base.json\n'));
     return;
   }
+
+  console.log(bold('\n=== PledgeStack Benchmark ===\n'));
+  console.log(`Iterations: ${iterations}  Concurrency: ${concurrency}\n`);
 
   // Try to load native addons
   let rustAddon: Record<string, unknown> | null = null;

@@ -13,7 +13,7 @@ import {
   generateGitignore,
 } from './index';
 
-const versions = { pledgestack: '^1.0.0-rc.0', pledgepack: '^0.3.3' };
+const versions = { pledgestack: '^0.2.0', pledgepack: '^0.4.0' };
 
 describe('create-pledge-app parseArgs', () => {
   const parse = (...args: string[]) => parseArgs(['node', 'create-pledge-app', ...args]);
@@ -49,9 +49,9 @@ describe('create-pledge-app generated config', () => {
     expect(pkg.private).toBe(true);
     expect(pkg.type).toBe('module');
     expect(pkg.scripts).toEqual({ dev: 'pledge dev', build: 'pledge build', start: 'pledge start' });
-    expect(pkg.dependencies.pledgestack).toBe('^1.0.0-rc.0');
+    expect(pkg.dependencies.pledgestack).toBe('^0.2.0');
     expect(pkg.dependencies.react).toMatch(/^\^19/);
-    expect(pkg.devDependencies.pledgepack).toBe('^0.3.3');
+    expect(pkg.devDependencies.pledgepack).toBe('^0.4.0');
     // Nothing in the generated app may depend on a workspace-only package.
     for (const v of Object.values({ ...pkg.dependencies, ...pkg.devDependencies })) {
       expect(String(v)).not.toMatch(/workspace:/);
@@ -115,12 +115,12 @@ describe('create-pledge-app scaffold', () => {
   it('pins to the latest published version when the registry answers', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
       ok: true,
-      json: async () => ({ version: String(url).includes('pledgestack') ? '1.0.0-rc.0' : '0.3.3' }),
+      json: async () => ({ version: String(url).includes('pledgestack') ? '0.2.0' : '0.4.0' }),
     })));
     await scaffold({ name: 'pinned', template: 'default', framework: 'react', installDeps: false });
     const pkg = JSON.parse(await readFile(join(cwd, 'pinned', 'package.json'), 'utf-8'));
-    expect(pkg.dependencies.pledgestack).toBe('^1.0.0-rc.0');
-    expect(pkg.devDependencies.pledgepack).toBe('^0.3.3');
+    expect(pkg.dependencies.pledgestack).toBe('^0.2.0');
+    expect(pkg.devDependencies.pledgepack).toBe('^0.4.0');
   });
 
   it('every non-React framework gets its own default template', async () => {

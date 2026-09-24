@@ -12,10 +12,9 @@
 #        - when that PR is merged and no changesets remain, publishes to npm
 #          (`pnpm release` = build all packages -> release check -> `changeset publish`)
 #          and pushes the git tags.
-#   3. While .changeset/pre.json exists the repo is in prerelease mode
-#      (`changeset pre enter rc`): versions are 1.0.0-rc.N and packages are
-#      published under the `rc` dist-tag. Run `pnpm changeset pre exit` to leave
-#      prerelease mode for the stable 1.0.0 release.
+#   3. Versions are plain semver `0.x.y` published under the `latest` dist-tag.
+#      If a prerelease line is ever needed, `pnpm changeset pre enter <tag>`
+#      re-enters prerelease mode (versions like 0.3.0-rc.N under that dist-tag).
 #
 # Requires the repository secret NPM_TOKEN (an npm automation token with publish
 # rights to the `pledgestack*` names and `create-pledge-app`).

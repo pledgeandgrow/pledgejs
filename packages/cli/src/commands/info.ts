@@ -1,9 +1,24 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { PLEDGE_VERSION } from 'pledgestack-shared';
+import { fileURLToPath } from 'node:url';
 
 interface InfoOptions {
   verbose?: boolean;
+}
+
+/**
+ * Reads the installed pledgestack package version — the framework version.
+ * Same source as `pledge --version`; avoids a hardcoded constant drifting
+ * stale on every release.
+ */
+function frameworkVersion(): string {
+  try {
+    const pkgPath = join(fileURLToPath(new URL('.', import.meta.url)), '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**
@@ -14,7 +29,7 @@ export async function infoCommand(options: InfoOptions = {}): Promise<void> {
   const verbose = options.verbose ?? false;
 
   console.log('\n  PledgeStack — Project Diagnostics\n');
-  console.log(`  Framework version: ${PLEDGE_VERSION}`);
+  console.log(`  Framework version: ${frameworkVersion()}`);
   console.log(`  Node.js version: ${process.version}`);
   console.log(`  Platform: ${process.platform} ${process.arch}`);
 

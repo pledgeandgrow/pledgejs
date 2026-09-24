@@ -16,9 +16,9 @@ The authoritative, always-current status is [AUDIT-STATUS.md](../AUDIT-STATUS.md
 this file only tracks the follow-up backlog.
 
 - `pnpm typecheck`: 0 errors (workspace-wide, via `scripts/typecheck-workspace.mjs`)
-- `pnpm lint`: 0 errors (75 pre-existing warnings)
+- `pnpm lint`: 0 errors (76 pre-existing warnings)
 - `pnpm build:packages`: passes (34 public packages)
-- `pnpm test`: 1691 passing, 0 failing, 6 skipped across 206 files
+- `pnpm test`: 1692 passing, 0 failing, 6 skipped across 206 files
   (the 5 skips are Netlify real-CLI deploy tests gated on `NETLIFY_AUTH_TOKEN`)
 - `pnpm audit`: no known vulnerabilities (vitest upgraded to 4.1.11)
 
@@ -39,7 +39,7 @@ this file only tracks the follow-up backlog.
 | Sccache test flake (timeout) | `packages/core/src/psx/sccache.test.ts` | ✅ Fixed (2026-09-14) — timeout increased to 30000ms. |
 | CLI dist overwritten by typecheck | `scripts/typecheck-workspace.mjs` | ✅ Fixed (2026-09-14) — switched from `tsc -b` (emits) to `tsc --noEmit -p` (typechecks only). |
 | `@types/react` hoisting gap | `package.json` | ✅ Fixed (2026-09-14) — added `@types/react`/`@types/react-dom` to root devDependencies. |
-| Workspace version drift (0.0.1 … 0.2.3, no policy) | all `packages/*/package.json` | ✅ Fixed (2026-09-20) — every public package is `1.0.0-rc.0` in one Changesets `fixed` group; `pnpm check:release` enforces it. |
+| Workspace version drift (0.0.1 … 0.2.3, no policy) | all `packages/*/package.json` | ✅ Fixed (2026-09-20) — every public package shares one version (`0.2.0`) in one Changesets `fixed` group; `pnpm check:release` enforces it. |
 | Only the CLI was publishable / release workflow had no gate | `.github/workflows/release.yml` | ✅ Fixed (2026-09-20) — 34 packages are public; the workflow runs typecheck, lint, build, tests and the release check, then publishes through Changesets. |
 | `pledge init --skip-install` was a no-op | `packages/cli/src/commands/init.ts` | ✅ Fixed (2026-09-20) — init installs unless `--skip-install`; tested. |
 | `pledge upgrade` codemod path was dead | `packages/cli/src/commands/upgrade.ts` | ✅ Removed (2026-09-20) — codemods stay available via `pledge codemod`. |
@@ -61,7 +61,7 @@ _(None currently — both items previously listed here were fixed.)_
 - **Bundler HMR** is only as real as the bundler's own dev server; see
   [limitations.md](./limitations.md#bundler-hmr-hot-module-replacement).
 - **Renderer asset URLs** are not content-hashed (`/__pledge__/client.js`).
-- **75 lint warnings** (unused variables, `prefer-const`, SSRF-suggestion rule).
+- **76 lint warnings** (unused variables, `prefer-const`, SSRF-suggestion rule).
 - **Native addons** are not compiled in CI artifacts or shipped to npm.
 
 ---
@@ -77,8 +77,10 @@ Carried over from `AUDIT-AND-FIXES.md` §6 — still true, still out of scope:
   Sea-ORM and ML inference have no JS fallback and now fail at construction
   unless a `driver` / `executor` is supplied. These are honestly labeled as JS
   fallbacks in their output/docs.
-- **macOS/Linux PledgePack binaries** aren't bundled in this repo (only Windows x64
-  is); those platforms rely on a postinstall download from a GitHub release.
+- **PledgePack binaries** aren't vendored in this repo on any platform; the
+  `pledgepack` package downloads the matching binary postinstall from GitHub
+  Releases (`pledgepack@0.4.0` ships all six targets: Windows/Linux/macOS ×
+  x64/ARM64) with checksum verification.
 - Several `packages/core/src/psx/*` modules (`multi-region.ts`,
   `monitoring-dashboard.ts`, `lambda-psx.ts`, `serverless-cold-start.ts`,
   `edge-durable-objects.ts`) are exported publicly but not consumed anywhere in

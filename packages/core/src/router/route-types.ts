@@ -117,13 +117,17 @@ export function generateRouteTypes(
     'export type RoutePattern =',
   ];
 
-  if (pageRoutes.length === 0) {
-    lines.push('  | `/`;');
-  } else {
-    for (const route of pageRoutes) {
-      lines.push(`  | ${patternToTypeLiteral(route.pattern)}`);
-    }
-    lines.push('  | `/`;');
+  const emittedLiterals = new Set<string>();
+  const literals: string[] = [];
+  for (const route of pageRoutes) {
+    const literal = patternToTypeLiteral(route.pattern);
+    if (emittedLiterals.has(literal)) continue;
+    emittedLiterals.add(literal);
+    literals.push(literal);
+  }
+  if (!emittedLiterals.has('`/`')) literals.push('`/`');
+  for (const [i, literal] of literals.entries()) {
+    lines.push(`  | ${literal}${i === literals.length - 1 ? ';' : ''}`);
   }
 
   lines.push('');

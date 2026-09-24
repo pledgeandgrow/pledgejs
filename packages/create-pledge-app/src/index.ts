@@ -1,4 +1,4 @@
-import { writeFileSync, existsSync, cpSync } from 'node:fs';
+import { writeFileSync, existsSync, cpSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -8,9 +8,26 @@ interface NpmRegistryResponse {
   version: string;
 }
 
-async function fetchLatestVersion(pkgName: string): Promise<string | null> {
+/**
+ * The npm dist-tag matching this scaffolder's own release channel.
+ * When create-pledge-app itself is a prerelease (e.g. 0.3.0-beta.0 → tag "beta"),
+ * scaffolded apps must install the matching prerelease framework packages —
+ * pinning `latest` would give them an older, incompatible stable release.
+ */
+function ownChannel(): string {
   try {
-    const res = await fetch(`https://registry.npmjs.org/${pkgName}/latest`);
+    const pkgPath = fileURLToPath(new URL('../package.json', import.meta.url));
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string };
+    const m = pkg.version?.match(/^\d+\.\d+\.\d+-([a-zA-Z]+)/);
+    return m?.[1] ?? 'latest';
+  } catch {
+    return 'latest';
+  }
+}
+
+async function fetchLatestVersion(pkgName: string, tag = 'latest'): Promise<string | null> {
+  try {
+    const res = await fetch(`https://registry.npmjs.org/${pkgName}/${tag}`);
     if (!res.ok) return null;
     const data = (await res.json()) as NpmRegistryResponse;
     return data.version ?? null;
@@ -20,9 +37,13 @@ async function fetchLatestVersion(pkgName: string): Promise<string | null> {
 }
 
 async function resolveLatestVersions(): Promise<{ pledgestack: string; pledgepack: string }> {
+  const channel = ownChannel();
+  // Try the scaffolder's own channel first (e.g. "rc"); if that tag doesn't
+  // exist on the registry yet, fall back to "latest" so scaffolding still
+  // works before the first prerelease is published.
   const [pledgestackVer, pledgepackVer] = await Promise.all([
-    fetchLatestVersion('pledgestack'),
-    fetchLatestVersion('pledgepack'),
+    fetchLatestVersion('pledgestack', channel).then((v) => v ?? (channel === 'latest' ? null : fetchLatestVersion('pledgestack'))),
+    fetchLatestVersion('pledgepack', channel).then((v) => v ?? (channel === 'latest' ? null : fetchLatestVersion('pledgepack'))),
   ]);
 
   return {
@@ -204,6 +225,19 @@ export async function scaffold(options: CreateOptions): Promise<void> {
     ? getFrameworkTemplateDir(framework)
     : getTemplateDir(template);
   cpSync(templateDir, targetDir, { recursive: true });
+
+  // Stamp the health route with the resolved framework version. App code
+  // can't `import { PLEDGE_VERSION } from 'pledgestack'` — the meta package's
+  // index pulls server-only deps (node builtins, react-server-dom-webpack)
+  // into the client bundle.
+  const healthRoute = join(targetDir, 'app', 'api', 'health', 'route.ts');
+  if (existsSync(healthRoute)) {
+    const resolved = versions.pledgestack.replace(/^[\^~]/, '');
+    writeFileSync(
+      healthRoute,
+      readFileSync(healthRoute, 'utf8').replaceAll('__PLEDGE_VERSION__', resolved),
+    );
+  }
 
   writeFileSync(
     join(targetDir, 'package.json'),

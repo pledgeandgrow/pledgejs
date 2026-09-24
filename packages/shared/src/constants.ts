@@ -43,5 +43,5 @@ export const DEFAULT_DEV_PORT = 3000;
 /** Default port for production server */
 export const DEFAULT_PROD_PORT = 3000;
 
-/** Framework version */
-export const PLEDGE_VERSION = '0.1.10';
+/** Framework version — keep in sync with package.json (enforced by scripts/check-release.mjs) */
+export const PLEDGE_VERSION = '0.2.0';

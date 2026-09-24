@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-sitemap",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Automatic sitemap.xml and robots.txt generation for PledgeStack",
   "keywords": [
     "pledgestack"

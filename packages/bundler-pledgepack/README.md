@@ -30,6 +30,8 @@ const result = await pledgepackAdapter.build(config);
 
 The native binary is downloaded by the `pledgepack` package postinstall; allow its build script in pnpm (`allowBuilds`).
 
+Set `PLEDGEPACK_BINARY=/path/to/pledge` to override binary resolution — useful for running a locally-built or newer binary when the published one has a platform-specific bug. A nonexistent path fails fast with a clear error.
+
 ## License
 
 MIT

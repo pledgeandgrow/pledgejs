@@ -50,6 +50,7 @@ npx pledge start
 | `pledge init` | Initialize PledgeStack in existing project |
 | `pledge info` | Show environment info |
 | `pledge doctor` | Diagnose common issues (Rust toolchain, Cargo, env, production readiness) |
+| `pledge env-check` | Validate environment variables against `envSchema` in `pledge.config.ts` |
 | `pledge lint` | Run ESLint with PledgeStack rules |
 | `pledge typecheck` | TypeScript type checking |
 | `pledge test` | Run Vitest + Rust test runner |

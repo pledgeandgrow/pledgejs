@@ -144,6 +144,12 @@ export function resolveImportPath(importPath: string, fromFile: string, rootDir:
     const fromDir = relative(rootDir, fromFile).replace(/\\/g, '/').split('/').slice(0, -1).join('/');
     // posix.normalize collapses every `./` and `../` (the old regexes handled only one level).
     resolved = posix.normalize(fromDir ? `${fromDir}/${importPath}` : importPath);
+    // Specifiers that escape the project root (emitted chunks sometimes carry
+    // stale relative paths) must not be displayed as raw `../../..` chains —
+    // anchor them at the absolute path they actually point to.
+    if (resolved.startsWith('..')) {
+      return join(rootDir, resolved).replace(/\\/g, '/');
+    }
   }
 
   // Add extension if missing

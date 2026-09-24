@@ -1,20 +1,20 @@
-# PledgeStack — Audit Status (1.0.0-rc.0)
+# PledgeStack — Audit Status (0.2.0)
 
 Single source of truth for what is **fixed** and what is **open**. Every item is
 in exactly one of the two sections below; the historical audit lists that used
 to contradict each other ("still open" items that were already fixed) have been
-folded in. Last verified: **2026-09-20**.
+folded in. Last verified: **2026-09-21**.
 
-## Verified numbers (fresh runs on 2026-09-20)
+## Verified numbers (fresh runs on 2026-09-21)
 
 | Check | Result |
 |---|---|
 | `pnpm typecheck` | 0 errors across all projects |
-| `pnpm lint` | 0 errors (75 pre-existing warnings) |
+| `pnpm lint` | 0 errors (76 pre-existing warnings) |
 | `pnpm build:packages` | passes (34 public packages + CLI) |
-| `pnpm test` | **206 files, 1697 tests: 1691 passing, 6 skipped, 0 failing** |
+| `pnpm test` | **206 files, 1698 tests: 1692 passing, 6 skipped, 0 failing** |
 | `pnpm test:coverage` | 29.2% statements / 27.7% branches / 30.9% functions / 29.9% lines; thresholds in `vitest.config.ts` (28 / 26 / 29 / 29) enforced |
-| `pnpm check:release` | passes — 34 public packages at `1.0.0-rc.0`, metadata, READMEs, changelogs, dist entry points |
+| `pnpm check:release` | passes — 34 public packages at `0.2.0`, metadata, READMEs, changelogs, dist entry points |
 | `pnpm audit` | no known vulnerabilities (vitest upgraded to 4.1.11) |
 
 The 5 skipped tests are the Netlify real-CLI deploy tests, gated on
@@ -82,6 +82,34 @@ Legend: 🔴 blocks a working app · 🟠 security · 🟡 feature · ⚪ stub/u
 - Sea-ORM and ML inference wrappers fail at construction with an actionable
   error unless a `driver` / `executor` is supplied (or work through it).
 
+### CLI correctness pass (2026-09-21)
+- 🟠 **`pledge search`** persists documents to `.pledge/search-index.json` and
+  hydrates before querying — indexing and querying previously ran in separate
+  processes over an in-memory index, so queries could never return results.
+- 🟠 **`pledge sync-aliases`** merges generated aliases into existing
+  `compilerOptions.paths` instead of replacing them (it erased workspace
+  `pledgestack-*` mappings at the monorepo root).
+- 🟠 **`pledge deploy`** re-invokes the running CLI (`process.execPath` +
+  `process.argv[1]`) for the build step — no longer requires `pledge` on PATH.
+- 🟠 **`PLEDGEPACK_BINARY`** env var overrides native binary resolution —
+  workaround for the `pledgepack@0.3.3` Windows `__pledge_router`
+  resolution bug (fixed upstream in `0.4.0`, now published on npm).
+- 🟡 Stale versions: `pledge info` reads the installed package version;
+  `PLEDGE_VERSION` is `0.2.0` and enforced by `check:release`; scaffolded
+  health routes return `PLEDGE_VERSION`.
+- 🟡 `doctor` false positives: `pledgestack` meta package satisfies the core
+  dependency check; `not-found.tsx` grouped with a page/layout is detected;
+  `.pledge/` must contain build artifacts to count as a build.
+- 🟡 `env-check` wired into the CLI (was dead code); validates
+  `config.envSchema` like `build`/`start`/`dev`.
+- 🟡 `create-pledge-app` resolves the dist-tag matching its own channel
+  (`latest` for stable releases) before falling back to `latest`.
+- 🟡 `why` anchors root-escaping specifiers to absolute paths; route types no
+  longer emit a duplicate `| '/'`; `init` reports honestly when no
+  package.json exists; `check-routes`/`generate-route-types` give friendly
+  errors without `app/`; `bench` hints without a misleading header; `docs`
+  scans `app/` and explains zero results; `list` reads `server/Cargo.toml`.
+
 ### Docs
 - 📄 README/architecture/capabilities counts, roadmap status, changelog,
   limitations and this file were reconciled on 2026-09-20.
@@ -109,9 +137,10 @@ Details and workarounds are in [docs/limitations.md](./docs/limitations.md).
 | 🟠 Sessions | Stateless HMAC cookies: "regeneration" rotates the cookie but cannot revoke a retained old one |
 | 🟠 OAuth | `email_verified` is surfaced, not enforced — the app must check it |
 | 🟠 Supply chain | SBOMs are generated; release provenance/signing is only configured through npm provenance in the release workflow (not yet exercised) |
-| 🟡 ISR keys | Keys use the pathname; cookie-based locale detection collides across locales |
 | 🟡 Platforms | The PledgePack native binary is downloaded by the `pledgepack` package postinstall (GitHub Releases); the pnpm build script must be allowed (`allowBuilds`) |
-| 📄 Lint | 75 pre-existing `pnpm lint` warnings (unused vars, `prefer-const`, `no-unsafe-fetch` suggestions) |
+| �� PledgePack on Windows | `pledgepack@0.3.3` failed `pledge build` on Windows (`Cannot resolve module: ./__pledge_router` — verbatim-path `/.` handling); fixed upstream and published in `pledgepack@0.4.0` (verified: fresh Windows build, 24 modules, no overrides). `PLEDGEPACK_BINARY=<path>` remains available for testing a locally-built binary |
+| 🟡 Published `pledgestack@0.1.12` | The stable npm package ships no `.d.ts` for its root export, so `pledge typecheck` fails on a freshly scaffolded app (`TS7016`). Fixed in the `0.2.0` package; resolves on publish |
+| �📄 Lint | 75 pre-existing `pnpm lint` warnings (unused vars, `prefer-const`, `no-unsafe-fetch` suggestions) |
 
 ---
 
@@ -119,7 +148,7 @@ Details and workarounds are in [docs/limitations.md](./docs/limitations.md).
 
 The framework serves a working app end to end, the security primitives are
 fixed and tested, the whole workspace builds, typechecks, lints and tests
-green, and the 34 public packages are set up to publish as `1.0.0-rc.0` through
+green, and the 34 public packages are set up to publish as `0.2.0` through
 Changesets. What remains is the stub layer (Rust integrations without crates,
 optional native addons), HMR only where bundlers provide it, and the documented
 feature gaps above.

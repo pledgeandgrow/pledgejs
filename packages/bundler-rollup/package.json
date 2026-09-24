@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-bundler-rollup",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Rollup bundler adapter for PledgeStack — use Rollup instead of PledgePack",
   "keywords": [
     "pledgestack"

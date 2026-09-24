@@ -23,4 +23,12 @@ describe('pledge why', () => {
     expect(resolveImportPath('../../shared/util.js', from, root)).toBe('out/a/shared/util.js');
     expect(resolveImportPath('./x.js', from, root)).toBe('out/a/b/c/x.js');
   });
+
+  it('anchors specifiers that escape the project root instead of emitting raw ../../ chains', () => {
+    const root = join(process.cwd(), 'proj');
+    const from = join(root, '.pledge', 'chunk.js');
+    const resolved = resolveImportPath('../../../../../../app/page.js', from, root)!;
+    expect(resolved).not.toContain('..');
+    expect(resolved.replace(/\\/g, '/')).toContain('app/page.js');
+  });
 });

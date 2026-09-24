@@ -372,8 +372,15 @@ export async function deploy(
   // Step 1: Build
   console.log('\n  PledgeStack — Building for deployment...\n');
   const { execSync } = await import('node:child_process');
+  // Re-invoke the running CLI entry (process.argv[1]) instead of bare `pledge`:
+  // the bin is not on PATH when invoked via `node dist/bin.js` or a package
+  // manager that doesn't shim .bin into PATH for the child process.
+  const cliEntry = process.argv[1];
+  const buildCmd = cliEntry
+    ? `${JSON.stringify(process.execPath)} ${JSON.stringify(cliEntry)} build`
+    : 'pledge build';
   try {
-    execSync('pledge build', {
+    execSync(buildCmd, {
       cwd: config.rootDir,
       stdio: options.verbose ? 'inherit' : 'pipe',
       encoding: 'utf-8',

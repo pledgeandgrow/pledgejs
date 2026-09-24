@@ -248,15 +248,14 @@ ESM output that Node can't resolve).
 3. Merging that PR publishes every public package (`pnpm release` = build all
    packages → `scripts/check-release.mjs --dist` → `changeset publish`).
 4. 34 packages are public and share one version (Changesets `fixed` group);
-   while `.changeset/pre.json` exists versions are `1.0.0-rc.N` and publish under
-   the `rc` dist-tag. Library packages ship esbuild-bundled ESM
+   versions are `0.x.y`, published under the `latest` dist-tag. Library packages ship esbuild-bundled ESM
    (`scripts/bundle-package.mjs`) plus `tsc` declarations; the CLI bundles
    everything it needs so it works on its own. The VS Code extensions are private.
 
 ## Testing
 
 - **Framework:** Vitest 4.1.11
-- **Scope:** 206 test files, 1697 tests (1691 passing, 6 skipped, 0 failing as of 2026-09-20)
+- **Scope:** 206 test files, 1698 tests (1692 passing, 6 skipped, 0 failing as of 2026-09-21)
 - **Environment:** Node; DOM/React tests (a11y, overlay) opt into jsdom with a `// @vitest-environment jsdom` docblock
 - **Coverage:** v8 provider, includes all `packages/*/src/**/*.ts`; global thresholds are enforced in `vitest.config.ts`
 - **Timeout:** 15s default (30s for sccache test on Windows)

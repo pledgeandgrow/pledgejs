@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { startNodeServer, loadEnv, reportProductionPosture } from 'pledgestack-server';
 import { resolveBundlerAdapter } from '../bundler-resolver';
 import { assertEnv } from 'pledgestack-shared';
@@ -53,11 +55,29 @@ export async function startCommand(options: { port?: number; hostname?: string }
 
   const bundlerName = config.bundler ?? 'pledgepack';
 
-  // For pledgepack, try the native Rust production server first
+  // For pledgepack, try the native Rust production server first — but only
+  // when the app has no API routes: `pledge serve` is a static file server
+  // and cannot execute route handlers.
   if (bundlerName === 'pledgepack') {
     const { resolveBinary, runPledgepack } = await import('pledgestack-bundler-pledgepack');
     const binary = resolveBinary();
-    if (binary) {
+
+    let hasApiRoutes = false;
+    try {
+      const { scanAppDir, resolveRoutes } = await import('pledgestack-core');
+      const appPath = join(config.rootDir, config.appDir);
+      if (existsSync(appPath)) {
+        const routes = resolveRoutes(await scanAppDir(appPath), config);
+        hasApiRoutes = routes.some((r) => r.mode === 'api');
+      }
+    } catch {
+      // Scan failure shouldn't block startup — assume API routes may exist
+      hasApiRoutes = true;
+    }
+
+    if (binary && hasApiRoutes) {
+      console.log('  → API routes detected — using Node.js server (PledgePack serve is static-only)\n');
+    } else if (binary) {
       console.log('  → Using PledgePack Rust production server (axum/hyper)\n');
       await runPledgepack([
         'serve',
@@ -66,9 +86,10 @@ export async function startCommand(options: { port?: number; hostname?: string }
         '--out-dir', config.outDir,
       ]);
       return;
+    } else {
+      console.warn('  ⚠ PledgePack binary not found — falling back to Node.js server');
+      console.warn('  For best performance, install pledgepack: npm install pledgepack\n');
     }
-    console.warn('  ⚠ PledgePack binary not found — falling back to Node.js server');
-    console.warn('  For best performance, install pledgepack: npm install pledgepack\n');
   } else {
     console.log(`  → Using ${bundlerName} bundler with Node.js server\n`);
   }

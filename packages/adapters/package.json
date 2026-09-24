@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-adapters",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Edge and serverless deployment adapters for PledgeStack — Cloudflare, Vercel, Deno, Lambda, Netlify",
   "keywords": [
     "pledgestack"

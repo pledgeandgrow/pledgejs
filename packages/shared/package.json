@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-shared",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Shared types and utilities for PledgeStack",
   "keywords": [
     "pledgestack",

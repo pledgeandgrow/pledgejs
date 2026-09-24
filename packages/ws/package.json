@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-ws",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "WebSocket support for PledgeStack — real-time routes via ws protocol",
   "keywords": [
     "pledgestack"

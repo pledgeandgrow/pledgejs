@@ -157,6 +157,45 @@ export function escapeJsonForScript(json: string): string {
 }
 
 /**
+ * Extracts the exact byte content of every executable inline <script> body
+ * in an HTML document. External scripts (`src=`) and inert data blocks
+ * (application/json, …) are excluded — they're governed by 'self' or don't
+ * execute at all.
+ */
+export function extractInlineScriptBodies(html: string): string[] {
+  const bodies: string[] = [];
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+    const attrs = m[1]!;
+    const body = m[2]!;
+    if (/\bsrc\s*=/i.test(attrs)) continue;
+    if (!isExecutableScript(attrs)) continue;
+    if (body.trim() === '') continue;
+    bodies.push(body);
+  }
+  return bodies;
+}
+
+/**
+ * CSP `script-src` hash sources (`'sha256-…'`) for every inline script in
+ * the document — the alternative to nonces for HTML that is shared across
+ * requests (ISR cache, prerendered pages): the bytes are frozen, so the
+ * hashes stay valid. Uses WebCrypto, so it works in Node 20+ and edge
+ * runtimes.
+ */
+export async function inlineScriptHashes(html: string): Promise<string[]> {
+  const bodies = extractInlineScriptBodies(html);
+  const hashes: string[] = [];
+  const encoder = new TextEncoder();
+  for (const body of bodies) {
+    const digest = await crypto.subtle.digest('SHA-256', encoder.encode(body));
+    let binary = '';
+    for (const b of new Uint8Array(digest)) binary += String.fromCharCode(b);
+    hashes.push(`'sha256-${btoa(binary)}'`);
+  }
+  return hashes;
+}
+
+/**
  * Finds cross-origin <script src>/<link href> references in emitted HTML
  * that carry no `integrity` attribute. Third-party subresources without
  * SRI execute with full page privilege if the CDN is compromised — the

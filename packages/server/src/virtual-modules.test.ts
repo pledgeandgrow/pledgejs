@@ -117,7 +117,7 @@ describe('tryServeRouterModule route-map keys', () => {
       tryServeRouterModule({ url: '/__pledge_router' } as any, res, {
         rootDir: tempDir, appDir: 'app',
       } as PledgeConfig);
-      const keys = [...body.matchAll(/^  ("[^"]+"): \{ type/gm)].map((m) => m[1]);
+      const keys = [...body.matchAll(/^ {2}("[^"]+"): \{ type/gm)].map((m) => m[1]);
       expect(new Set(keys).size).toBe(keys.length);
       expect(keys).toContain('"layout:/"');
       expect(keys).toContain('"layout:/blog"');

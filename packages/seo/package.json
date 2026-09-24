@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-seo",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "SEO utilities for PledgeStack — JSON-LD structured data, meta tags, social cards",
   "keywords": [
     "pledgestack"

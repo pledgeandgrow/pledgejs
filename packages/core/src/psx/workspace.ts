@@ -293,21 +293,27 @@ export async function removeCrate(
 
 /**
  * Lists all Rust crates in the project's Cargo.toml.
+ *
+ * Two project layouts exist: the PSX workspace layout keeps deps in the root
+ * Cargo.toml under [workspace.dependencies], while the `pledge` scaffold
+ * template puts a plain package manifest at server/Cargo.toml with deps under
+ * [dependencies]. Both are checked so `pledge list` works on either.
  */
 export async function listCrates(projectRoot: string): Promise<Record<string, string>> {
-  const cargoPath = join(projectRoot, 'Cargo.toml');
+  const cargoPath = existsSync(join(projectRoot, 'Cargo.toml'))
+    ? join(projectRoot, 'Cargo.toml')
+    : join(projectRoot, 'server', 'Cargo.toml');
   if (!existsSync(cargoPath)) return {};
 
   const content = await readFile(cargoPath, 'utf-8');
   const crates: Record<string, string> = {};
 
-  // Parse [workspace.dependencies] section
-  const match = content.match(/\[workspace\.dependencies\]\r?\n([\s\S]*?)(?:\r?\n\[|$)/);
-  if (match) {
-    const depSection = match[1];
+  for (const section of ['workspace\\.dependencies', 'dependencies']) {
+    const match = content.match(new RegExp(`\\[${section}\\]\\r?\\n([\\s\\S]*?)(?:\\r?\\n\\[|$)`));
+    if (!match) continue;
     const depRegex = /^(\S+)\s*=\s*(.+)$/gm;
     let depMatch: RegExpExecArray | null;
-    while ((depMatch = depRegex.exec(depSection)) !== null) {
+    while ((depMatch = depRegex.exec(match[1])) !== null) {
       crates[depMatch[1]] = depMatch[2].trim();
     }
   }

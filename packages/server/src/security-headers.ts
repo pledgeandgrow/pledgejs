@@ -76,6 +76,13 @@ export interface SecurityHeaderOptions {
    */
   allowEval?: boolean;
   /**
+   * CSP `script-src` hash sources (`'sha256-…'`) covering the response's
+   * inline <script> bodies. Used when a per-request nonce is impossible —
+   * ISR-cached and prerendered HTML is frozen, so hashes are the strict
+   * alternative to 'unsafe-inline'. Computed from the final response body.
+   */
+  scriptHashes?: string[];
+  /**
    * Emit the policy as Content-Security-Policy-Report-Only — the browser
    * reports violations without blocking. Used by config.cspReportOnly to
    * trial strict CSP before enforcing it.
@@ -180,10 +187,16 @@ export function applySecurityHeaders(
         reportDirective,
       ].join('; ') + ';';
     } else {
-      // Fallback policy for responses that can't carry a nonce — ISR-cached
-      // HTML is shared across requests, so a frozen nonce would never match
-      // the next request's CSP nonce. 'unsafe-inline' is retained here.
-      result[cspHeaderName] = `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; ${baseline.join('; ')}; ${reportDirective};`;
+      // Hash-based policy for responses that can't carry a nonce —
+      // ISR-cached HTML is shared across requests, so a frozen nonce would
+      // never match, but the inline scripts' bytes are frozen too, making
+      // 'sha256-…' sources exact and stable. 'unsafe-inline' survives only
+      // as the last resort when no hashes were computed (non-HTML bodies,
+      // streaming paths that don't expose the payload).
+      const scriptSrc = options.scriptHashes?.length
+        ? `'self' ${options.scriptHashes.join(' ')}`
+        : "'self' 'unsafe-inline'";
+      result[cspHeaderName] = `default-src 'self'; script-src ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; ${baseline.join('; ')}; ${reportDirective};`;
     }
   }
 

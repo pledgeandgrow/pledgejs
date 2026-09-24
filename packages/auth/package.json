@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-auth",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Authentication helpers for PledgeStack — cookie sessions, JWT, OAuth providers",
   "keywords": [
     "pledgestack",

@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-bundler-vite",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Vite bundler adapter for PledgeStack — use Vite instead of PledgePack",
   "keywords": [
     "pledgestack"

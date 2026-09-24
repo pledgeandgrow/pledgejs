@@ -12,7 +12,7 @@ export default defineConfig({
       include: ['packages/*/src/**/*.ts'],
       exclude: ['packages/*/src/**/*.test.ts', 'packages/*/src/**/*.test.tsx', 'packages/*/src/**/*.d.ts', 'packages/pledgepack/**'],
       // Ratchet: set just below the level currently measured by `pnpm test:coverage`
-      // (statements 29.20 / branches 27.68 / functions 30.87 / lines 29.91 at 1.0.0-rc.0).
+      // (statements 29.20 / branches 27.68 / functions 30.87 / lines 29.91 at 0.2.0).
       // Raise these as coverage improves; never lower them to make a change pass.
       thresholds: {
         statements: 28,

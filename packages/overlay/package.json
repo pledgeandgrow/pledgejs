@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-overlay",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Error overlay and DevTools for PledgeStack — structured errors, route inspector, cache viewer",
   "keywords": [
     "pledgestack"

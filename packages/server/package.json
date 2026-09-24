@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-server",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Node.js and Edge server runtime for PledgeStack",
   "keywords": [
     "pledgestack",
@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "esbuild": "^0.24.0",
-    "pledgepack": "^0.3.3",
+    "pledgepack": "^0.4.0",
     "pledgestack-auth": "workspace:*",
     "pledgestack-core": "workspace:*",
     "pledgestack-rss": "workspace:*",

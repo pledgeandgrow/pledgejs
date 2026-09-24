@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server, request as httpRequest } from 'node:http';
 import { join, extname, sep } from 'node:path';
 import { createHash } from 'node:crypto';
-import { timingSafeEqualStr } from 'pledgestack-shared';
+import { timingSafeEqualStr, inlineScriptHashes } from 'pledgestack-shared';
 import type { PledgeConfig, BundlerAdapter } from 'pledgestack-shared';
 import { createRequestHandler } from './handler';
 import { tryServePledgeVirtual, tryServeRouterModule } from './virtual-modules';
@@ -221,12 +221,24 @@ export function startNodeServer(options: NodeServerOptions) {
             allowEval: true,
           }
         : { allowEval: isDev };
+      // ISR/prerendered responses carry no per-request nonce — derive CSP
+      // 'sha256-…' hash sources from the frozen inline scripts instead of
+      // falling back to 'unsafe-inline' (see security-headers.ts).
+      const contentType = response.headers?.['Content-Type']
+        ?? response.headers?.['content-type'];
+      const scriptHashes = !response.cspNonce
+        && typeof response.body === 'string'
+        && typeof contentType === 'string'
+        && contentType.includes('text/html')
+          ? await inlineScriptHashes(response.body)
+          : undefined;
       const headers: Record<string, string | string[]> = applySecurityHeaders(
         { ...response.headers },
         config,
         isHttps,
         {
           cspNonce: response.cspNonce,
+          scriptHashes,
           reportOnly: config.cspReportOnly === true,
           reportUri: '/__pledge__/csp-report',
           ...cspExtras,

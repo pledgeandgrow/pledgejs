@@ -320,9 +320,9 @@ export default defineConfig({
 /**
  * Updates package.json with PledgeStack scripts and dependencies.
  */
-async function updatePackageJson(rootDir: string): Promise<void> {
+async function updatePackageJson(rootDir: string): Promise<boolean> {
   const pkgPath = join(rootDir, 'package.json');
-  if (!existsSync(pkgPath)) return;
+  if (!existsSync(pkgPath)) return false;
 
   const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
 
@@ -346,6 +346,7 @@ async function updatePackageJson(rootDir: string): Promise<void> {
   if (!pkg.devDependencies['typescript']) pkg.devDependencies['typescript'] = '^5.7.0';
 
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8');
+  return true;
 }
 
 /**
@@ -440,8 +441,12 @@ export async function initCommand(opts: InitOptions = {}): Promise<void> {
 
   // Update package.json
   console.log('  → Updating package.json...');
-  await updatePackageJson(rootDir);
-  console.log('    ✓ scripts and dependencies added');
+  const pkgUpdated = await updatePackageJson(rootDir);
+  if (pkgUpdated) {
+    console.log('    ✓ scripts and dependencies added');
+  } else {
+    console.log('    ⚠ No package.json found — skipping script/dependency updates');
+  }
 
   // Update .gitignore
   console.log('  → Updating .gitignore...');

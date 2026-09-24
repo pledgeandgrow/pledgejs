@@ -8,9 +8,9 @@ safely enough for production. Ordered by severity within each tier.
 
 Legend: 🔴 security-critical · 🟠 reliability/correctness · 🟡 performance/ops · ⚊ build/devops
 
-> **Status (2026-09-20, 1.0.0-rc.0):** The 50 goals below were worked through in
+> **Status (2026-09-20, 0.2.0):** The 50 goals below were worked through in
 > source with unit tests, and the workspace is green (`pnpm typecheck`: 0 errors;
-> `pnpm test`: **1691 passing, 0 failing, 6 skipped across 206 files**). An earlier
+> `pnpm test`: **1692 passing, 0 failing, 6 skipped across 206 files**). An earlier
 > revision of this page claimed "all 50 IMPLEMENTED and VERIFIED"; that overstated
 > it — the goals were not each independently re-verified, and a 2026-09-20 spot
 > check found at least one only partially done:
@@ -227,9 +227,9 @@ Status as of 2026-09-20:
 
 ## Verification status
 
-- `pnpm typecheck`: 0 errors (2026-09-20)
-- `pnpm lint`: 0 errors, 75 warnings (2026-09-20)
-- `pnpm test`: 1691 passing, 0 failing, 6 skipped across 206 files (2026-09-20)
+- `pnpm typecheck`: 0 errors (2026-09-21)
+- `pnpm lint`: 0 errors, 76 warnings (2026-09-21)
+- `pnpm test`: 1692 passing, 0 failing, 6 skipped across 206 files (2026-09-21)
 - `pnpm audit`: no known vulnerabilities (2026-09-20; vitest 4.1.11)
 
 Each of the 50 goals above was found by reading actual source files, not from

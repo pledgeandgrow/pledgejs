@@ -70,9 +70,11 @@ export async function syncAliasesCommand(config: PledgeConfig): Promise<void> {
   // Generate paths from alias config
   const paths = aliasToTsPaths(config.alias, config.rootDir);
 
-  // Check if paths already match
-  const existingPaths = compilerOptions.paths as Record<string, string[]> | undefined;
-  const pathsMatch = existingPaths && JSON.stringify(existingPaths) === JSON.stringify(paths);
+  // Merge into existing paths — unrelated mappings (e.g. workspace package
+  // aliases in a monorepo tsconfig) must be preserved, not clobbered.
+  const existingPaths = (compilerOptions.paths ?? {}) as Record<string, string[]>;
+  const merged = { ...existingPaths, ...paths };
+  const pathsMatch = JSON.stringify(existingPaths) === JSON.stringify(merged);
 
   if (pathsMatch) {
     console.log('\n  ✓ tsconfig.json paths already up to date.\n');
@@ -80,7 +82,7 @@ export async function syncAliasesCommand(config: PledgeConfig): Promise<void> {
   }
 
   // Update paths
-  compilerOptions.paths = paths;
+  compilerOptions.paths = merged;
   compilerOptions.baseUrl = '.';
 
   // Write back with 2-space indentation

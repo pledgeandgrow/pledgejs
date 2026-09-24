@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-bundler-turbopack",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Turbopack bundler adapter for PledgeStack — use Turbopack instead of PledgePack",
   "keywords": [
     "pledgestack"

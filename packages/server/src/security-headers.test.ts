@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { applySecurityHeaders, DEFAULT_SECURITY_HEADERS } from './security-headers';
+import { inlineScriptHashes } from 'pledgestack-shared';
 import type { PledgeConfig } from 'pledgestack-shared';
 
 const config: PledgeConfig = {
@@ -74,9 +75,34 @@ describe('secure-by-default hardening', () => {
     expect(csp).not.toMatch(/script-src [^;]*'unsafe-inline'/);
   });
 
-  it('keeps the unsafe-inline fallback when no nonce is provided (ISR/static)', () => {
+  it('keeps the unsafe-inline fallback when no nonce and no hashes are provided', () => {
     const result = applySecurityHeaders({}, config);
     expect(result['Content-Security-Policy']).toContain("script-src 'self' 'unsafe-inline'");
+  });
+
+  it('emits hash-based script-src for ISR/prerendered HTML (no unsafe-inline)', async () => {
+    // The ISR path can't use a per-request nonce — the HTML is frozen and
+    // shared across requests — so it supplies 'sha256-…' hashes instead.
+    const html = '<html><body><script>window.__X__=1</script><script src="/app.js"></script></body></html>';
+    const scriptHashes = await inlineScriptHashes(html);
+    expect(scriptHashes).toHaveLength(1); // the src= script is not hashed
+
+    const result = applySecurityHeaders({}, config, false, { scriptHashes });
+    const csp = result['Content-Security-Policy'];
+    expect(csp).toContain(`script-src 'self' ${scriptHashes[0]}`);
+    expect(csp).not.toMatch(/script-src [^;]*'unsafe-inline'/);
+  });
+
+  it('hash source matches the exact inline script bytes a browser hashes', async () => {
+    // Browsers hash the raw bytes between <script> and </script>. If our
+    // extraction deviates (whitespace trimming, decoding entities) the
+    // script is blocked — verify the emitted hash is what a browser computes.
+    const body = 'console.log("hi");';
+    const html = `<script>${body}</script>`;
+    const [hash] = await inlineScriptHashes(html);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+    const expected = `'sha256-${Buffer.from(digest).toString('base64')}'`;
+    expect(hash).toBe(expected);
   });
 
   it('appends dev bundler origins to script-src and connect-src', () => {

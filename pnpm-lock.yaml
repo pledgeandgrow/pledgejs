@@ -53,8 +53,8 @@ importers:
         specifier: ^27.4.0
         version: 27.4.0
       pledgepack:
-        specifier: ^0.3.3
-        version: 0.3.3
+        specifier: ^0.4.0
+        version: 0.4.0
       prettier:
         specifier: ^3.4.0
         version: 3.9.5
@@ -156,8 +156,8 @@ importers:
         specifier: '>=0.25.0'
         version: 0.28.1
       pledgepack:
-        specifier: ^0.3.3
-        version: 0.3.3
+        specifier: ^0.4.0
+        version: 0.4.0
       pledgestack-core:
         specifier: workspace:*
         version: link:../core
@@ -318,8 +318,8 @@ importers:
         specifier: ^2.4.0
         version: 2.7.0
       pledgepack:
-        specifier: ^0.3.3
-        version: 0.3.3
+        specifier: ^0.4.0
+        version: 0.4.0
       postcss:
         specifier: '>=8.5.23 <9'
         version: 8.5.28
@@ -818,8 +818,8 @@ importers:
         specifier: '>=0.25.0'
         version: 0.28.1
       pledgepack:
-        specifier: ^0.3.3
-        version: 0.3.3
+        specifier: ^0.4.0
+        version: 0.4.0
       pledgestack-auth:
         specifier: workspace:*
         version: link:../auth
@@ -2900,8 +2900,8 @@ packages:
     resolution: {integrity: sha512-uB80kBFb/tfd68bVleG9T5GGsGPjJrLAUpR5PZIrhBnIaRTQRjqdJSsIKkOP6OAIFbj7GOrcudc5pNjZ+geV2g==}
     engines: {node: '>=6'}
 
-  pledgepack@0.3.3:
-    resolution: {integrity: sha512-/vB45TwGbdStx5zKyIjGxR0mYUmtQatLSjtU8WG/0XYxlmxTq8JynpU3dzRWF4A0Oo/Csyk7GzPQAHYjGsnAGA==}
+  pledgepack@0.4.0:
+    resolution: {integrity: sha512-N/HSt4Ly1LYNiIEXXFs8/bE+nqKw+jFZ9l44QF5t8HYNmH17QZ+n5yfoSOB0zherAwZYYu+LH3radB5gFid9Jw==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -5242,7 +5242,7 @@ snapshots:
 
   pify@4.0.1: {}
 
-  pledgepack@0.3.3: {}
+  pledgepack@0.4.0: {}
 
   postcss-value-parser@4.2.0: {}
 

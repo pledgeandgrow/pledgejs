@@ -382,6 +382,8 @@ export async function docsCommand(config: PledgeConfig, opts: { output?: string 
   // Also check if this is a user project (not the monorepo)
   const userSrc = join(config.rootDir, 'src');
   if (existsSync(userSrc)) srcDirs.push(userSrc);
+  const userApp = join(config.rootDir, config.appDir);
+  if (existsSync(userApp)) srcDirs.push(userApp);
 
   console.log('\n  PledgeStack — Generating API documentation...\n');
 
@@ -395,6 +397,14 @@ export async function docsCommand(config: PledgeConfig, opts: { output?: string 
       const entries = await parseSourceFile(file, config.rootDir);
       allEntries.push(...entries);
     }
+  }
+
+  if (allEntries.length === 0) {
+    console.log('  ⚠ No exported declarations found.');
+    console.log('    Scanned: ' + srcDirs.filter((d) => existsSync(d)).map((d) => relative(config.rootDir, d)).join(', '));
+    console.log('    `pledge docs` documents TypeScript source exports — run it from a');
+    console.log('    project with a src/ or app/ directory, or from the PledgeStack monorepo.\n');
+    return;
   }
 
   console.log(`  ✓ Found ${allEntries.length} exported declarations\n`);

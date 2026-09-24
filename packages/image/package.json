@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-image",
-  "version": "1.0.0-rc.0",
+  "version": "0.2.0",
   "description": "Image optimization component for PledgeStack — responsive srcset, WebP/AVIF, blur placeholders",
   "keywords": [
     "pledgestack"

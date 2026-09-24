@@ -1,4 +1,5 @@
 import type { PledgeConfig } from 'pledgestack-shared';
+import { inlineScriptHashes } from 'pledgestack-shared';
 import { createRequestHandler } from './handler';
 import { loadInstrumentation } from './instrumentation';
 import { applySecurityHeaders } from './security-headers';
@@ -48,8 +49,19 @@ export function createEdgeHandler(options: EdgeServerOptions) {
       // request.url is the real URL — don't honor a client-supplied
       // x-forwarded-proto claim.
       const isHttps = url.protocol === 'https:';
+      // No per-request nonce on ISR/prerendered responses — hash the frozen
+      // inline scripts for CSP instead of falling back to 'unsafe-inline'.
+      const edgeContentType = result.headers?.['Content-Type']
+        ?? result.headers?.['content-type'];
+      const scriptHashes = !result.cspNonce
+        && typeof result.body === 'string'
+        && typeof edgeContentType === 'string'
+        && edgeContentType.includes('text/html')
+          ? await inlineScriptHashes(result.body)
+          : undefined;
       const finalHeaders = new Headers(applySecurityHeaders({ ...result.headers }, config, isHttps, {
         cspNonce: result.cspNonce,
+        scriptHashes,
         reportOnly: config.cspReportOnly === true,
         reportUri: '/__pledge__/csp-report',
       }));

@@ -14,6 +14,17 @@ export function resolveBinary(): string | null {
   const platform = process.platform;
   const arch = process.arch;
 
+  // Explicit override — lets users point at a locally-built or newer binary
+  // (e.g. when the published binary has a platform-specific bug) without
+  // patching node_modules.
+  const override = process.env.PLEDGEPACK_BINARY;
+  if (override) {
+    if (!existsSync(override)) {
+      throw new Error(`PLEDGEPACK_BINARY is set to "${override}" but that file does not exist.`);
+    }
+    return override;
+  }
+
   // Note: there used to be a lookup here for scoped per-platform packages
   // (`@pledgepack/darwin-arm64` etc.), mirroring the esbuild/swc pattern. That
   // family of packages has never been published — pledgepack ships one
