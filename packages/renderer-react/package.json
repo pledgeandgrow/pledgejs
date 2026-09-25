@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-renderer-react",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "React renderer adapter for PledgeStack — SSR, streaming, RSC, hydration",
   "keywords": [
     "pledgestack"

@@ -1,5 +1,15 @@
 # pledgestack-server
 
+## 0.2.1
+
+### Patch Changes
+
+- pledgestack-auth@0.2.1
+- pledgestack-core@0.2.1
+- pledgestack-rss@0.2.1
+- pledgestack-shared@0.2.1
+- pledgestack-sitemap@0.2.1
+
 ## 0.2.0
 
 ### Major Changes

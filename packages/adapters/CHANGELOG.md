@@ -1,5 +1,13 @@
 # pledgestack-adapters
 
+## 0.2.1
+
+### Patch Changes
+
+- pledgestack-core@0.2.1
+- pledgestack-server@0.2.1
+- pledgestack-shared@0.2.1
+
 ## 0.2.0
 
 ### Major Changes

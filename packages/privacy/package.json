@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-privacy",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Privacy & compliance helpers for PledgeStack — GDPR, CCPA, PII redaction, encryption, consent management",
   "keywords": [
     "pledgestack",

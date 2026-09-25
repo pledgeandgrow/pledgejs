@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-bundler-pledgepack",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "PledgePack bundler adapter for PledgeStack — wraps the Rust-based PledgePack binary",
   "keywords": [
     "pledgestack"
