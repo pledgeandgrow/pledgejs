@@ -1,8 +1,8 @@
 # Capabilities — What's Working
 
 All features below are implemented, tested, and verified working as of
-2026-09-21. Tests: 1692 passing, 0 failing, 6 skipped (real-CLI deploy
-tests gated on external tokens) across 206 files. Typecheck: 0 errors.
+2026-09-21. Tests: 1638 passing, 0 failing, 6 skipped (real-CLI deploy
+tests gated on external tokens) across 194 files. Typecheck: 0 errors.
 Where a capability depends on optional pieces (native addons, `sharp`, a
 bundler's own dev server) it is qualified below and in [limitations.md](./limitations.md).
 
@@ -201,7 +201,7 @@ bundler's own dev server) it is qualified below and in [limitations.md](./limita
 - Rust-accelerated client hooks (optional)
 
 ### Fast Refresh / HMR
-- Hot module replacement is provided by the bundler's own dev server (Vite, webpack-dev-server, Rsbuild, the PledgePack binary); the esbuild fallback servers do not live-reload — see [limitations.md](./limitations.md#bundler-hmr-hot-module-replacement)
+- Hot module replacement is provided by the PledgePack binary's dev server, or Vite's own dev server when using `bundler: 'vite'` (the pure-JS fallback) — see [limitations.md](./limitations.md#bundler-hmr-hot-module-replacement)
 - Error overlay
 - Dev toolbar (`DevTools`; the middleware only injects a script when given a `scriptUrl`)
 

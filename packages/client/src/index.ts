@@ -1,6 +1,10 @@
 export * from './hydrate';
 export * from './router';
 export * from './route-chain';
+export * from './navigation';
+// router.ts re-exports navigation's classifyNavigation — the duplicate star
+// export is ambiguous, so name it explicitly to keep it in the public API.
+export { classifyNavigation } from './navigation';
 export * from './error-overlay';
 export * from './fast-refresh';
 export * from './pledge';

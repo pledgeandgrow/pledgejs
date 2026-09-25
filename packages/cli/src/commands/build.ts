@@ -4,9 +4,9 @@ import type { PledgeConfig } from 'pledgestack-shared';
 import { PluginRunner } from 'pledgestack-shared';
 import { resolveBundlerAdapter } from '../bundler-resolver';
 import { scanAppDir, resolveRoutes, generateStaticPages, generateStaticExport, renderSSR, buildAllTargets, writeRouteTypes, detectRouteConflicts, formatRouteConflicts } from 'pledgestack-core';
-import { createModuleLoader, loadEnv, reportProductionPosture, computeAssetIntegrity } from 'pledgestack-server';
+import { createModuleLoader, loadEnv, reportProductionPosture, computeAssetIntegrity, fingerprintPledgeAssets } from 'pledgestack-server';
 import { processTailwind, ensureTailwindConfig } from '../tailwind';
-import { assertEnv } from 'pledgestack-shared';
+import { assertEnv, setPledgeAssetManifest } from 'pledgestack-shared';
 
 /**
  * Builds the project for production.
@@ -107,6 +107,22 @@ export async function buildCommand(opts?: { crossCompile?: boolean }): Promise<v
   if (config.tailwind) {
     await ensureTailwindConfig(config.rootDir);
     await processTailwind({ config });
+  }
+
+  // 4b. Fingerprint framework client assets — emit content-hashed copies of
+  // client.js / client.css / rsc-client.js plus __pledge__/asset-manifest.json
+  // so rendered HTML references immutable URLs a CDN can cache forever. Must
+  // run after the bundler (client.js) and Tailwind (client.css) output exist,
+  // and before SSG/SSR renders pages that embed the URLs.
+  try {
+    const assetManifest = await fingerprintPledgeAssets(config);
+    setPledgeAssetManifest(assetManifest);
+    if (Object.keys(assetManifest.urls).length > 0) {
+      console.log(`  ✓ Fingerprinted ${Object.keys(assetManifest.urls).length} asset(s)`);
+    }
+  } catch (err) {
+    // Stable URLs keep working — a fingerprinting failure must not fail builds.
+    console.warn(`  ⚠ Asset fingerprinting skipped: ${err instanceof Error ? err.message : err}`);
   }
 
   // 5. Load all bundled modules for SSG (reads from .pledge/ output, not esbuild)

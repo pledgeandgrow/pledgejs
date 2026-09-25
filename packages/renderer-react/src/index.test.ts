@@ -171,9 +171,10 @@ describe('ReactRendererAdapter', () => {
       expect(js).toContain('initPledgeHydration');
     });
 
-    it('imports React through the dev server in dev mode', () => {
+    it('imports React via bare specifiers resolved by the dev importmap', () => {
       const js = adapter.generateClientScript({ isDev: true, pledgepackPort: 4123, rscEnabled: false });
-      expect(js).toContain('http://localhost:4123/node_modules/.vite/react-dom/client.js');
+      expect(js).toContain("from 'react-dom/client'");
+      expect(js).toContain("from 'react'");
     });
   });
 });

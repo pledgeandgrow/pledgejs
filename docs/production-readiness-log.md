@@ -323,8 +323,12 @@ unchanged), avoiding no-op history entries and needless re-render cycles.
 
 ## Tier 5 — Build & CI/CD (5 goals)
 
+> **2026-09-25:** The webpack, rollup, turbopack and rsbuild adapters were
+> removed; PledgePack is the default and Vite remains as the JS fallback.
+> Goals 46 (webpack minification) is moot; 47 applies to Vite + PledgePack.
+
 ### 46. Webpack production minification + content hashes + split chunks
-**File:** `packages/bundler-webpack/src/index.ts`
+**File:** `packages/bundler-webpack/src/index.ts` *(adapter removed 2026-09-25)*
 
 Webpack production builds now enable minification (`minimize: true`),
 content-hashed filenames (`[name].[contenthash:8].js`), shared chunk

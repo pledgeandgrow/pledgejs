@@ -1,6 +1,17 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode, type ComponentType } from 'react';
-import { createElement } from 'react';
+import { createElement, isValidElement, Children, Fragment, Suspense, Component } from 'react';
 import { routeMapKey } from './route-chain';
+import {
+  classifyNavigation,
+  fetchPage,
+  prefetchPage,
+  registerSpaNavigation,
+  swapRootContent,
+  type FetchedPage,
+} from './navigation';
+import { rehydratePledges } from './hydrate-pledges';
+
+export { classifyNavigation };
 
 /** Route data emitted by SSR into `window.__PLEDGE_ROUTE__`. */
 export interface PledgeRouteData {
@@ -32,7 +43,6 @@ export function resolveRouteElement(
   if (!pageEntry?.component) return null;
 
   const props = { params: routeData.params, searchParams: routeData.searchParams };
-  let element: ReactNode = createElement(pageEntry.component, props);
 
   // Ancestor prefixes of the pattern, root → leaf: '/', '/blog', '/blog/:slug'.
   const prefixes = ['/'];
@@ -41,16 +51,113 @@ export function resolveRouteElement(
     acc += `/${seg}`;
     prefixes.push(acc);
   }
-  const layouts: ComponentType<Record<string, unknown>>[] = [];
-  for (const prefix of prefixes) {
-    const entry = routes[routeMapKey('layout', prefix)] ?? routes[prefix];
-    if (entry && entry.type === 'layout' && entry.component) layouts.push(entry.component);
-  }
-  // Wrap innermost (leaf) first so the root layout ends up outermost.
-  for (let i = layouts.length - 1; i >= 0; i--) {
-    element = createElement(layouts[i], { ...props, children: element });
+
+  // Per-segment error/loading/template wrappers — the server wraps every page
+  // and layout in these boundaries (buildElementTree in renderer-react), and
+  // their anchors (<!--$-->, error fallbacks) are compared positionally during
+  // hydration, so the client tree must reproduce them exactly. Conventions are
+  // same-directory only (resolveRoutes attaches dir-local files), so lookups
+  // are exact-prefix, not nearest-ancestor.
+  const conventionAt = (convention: string, prefix: string) =>
+    routes[routeMapKey(convention, prefix)]?.component;
+  const wrapSegment = (
+    node: ReactNode,
+    find: (convention: string) => ComponentType<Record<string, unknown>> | undefined,
+  ): ReactNode => {
+    let out = node;
+    const ErrorC = find('error') as ComponentType<{ error: Error; reset: () => void; children?: ReactNode }> | undefined;
+    if (ErrorC) out = createElement(ClientErrorBoundary, { fallback: ErrorC }, out);
+    const LoadingC = find('loading');
+    if (LoadingC) out = createElement(Suspense, { fallback: createElement(LoadingC, {}) }, out);
+    const TemplateC = find('template');
+    if (TemplateC) out = createElement(TemplateC, { children: out });
+    return out;
+  };
+
+  // Page with its own directory's convention wrappers.
+  let element: ReactNode = wrapSegment(
+    createElement(pageEntry.component, props),
+    (conv) => conventionAt(conv, routeData.pattern),
+  );
+
+  // Wrap innermost (leaf) layout first so the root layout ends up outermost,
+  // each with its own segment wrappers — mirroring the server's layout chain.
+  for (let i = prefixes.length - 1; i >= 0; i--) {
+    const layoutEntry = routes[routeMapKey('layout', prefixes[i])] ?? routes[prefixes[i]];
+    const Layout = layoutEntry && layoutEntry.type === 'layout' ? layoutEntry.component : undefined;
+    if (!Layout) continue;
+    // DocumentLayoutShim unwraps a full-<html> layout inside the boundary,
+    // matching the server's splitDocumentMarkup output.
+    let content: ReactNode = createElement(
+      DocumentLayoutShim,
+      null,
+      createElement(Layout, { ...props, children: element }),
+    );
+    content = wrapSegment(content, (conv) => conventionAt(conv, prefixes[i]));
+    element = content;
   }
   return element;
+}
+
+interface ClientErrorBoundaryState { hasError: boolean; error: Error | null; }
+
+/**
+ * Mirrors the ErrorBoundary used by the server renderer (renderer-react) —
+ * same state shape and fallback contract so hydration renders the same tree.
+ */
+class ClientErrorBoundary extends Component<
+  { fallback: ComponentType<{ error: Error; reset: () => void; children?: ReactNode }>; children?: ReactNode },
+  ClientErrorBoundaryState
+> {
+  state: ClientErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error): ClientErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  reset = () => { this.setState({ hasError: false, error: null }); };
+
+  render() {
+    if (this.state.hasError && this.state.error) {
+      return createElement(this.props.fallback, { error: this.state.error, reset: this.reset });
+    }
+    return this.props.children;
+  }
+}
+
+/**
+ * Root layouts may return a full document (`<html><head>…</head><body>…`),
+ * which SSR splits — head children go to the real <head>, body children mount
+ * inside #__pledge_root__. This shim performs the same unwrap client-side so
+ * the hydration tree matches the served markup (otherwise React reports a
+ * #418 mismatch comparing <html> against the split body content).
+ *
+ * The layout is invoked directly only when it is a plain function component;
+ * class/memo/forwardRef components render normally (they can't return a
+ * document element anyway in those forms).
+ */
+export function DocumentLayoutShim({ children }: { children?: ReactNode }): ReactNode {
+  if (!isValidElement(children)) return children;
+  const Layout = children.type;
+  if (typeof Layout !== 'function' || (Layout as { prototype?: { isReactComponent?: unknown } }).prototype?.isReactComponent) {
+    return children;
+  }
+  const out = (Layout as (p: Record<string, unknown>) => ReactNode)(
+    (children.props ?? {}) as Record<string, unknown>,
+  );
+  if (isValidElement(out) && out.type === 'html') {
+    const kids = Children.toArray((out.props as { children?: ReactNode } | undefined)?.children);
+    const body = kids.find((k) => isValidElement(k) && (k as { type?: unknown }).type === 'body');
+    if (body) {
+      return createElement(Fragment, null, (body as { props?: { children?: ReactNode } }).props?.children);
+    }
+    return createElement(
+      Fragment,
+      null,
+      ...kids.filter((k) => !(isValidElement(k) && (k as { type?: unknown }).type === 'head')),
+    );
+  }
+  return out;
 }
 
 export interface ClientRouterContextValue {
@@ -71,22 +178,6 @@ interface NavigateOptions {
 }
 
 const RouterContext = createContext<ClientRouterContextValue | null>(null);
-
-/**
- * Prefetch cache. Bounded to avoid unbounded growth from a long-lived SPA
- * session visiting many routes — without a cap, every distinct path the user
- * ever navigates to stays in memory forever.
- */
-const PREFETCH_CACHE_MAX = 100;
-const prefetchedPages = new Map<string, string>();
-
-function rememberPrefetch(path: string, html: string): void {
-  if (prefetchedPages.size >= PREFETCH_CACHE_MAX && !prefetchedPages.has(path)) {
-    const oldest = prefetchedPages.keys().next().value;
-    if (oldest !== undefined) prefetchedPages.delete(oldest);
-  }
-  prefetchedPages.set(path, html);
-}
 
 export function useRouter(): ClientRouterContextValue {
   const ctx = useContext(RouterContext);
@@ -167,77 +258,19 @@ export class ReadonlyURLSearchParams {
 }
 
 /**
- * Classify a navigation target. Cross-origin targets can't be handled by
- * pushState (it throws SecurityError) or fetched as pages, so callers must do a
- * real browser navigation for them; non-http(s) schemes (javascript:, data:)
- * must never be navigated to at all.
+ * Applies a fetched page to the document: swaps the root content, refreshes
+ * `window.__PLEDGE_ROUTE__`, re-binds pledge islands on the new DOM (the
+ * elements inserted by innerHTML are never hydrated otherwise), and syncs
+ * `document.title` with the fetched page.
  */
-export function classifyNavigation(
-  to: string,
-  origin: string,
-): { url: URL; external: boolean; safe: boolean; fetchPath: string } {
-  let url: URL;
-  try {
-    url = new URL(to, origin);
-  } catch {
-    return { url: new URL(origin), external: true, safe: false, fetchPath: '/' };
+function applyFetchedPage(page: FetchedPage): void {
+  swapRootContent(page.content!);
+  if (page.routeData) {
+    (window as { __PLEDGE_ROUTE__?: PledgeRouteData }).__PLEDGE_ROUTE__ = page.routeData;
   }
-  const safe = url.protocol === 'http:' || url.protocol === 'https:';
-  return { url, external: url.origin !== origin, safe, fetchPath: url.pathname + url.search };
-}
-
-function prefetchPage(href: string, priority: 'high' | 'low' | 'auto' = 'auto'): void {
-  // Only same-origin pages can be prefetched into the SPA page cache.
-  if (typeof window !== 'undefined' && classifyNavigation(href, window.location.origin).external) return;
-  const path = href.split('#')[0].split('?')[0];
-  if (prefetchedPages.has(path)) return;
-
-  const fetchPriority = priority === 'high' ? 'high' : priority === 'low' ? 'low' : 'auto';
-
-  fetch(path, {
-    headers: { 'X-Pledge-Prefetch': '1' },
-    priority: fetchPriority as RequestPriority,
-  })
-    .then((res) => res.text())
-    .then((html) => {
-      rememberPrefetch(path, html);
-    })
-    .catch(() => {});
-}
-
-async function fetchPageContent(path: string, signal?: AbortSignal): Promise<string | null> {
-  const cached = prefetchedPages.get(path);
-  if (cached) {
-    return extractRootContent(cached);
-  }
-
-  try {
-    const res = await fetch(path, { signal });
-    const html = await res.text();
-    rememberPrefetch(path, html);
-    return extractRootContent(html);
-  } catch (err) {
-    // AbortError is expected when a newer navigation supersedes this one.
-    if (err instanceof DOMException && err.name === 'AbortError') return null;
-    return null;
-  }
-}
-
-function extractRootContent(html: string): string | null {
-  const marker = '<div id="__pledge_root__">';
-  const startIdx = html.indexOf(marker);
-  if (startIdx === -1) return null;
-  const contentStart = startIdx + marker.length;
-  const endMarker = '</div>\n  <script';
-  const endIdx = html.indexOf(endMarker, contentStart);
-  if (endIdx === -1) return null;
-  return html.slice(contentStart, endIdx);
-}
-
-function swapRootContent(content: string): void {
-  const root = document.getElementById('__pledge_root__');
-  if (!root) return;
-  root.innerHTML = content;
+  rehydratePledges();
+  const title = page.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  if (title !== undefined) document.title = title;
 }
 
 export function RouterProvider({ children }: { children: ReactNode }) {
@@ -306,13 +339,13 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 
     const seq = ++navSeq.current;
     // Include the query string: the server renders search-dependent pages from it.
-    const content = await fetchPageContent(target.fetchPath, controller.signal);
+    const page = await fetchPage(target.fetchPath, controller.signal);
 
     // A newer navigation started before this one resolved — discard.
     if (seq !== navSeq.current) return;
 
-    if (content) {
-      swapRootContent(content);
+    if (page?.content) {
+      applyFetchedPage(page);
       setPathname(url.pathname);
       setQuery(Object.fromEntries(url.searchParams.entries()));
 
@@ -342,15 +375,19 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     prefetchPage(href, priority);
   }, []);
 
+  // Register as the active navigation so framework-agnostic
+  // `navigate()`/`prefetch()` from this package delegate to React-aware routing.
+  useEffect(() => registerSpaNavigation({ navigate, prefetch }), [navigate, prefetch]);
+
   useEffect(() => {
     const handlePopState = async () => {
       const path = window.location.pathname;
       const savedScroll = scrollPositions.current.get(path);
 
-      const content = await fetchPageContent(path + window.location.search);
+      const page = await fetchPage(path + window.location.search);
 
-      if (content) {
-        swapRootContent(content);
+      if (page?.content) {
+        applyFetchedPage(page);
         setPathname(path);
         setQuery(Object.fromEntries(new URLSearchParams(window.location.search).entries()));
 

@@ -1,9 +1,10 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import type { PledgeConfig, ResolvedRoute, Viewport } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
-import type { PageModule, HeadMetadata } from '../router/types';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, splitDocumentMarkup, pledgeAssetUrl } from 'pledgestack-shared';
+import type { PageModule, LayoutModule, HeadMetadata } from '../router/types';
 import { renderHeadTags, renderViewportTags } from './head-tags';
+import { createRouter } from '../router/router';
 
 export interface SSGContext {
   config: PledgeConfig;
@@ -21,6 +22,24 @@ export interface SSGContext {
  */
 export async function generateStaticPages(ctx: SSGContext): Promise<Map<string, string>> {
   const output = new Map<string, string>();
+  const router = createRouter(ctx.routes, ctx.config);
+
+  /** Renders page + layout chain; splits document-shaped root layouts. */
+  const renderRoute = (mod: PageModule, params: Record<string, string>, pathname: string) => {
+    let element = createElement(mod.default, { params });
+    const match = router.match(pathname);
+    if (match) {
+      for (const layout of router.getLayouts(match)) {
+        const layoutModule = ctx.modules.get(layout.filePath) as LayoutModule | undefined;
+        if (layoutModule?.default) {
+          element = createElement(layoutModule.default, { children: element });
+        }
+      }
+    }
+    const rendered = renderToString(createElement(() => element));
+    const doc = splitDocumentMarkup(rendered);
+    return { content: doc ? doc.body : rendered, headExtra: doc?.head ?? '' };
+  };
 
   for (const route of ctx.routes) {
     if (route.mode === 'api' || route.mode === 'rsc' || route.isLayout || route.isNotFound) continue;
@@ -48,17 +67,17 @@ export async function generateStaticPages(ctx: SSGContext): Promise<Map<string, 
       }
       for (const params of paramsList) {
         const path = route.pattern.replace(/:(\w+)/g, (_, name) => params[name] ?? '');
-        const html = renderToString(createElement(mod.default, { params }));
+        const { content, headExtra } = renderRoute(mod, params, path);
         const metadata = await resolvePageMetadata(mod, params);
         const viewport = await resolvePageViewport(mod);
-        output.set(path, wrapStaticHtml(html, route, metadata, viewport));
+        output.set(path, wrapStaticHtml(content, route, metadata, viewport, headExtra));
       }
     } else {
       // Static route
-      const html = renderToString(createElement(mod.default, {}));
+      const { content, headExtra } = renderRoute(mod, {}, route.pattern);
       const metadata = await resolvePageMetadata(mod, {});
       const viewport = await resolvePageViewport(mod);
-      output.set(route.pattern, wrapStaticHtml(html, route, metadata, viewport));
+      output.set(route.pattern, wrapStaticHtml(content, route, metadata, viewport, headExtra));
     }
   }
 
@@ -100,7 +119,7 @@ async function resolvePageViewport(mod: PageModule): Promise<Viewport | undefine
  * hydration script. Without this shell the page is a bare fragment that
  * cannot hydrate.
  */
-function wrapStaticHtml(content: string, route: ResolvedRoute, metadata: HeadMetadata, viewport?: Viewport): string {
+function wrapStaticHtml(content: string, route: ResolvedRoute, metadata: HeadMetadata, viewport?: Viewport, headExtra = ''): string {
   const headTags = renderHeadTags(metadata, route);
   const viewportTags = renderViewportTags(viewport);
 
@@ -113,12 +132,13 @@ function wrapStaticHtml(content: string, route: ResolvedRoute, metadata: HeadMet
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  ${headExtra}
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }

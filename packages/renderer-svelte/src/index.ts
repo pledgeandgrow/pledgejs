@@ -16,7 +16,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity, pledgeAssetUrl } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
@@ -133,13 +133,13 @@ function wrapHtml(
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
   ${styleTag}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
   ${routeScript}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }
@@ -237,28 +237,27 @@ export class SvelteRendererAdapter implements RendererAdapter {
     return this.renderToReadableStream(ctx);
   }
 
-  generateClientScript(options: ClientScriptOptions): string {
-    const { isDev, pledgepackPort } = options;
-    const svelteImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/svelte.js`
-      : 'svelte';
+  generateClientScript(_options: ClientScriptOptions): string {
+    // Bare specifier — resolved by the dev importmap (esm.sh for Svelte).
+    const svelteImport = 'svelte';
 
-    return `// PledgeStack Svelte client hydration (auto-generated)
+    return `// PledgeStack Svelte client hydration + SPA navigation (auto-generated)
 // Svelte 5 exports hydrate/mount/unmount from the 'svelte' package itself —
 // there is no separate 'svelte/client' subpath export.
-import { hydrate } from '${svelteImport}';
+import { hydrate, unmount } from '${svelteImport}';
 
 const root = document.getElementById('__pledge_root__');
 if (root) {
   // Svelte hydration — the SSR content is already in the DOM
   try {
     const routeData = window.__PLEDGE_ROUTE__ || { params: {}, searchParams: {}, pattern: window.location.pathname };
-    const { routes, resolveRouteChain } = await import('/__pledge_router');
+    const { routes, resolveRouteChain, installSpaNavigation } = await import('/__pledge_router');
     // Resolve page + layout chain by the server's matched pattern and hydrate
     // with the same params the server rendered with.
-    const chain = resolveRouteChain(routes, routeData);
-    if (chain) {
-      const props = { params: routeData.params, searchParams: routeData.searchParams };
+    const mount = (rd) => {
+      const chain = resolveRouteChain(routes, rd);
+      if (!chain) return null;
+      const props = { params: rd.params, searchParams: rd.searchParams };
       // Svelte 5 components are (anchor, props) functions and children are
       // snippets ((anchor) => void), so nest layouts by passing a snippet that
       // renders the inner component at the layout's anchor (as compiled code does).
@@ -270,7 +269,21 @@ if (root) {
         Outer = chain.layouts[i];
         outerProps = { ...props, children: (anchor) => Inner(anchor, innerProps) };
       }
-      hydrate(Outer, { target: root, props: outerProps });
+      return hydrate(Outer, { target: root, props: outerProps });
+    };
+    let app = mount(routeData);
+    if (app) {
+      // SPA navigation: swap the fetched SSR content into the root, unmount the
+      // old Svelte app, and hydrate the new DOM — matching first-load behavior.
+      installSpaNavigation({
+        onRoute: async ({ content, routeData: next }) => {
+          if (!next) return false;
+          if (app) await unmount(app);
+          root.innerHTML = content;
+          app = mount(next);
+          return app != null;
+        },
+      });
     }
   } catch (e) {
     console.error('[pledgestack] Svelte hydration error:', e);

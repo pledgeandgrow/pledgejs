@@ -87,11 +87,8 @@ HMR is only as real as the underlying bundler's dev server:
 
 | Bundler | Dev server | Live update |
 |---|---|---|
-| vite | Vite's own (`hmr: true`) | Yes. `handle.reload(id)` invalidates the module and sends `full-reload`; `.psx`/`.ps` changes trigger a full reload |
-| webpack | `webpack-dev-server` when installed (`hot: true`) | Yes with `webpack-dev-server`; `reloadAll()` sends the WDS `content-changed` message |
-| rsbuild | `@rsbuild/core` when installed | Rsbuild's own HMR; the adapter's `reloadAll()` is best-effort |
-| rollup, turbopack (no `@utoo/pack`), rsbuild/webpack fallbacks | small esbuild transform-on-request HTTP server | **No** live reload / HMR — refresh the browser |
 | pledgepack (default) | the native `pledgepack` binary | Provided by the binary |
+| vite (pure-JS fallback) | Vite's own (`hmr: true`) | Yes. `handle.reload(id)` invalidates the module and sends `full-reload`; `.psx`/`.ps` changes trigger a full reload |
 
 `pledge dev` runs PledgeStack's own SSR server next to the bundler dev
 server; it invalidates server modules on file change (`createHMRWatcher`) but
@@ -162,10 +159,10 @@ compile the addons. The framework auto-detects their presence.
 
 ## Release model
 
-All 34 public packages (the CLI `pledgestack`, `create-pledge-app`, every
-`pledgestack-*` library, the four `pledgestack-renderer-*` adapters and six
+All 30 public packages (the CLI `pledgestack`, `create-pledge-app`, every
+`pledgestack-*` library, the four `pledgestack-renderer-*` adapters and two
 `pledgestack-bundler-*` adapters, and `pledgestack-eslint-plugin`) are published
-together; the 33 framework packages share one version, managed by Changesets'
+together; the 29 framework packages share one version, managed by Changesets'
 `fixed` group (`create-pledge-app` versions independently on its own npm line)
 through `.github/workflows/release.yml`. Versions are plain semver `0.x.y`,
 published under the `latest` dist-tag. The two VS Code extensions
@@ -361,8 +358,20 @@ The following are documented gaps (not part of the 50 goals):
   provenance attestation / Sigstore signing of published artifacts is not
   yet implemented.
 - **Build manifests:** Not yet emitted by the bundler adapters
-  (vite/webpack/rollup/etc.); the `__pledge_ps_manifest.json` route manifest
+  (vite); the `__pledge_ps_manifest.json` route manifest
   consumed by `bundler-pledgepack` comes from PledgePack itself, not these
   adapters.
 - **Stable hydration IDs:** Still uses import-order counters (goal was
   identified but not yet implemented — see `packages/client/src/pledge.ts`)
+- **Per-framework client bindings:** SPA navigation itself is
+  framework-agnostic (`installSpaNavigation` +
+  `import { navigate } from 'pledgestack-client'` work for React, Vue, Solid,
+  and Svelte — including in the production PledgePack bundle, which emits the
+  configured renderer's bootstrap). What remains React-only is the ergonomic
+  binding layer: `Link`/`useRouter` components, `pledgestack-state` hooks
+  (`usePersistentState`, `useUrlState`, store subscriptions), pledge islands
+  (`<Pledge>`), and the server-action form hooks (`useActionState`,
+  `useFormStatus`). Non-React apps use plain `<a>` elements (intercepted by
+  the delegated click handler) and `navigate()` for programmatic routing;
+  Vue composables / Solid primitives / Svelte store bindings are not yet
+  shipped.

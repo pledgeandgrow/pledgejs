@@ -14,7 +14,7 @@ import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
-import { applyScriptSecurity, escapeJsonForScript } from './security';
+import { applyScriptSecurity, escapeJsonForScript, pledgeAssetUrl } from './security';
 
 export interface RSCStreamContext {
   config: PledgeConfig;
@@ -174,14 +174,14 @@ export async function renderRSCStream(ctx: RSCStreamContext): Promise<ReadableSt
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">`, ctx.security);
 
   const shellAfter = applyScriptSecurity(`</div>
   <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${escapeJsonForScript(JSON.stringify(manifest))}</script>
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`, ctx.security);
 

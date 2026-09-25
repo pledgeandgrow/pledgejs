@@ -17,8 +17,8 @@ this file only tracks the follow-up backlog.
 
 - `pnpm typecheck`: 0 errors (workspace-wide, via `scripts/typecheck-workspace.mjs`)
 - `pnpm lint`: 0 errors (76 pre-existing warnings)
-- `pnpm build:packages`: passes (34 public packages)
-- `pnpm test`: 1692 passing, 0 failing, 6 skipped across 206 files
+- `pnpm build:packages`: passes (30 public packages)
+- `pnpm test`: 1638 passing, 0 failing, 6 skipped across 194 files
   (the 5 skips are Netlify real-CLI deploy tests gated on `NETLIFY_AUTH_TOKEN`)
 - `pnpm audit`: no known vulnerabilities (vitest upgraded to 4.1.11)
 
@@ -40,7 +40,7 @@ this file only tracks the follow-up backlog.
 | CLI dist overwritten by typecheck | `scripts/typecheck-workspace.mjs` | ✅ Fixed (2026-09-14) — switched from `tsc -b` (emits) to `tsc --noEmit -p` (typechecks only). |
 | `@types/react` hoisting gap | `package.json` | ✅ Fixed (2026-09-14) — added `@types/react`/`@types/react-dom` to root devDependencies. |
 | Workspace version drift (0.0.1 … 0.2.3, no policy) | all `packages/*/package.json` | ✅ Fixed (2026-09-20) — every public package shares one version (`0.2.0`) in one Changesets `fixed` group; `pnpm check:release` enforces it. |
-| Only the CLI was publishable / release workflow had no gate | `.github/workflows/release.yml` | ✅ Fixed (2026-09-20) — 34 packages are public; the workflow runs typecheck, lint, build, tests and the release check, then publishes through Changesets. |
+| Only the CLI was publishable / release workflow had no gate | `.github/workflows/release.yml` | ✅ Fixed (2026-09-20) — 30 packages are public; the workflow runs typecheck, lint, build, tests and the release check, then publishes through Changesets. |
 | `pledge init --skip-install` was a no-op | `packages/cli/src/commands/init.ts` | ✅ Fixed (2026-09-20) — init installs unless `--skip-install`; tested. |
 | `pledge upgrade` codemod path was dead | `packages/cli/src/commands/upgrade.ts` | ✅ Removed (2026-09-20) — codemods stay available via `pledge codemod`. |
 | WebAuthn UV not enforced / empty stored userId; api rate-limit buckets unbounded; nosql sanitizer let `__proto__` through; Prometheus labels unquoted | auth, api, server | ✅ Fixed and tested. |
@@ -60,7 +60,7 @@ _(None currently — both items previously listed here were fixed.)_
 
 - **Bundler HMR** is only as real as the bundler's own dev server; see
   [limitations.md](./limitations.md#bundler-hmr-hot-module-replacement).
-- **Renderer asset URLs** are not content-hashed (`/__pledge__/client.js`).
+- **Renderer asset URLs** are content-hashed at build (`client.<hash>.js`/`client.<hash>.css` via `__pledge__/asset-manifest.json`); user `public/` assets are still copied verbatim.
 - **76 lint warnings** (unused variables, `prefer-const`, SSRF-suggestion rule).
 - **Native addons** are not compiled in CI artifacts or shipped to npm.
 

@@ -24,7 +24,7 @@ import { tryServeSeoRoute } from './seo-routes';
 import { tryServeOgImage } from './og-image';
 import { generateETag, isETagMatch } from './etag';
 import { validateRedirect, validateOrigin, isSameSiteRequest, deepSanitize } from 'pledgestack-auth';
-import { hmacSha256Hex, timingSafeEqualStr } from 'pledgestack-shared';
+import { hmacSha256Hex, timingSafeEqualStr, setPledgeAssetManifest } from 'pledgestack-shared';
 import { corsMiddleware, DEFAULT_CORS_CONFIG, type CorsConfig } from './cors';
 
 /**
@@ -166,6 +166,8 @@ interface HandlerContext {
   pluginRunner: PluginRunner;
   /** SRI integrity hashes for framework-emitted /__pledge__/* assets */
   assetIntegrity: Record<string, string>;
+  /** Import map injected into dev HTML so bare specifiers in unbundled modules resolve */
+  devImportMap?: string;
 }
 
 export interface RequestHandlerOptions {
@@ -312,10 +314,28 @@ export function createRequestHandler(options: RequestHandlerOptions) {
     // bundles don't statically pull in node:fs via virtual-modules.ts.
     let assetIntegrity: Record<string, string> = {};
     try {
-      const { computeAssetIntegrity } = await import('./virtual-modules');
+      const { computeAssetIntegrity, loadPledgeAssetManifest } = await import('./virtual-modules');
+      // Install the build's asset manifest so renderers resolve
+      // /__pledge__/client.js-style URLs to their content-hashed names.
+      // Explicitly cleared in dev: the virtual module serves generated code
+      // at the stable paths and a stale prod manifest must not leak in.
+      setPledgeAssetManifest(isDev ? null : loadPledgeAssetManifest(config));
       assetIntegrity = await computeAssetIntegrity(config, isDev, pledgepackPort);
     } catch {
       // Hashing is best-effort — never block startup on it.
+    }
+
+    // Dev-only import map: transformed app modules and the generated
+    // router/client scripts use bare specifiers the browser cannot resolve
+    // without it. Same pattern as pledgepack's own dev shell.
+    let devImportMap: string | undefined;
+    if (isDev) {
+      try {
+        const { buildDevImportMap } = await import('./virtual-modules');
+        devImportMap = buildDevImportMap(config);
+      } catch {
+        // Missing node_modules must never block startup.
+      }
     }
 
     localCtx = {
@@ -328,6 +348,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
       middleware,
       pluginRunner,
       assetIntegrity,
+      devImportMap,
     };
 
     // Report cold start metrics when enabled (e.g. PLEDGE_COLD_START_METRICS=1)
@@ -1033,6 +1054,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
               tree: context.tree!,
               modules: context.modules as Map<string, PageModule | LayoutModule | LoadingModule | ErrorModule | NotFoundModule | HeadModule | TemplateModule>,
               searchParams: pledgeReq.query,
+              security,
             });
             return {
               status: 200,
@@ -1217,7 +1239,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
     try {
       const response = await withTimeout((signal) => innerHandler(req, signal), REQUEST_TIMEOUT_MS);
       await trackFailedAuth(req, response);
-      return finalizeResponse(response, req, config);
+      return finalizeResponse(response, req, config, localCtx?.devImportMap);
     } catch (err) {
       // redirect() thrown outside the render tree (route handlers, middleware,
       // module init) lands here — honor it like an in-render redirect.
@@ -1234,7 +1256,7 @@ export function createRequestHandler(options: RequestHandlerOptions) {
           const context = await ensureContext();
           const cspNonce = generateCspNonce();
           const resp = await renderNotFoundResponse(context, req.url.pathname, { cspNonce, assetIntegrity: context.assetIntegrity }, cspNonce);
-          return finalizeResponse(resp, req, config);
+          return finalizeResponse(resp, req, config, context.devImportMap);
         } catch {
           // fall through to the generic 500
         }
@@ -1318,8 +1340,16 @@ function ensureCacheControl(resp: PledgeResponse): PledgeResponse {
  *  5. maskForbidden — optional 403→404 to prevent resource enumeration
  *  6. action token — HTML responses carry the signed `pledge_at` cookie
  */
-function finalizeResponse(resp: PledgeResponse, req: TransportRequest, config: PledgeConfig): PledgeResponse {
+function finalizeResponse(resp: PledgeResponse, req: TransportRequest, config: PledgeConfig, devImportMap?: string): PledgeResponse {
   let out = mergeResponseState(resp, req);
+
+  // Dev import map: HTML responses get the <script type="importmap"> that lets
+  // the browser resolve bare specifiers in unbundled transformed modules.
+  // The tag carries this response's CSP nonce — script-src has no
+  // 'unsafe-inline', and strict-dynamic trusts the module graph it unlocks.
+  if (devImportMap) {
+    out = { ...out, body: injectDevImportMap(out.body, devImportMap, out.cspNonce, out.headers) };
+  }
 
   // 2. Sanitize header values — a user-influenced value containing CR/LF
   //    (e.g. a redirect target built from a query param) would otherwise
@@ -1371,6 +1401,90 @@ function finalizeResponse(resp: PledgeResponse, req: TransportRequest, config: P
   }
 
   return out;
+}
+
+/**
+ * Injects the dev import map into an HTML response body. Only HTML bodies are
+ * touched; the tag is placed right before `</head>` so it precedes every
+ * `<script type="module">` (they all live in the body tail).
+ */
+function injectDevImportMap(
+  body: PledgeResponse['body'],
+  importMapTag: string,
+  cspNonce: string | undefined,
+  headers: Record<string, string>,
+): PledgeResponse['body'] {
+  const contentType = headers['Content-Type'] ?? headers['content-type'] ?? '';
+  if (body == null || !contentType.includes('text/html')) return body;
+
+  const nonceAttr = cspNonce ? ` nonce="${cspNonce}"` : '';
+  const tag = importMapTag.replace(/<script(?=[\s>])/g, `<script${nonceAttr}`);
+
+  if (typeof body === 'string') {
+    if (body.includes('type="importmap"')) return body;
+    const headEnd = body.indexOf('</head>');
+    if (headEnd !== -1) return body.slice(0, headEnd) + tag + body.slice(headEnd);
+    // No <head> (fragment/error shell) — an importmap still works anywhere
+    // before the first module script; prepending is the safe fallback.
+    return tag + body;
+  }
+
+  if (body instanceof ReadableStream) {
+    return injectTagIntoStreamHead(body, tag);
+  }
+  return body;
+}
+
+/**
+ * Streams `tag` into an HTML body right before `</head>`. Buffers only until
+ * the needle is found (or a 64 KiB cap — streamed shells put </head> in the
+ * first chunk) then passes the rest through untouched.
+ */
+function injectTagIntoStreamHead(body: ReadableStream<Uint8Array>, tag: string): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffered = '';
+  let scanning = true;
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        while (scanning) {
+          const { done, value } = await reader.read();
+          if (done) {
+            scanning = false;
+            if (buffered) controller.enqueue(encoder.encode(buffered));
+            controller.close();
+            return;
+          }
+          buffered += decoder.decode(value, { stream: true });
+          const idx = buffered.indexOf('</head>');
+          if (idx !== -1) {
+            scanning = false;
+            controller.enqueue(encoder.encode(buffered.slice(0, idx) + tag + buffered.slice(idx)));
+            break;
+          }
+          if (buffered.length > 64 * 1024) {
+            scanning = false;
+            controller.enqueue(encoder.encode(buffered));
+            break;
+          }
+        }
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
 }
 
 /** Percent-decode a cookie value; malformed escapes yield the raw value instead of throwing. */

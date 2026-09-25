@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createElement, isValidElement, type ReactElement } from 'react';
-import { resolveRouteElement } from './router';
+import { resolveRouteElement, DocumentLayoutShim } from './router';
 
 function Page(props: Record<string, unknown>) {
   return createElement('main', null, `page ${JSON.stringify(props.params)}`);
@@ -26,9 +26,15 @@ describe('resolveRouteElement (#3 client hydration tree)', () => {
       searchParams: {},
     }) as ReactElement;
     expect(isValidElement(tree)).toBe(true);
-    // Outermost element is the root layout, then blog layout, then page.
-    expect((tree.type as typeof RootLayout)).toBe(RootLayout);
-    const blog = (tree.props as { children: ReactElement }).children;
+    // Outermost is the DocumentLayoutShim around the root layout (it unwraps
+    // full-<html> layouts to match the server's split markup), then the blog
+    // layout's shim, then the page.
+    expect(tree.type).toBe(DocumentLayoutShim);
+    const root = (tree.props as { children: ReactElement }).children;
+    expect((root.type as typeof RootLayout)).toBe(RootLayout);
+    const blogShim = (root.props as { children: ReactElement }).children;
+    expect(blogShim.type).toBe(DocumentLayoutShim);
+    const blog = (blogShim.props as { children: ReactElement }).children;
     expect(blog.type).toBe(BlogLayout);
     const page = (blog.props as { children: ReactElement }).children;
     expect(page.type).toBe(Page);
@@ -53,6 +59,8 @@ describe('resolveRouteElement with collision-free keys', () => {
       'layout:/': { type: 'layout', component: RootLayout },
     };
     const tree = resolveRouteElement(routes, { pattern: '/', params: {}, searchParams: {} }) as ReactElement;
-    expect(tree.type).toBe(RootLayout);
+    expect(tree.type).toBe(DocumentLayoutShim);
+    const root = (tree.props as { children: ReactElement }).children;
+    expect(root.type).toBe(RootLayout);
   });
 });

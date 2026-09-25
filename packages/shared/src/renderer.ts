@@ -349,3 +349,56 @@ export function getLayoutChain(match: RouteMatch, tree: unknown): ResolvedRoute[
 
   return layouts;
 }
+
+/**
+ * Splits a rendered `<html>` document element into its head and body children.
+ *
+ * Root layouts may return a full document (`<html><head>…</head><body>…</body></html>`,
+ * Next.js-style). Rendering that inside the shell's #__pledge_root__ div would
+ * produce a nested document — invalid HTML whose <head> children (styles,
+ * meta) some parsers drop. Callers hoist `head` into the real <head> and use
+ * `body` as the root content instead. Returns null when the rendered output
+ * isn't a document element.
+ */
+export function splitDocumentMarkup(content: string): { head: string; body: string } | null {
+  const doc = content.match(
+    /^\s*(?:<!doctype[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<html[^>]*>([\s\S]*)<\/html>\s*(?:<!--[\s\S]*?-->\s*)*$/i,
+  );
+  if (doc) {
+    const inner = doc[1];
+    let head = inner.match(/<head[^>]*>([\s\S]*?)<\/head>/i)?.[1] ?? '';
+    const bodyMatch = inner.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    let body = bodyMatch ? bodyMatch[1] : inner.replace(/<head[^>]*>[\s\S]*?<\/head>/i, '');
+    // renderToPipeableStream emits the real document AND demotes the same
+    // document-shaped tree to comments inside suspense content:
+    //   <body><!--$--><!--html--><!--head--><!--body--><nav>…
+    // Strip the nested demoted markers from the extracted body as well.
+    const demoted = stripDocumentMarkers(body);
+    if (demoted) {
+      head = `${head}\n${demoted.head}`.trim();
+      body = demoted.body;
+    }
+    return { head, body };
+  }
+
+  // A document-shaped tree rendered entirely inside a suspense boundary /
+  // non-document context is emitted as comment markers only:
+  //   <!--$--><!--html--><!--head-->(unfloated head children)<!--body-->(body)
+  // (Floatable head children — <style>/<title>/<meta> — are hoisted into the
+  // real document head by React itself.) Strip the markers and hoist any
+  // leftover head children alongside the real head, mirroring the real-tags
+  // form above so hydration sees the same unwrapped tree on every path.
+  return stripDocumentMarkers(content);
+}
+
+/**
+ * Strips React's demoted document markers — `<!--html--><!--head-->…<!--body-->` —
+ * from content, hoisting any non-floated head children out for the real head.
+ * Suspense anchors (`<!--$-->`/`<!--/$-->`) are preserved; hydration needs them.
+ */
+function stripDocumentMarkers(content: string): { head: string; body: string } | null {
+  const marker = content.match(/^([\s\S]*?)<!--html-->[\s\S]*?<!--head-->([\s\S]*?)<!--body-->([\s\S]*)$/i);
+  if (!marker) return null;
+  const body = (marker[1] + marker[3]).replace(/<!--\/?(?:html|head|body)-->/gi, '');
+  return { head: marker[2].trim(), body };
+}

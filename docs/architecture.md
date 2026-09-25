@@ -2,7 +2,7 @@
 
 ## Monorepo Structure
 
-PledgeJS is a pnpm workspace with 36 packages organized into functional layers:
+PledgeJS is a pnpm workspace with 32 packages organized into functional layers:
 
 ```
 pledgejs/
@@ -34,11 +34,7 @@ pledgejs/
 │   ├── renderer-solid/  # Solid renderer adapter
 │   ├── renderer-svelte/ # Svelte renderer adapter
 │   ├── bundler-pledgepack/  # Default bundler (Rust binary)
-│   ├── bundler-vite/        # Vite adapter
-│   ├── bundler-rollup/      # Rollup adapter
-│   ├── bundler-webpack/     # Webpack adapter
-│   ├── bundler-rsbuild/     # Rsbuild adapter
-│   ├── bundler-turbopack/   # Turbopack adapter
+│   ├── bundler-vite/        # Vite adapter (pure-JS fallback)
 │   ├── create-pledge-app/   # Project scaffolding
 │   ├── eslint-plugin-pledge/ # ESLint rules
 │   ├── vscode-extension/    # VS Code extension
@@ -247,7 +243,7 @@ ESM output that Node can't resolve).
    action opens/updates a "Version Packages" PR (`pnpm version-packages`).
 3. Merging that PR publishes every public package (`pnpm release` = build all
    packages → `scripts/check-release.mjs --dist` → `changeset publish`).
-4. 34 packages are public; 33 share one version (Changesets `fixed` group)
+4. 30 packages are public; 29 share one version (Changesets `fixed` group)
    while `create-pledge-app` versions independently on its own npm line;
    versions are `0.x.y`, published under the `latest` dist-tag. Library packages ship esbuild-bundled ESM
    (`scripts/bundle-package.mjs`) plus `tsc` declarations; the CLI bundles
@@ -256,7 +252,7 @@ ESM output that Node can't resolve).
 ## Testing
 
 - **Framework:** Vitest 4.1.11
-- **Scope:** 206 test files, 1698 tests (1692 passing, 6 skipped, 0 failing as of 2026-09-21)
+- **Scope:** 194 test files, 1644 tests (1638 passing, 6 skipped, 0 failing as of 2026-09-25)
 - **Environment:** Node; DOM/React tests (a11y, overlay) opt into jsdom with a `// @vitest-environment jsdom` docblock
 - **Coverage:** v8 provider, includes all `packages/*/src/**/*.ts`; global thresholds are enforced in `vitest.config.ts`
 - **Timeout:** 15s default (30s for sccache test on Windows)

@@ -19,7 +19,7 @@ import { renderToPipeableStream, renderToString } from 'react-dom/server';
 import { createElement, Suspense, Component, type ReactNode, type ComponentType } from 'react';
 import { Writable } from 'node:stream';
 import type { RouteMatch, PledgeConfig, ResolvedRoute } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, pledgeAssetUrl } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
@@ -308,13 +308,13 @@ function wrapRustSSRHtml(
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   ${route.metadata?.title ? `<title>${route.metadata.title}</title>` : ''}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">${content}</div>
   <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>
   <script id="__pledge_suspense_boundaries__" type="application/json">${boundaryData}</script>
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }

@@ -11,7 +11,7 @@ extension surface).
 - `packages/cli` — the published `pledgestack` package (the `pledge` binary).
   Everything it needs is bundled into it via esbuild, so it works on its own.
 - `packages/*` — the library packages (server, core, client, shared, bundlers,
-  renderers, integrations, eslint plugin, `create-pledge-app`). 34 packages are
+  renderers, integrations, eslint plugin, `create-pledge-app`). 30 packages are
   public and released together at one version; only the two VS Code extensions
   (`vscode-extension`, `vscode-psx`) are `private: true`. Each library's `build`
   is `tsc --build` (declarations only) + `scripts/bundle-package.mjs` (esbuild ESM).
@@ -70,7 +70,7 @@ weakening the config.
 Versioning uses [Changesets](https://github.com/changesets/changesets)
 (`@changesets/cli` is a root devDep, config in `.changeset/config.json`).
 
-**Policy:** 33 of the 34 public packages share one version (a Changesets `fixed`
+**Policy:** 29 of the 30 public packages share one version (a Changesets `fixed`
 group in `.changeset/config.json`) — never hand-bump versions, never add a public
 package to `ignore`, and add any new public package to the `fixed` group.
 `create-pledge-app` is the exception: it versions independently on its own
@@ -123,7 +123,7 @@ Contract: `pledgepack/docs/CONNECTION.md` (in the sibling pledgepack repo).
   duplicating the logic.
 - The transform result cache is a bounded `BoundedLRUMap` (from
   `pledgestack-shared`) to avoid unbounded growth in dev.
-- Keep the `pledgepack` dependency at `^0.4.0` across `package.json`,
+- Keep the `pledgepack` dependency at `^0.4.2` across `package.json`,
   `packages/cli`, `packages/server`, and `packages/bundler-pledgepack` —
   ranges drifted before and caused mismatches. Bump all four
   package.jsons (plus the `minimumReleaseAgeExclude` pin in

@@ -18,6 +18,7 @@ import {
   clearTransformCacheDir,
   BoundedLRUMap,
   MAX_TRANSFORM_CACHE_ENTRIES,
+  stubAssetImports,
 } from 'pledgestack-shared';
 
 const TRANSFORM_CACHE = new BoundedLRUMap<string, string>(MAX_TRANSFORM_CACHE_ENTRIES);
@@ -84,6 +85,10 @@ export async function transformFile(
   } else {
     transformedCode = await transformLocally(sourcePath, ext);
   }
+
+  // Node cannot import CSS/asset modules — the transformed file also lives
+  // in .pledge-cache/, where relative specifiers wouldn't resolve anyway.
+  transformedCode = stubAssetImports(transformedCode);
 
   const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);
   const cacheDir = join(dirname(sourcePath), '.pledge-cache');
@@ -201,6 +206,7 @@ async function transformPSXFile(
   } else {
     transformedCode = await transformTsxLocally(result.tsx, isDev);
   }
+  transformedCode = stubAssetImports(transformedCode);
 
   const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);
   const outFileName = `${moduleName}.${hash}.js`;
@@ -418,6 +424,7 @@ async function transformVueSFC(
   if (/<script[^>]*\blang\s*=\s*["']tsx?["']/i.test(source)) {
     transformedCode = await transformTsxLocally(transformedCode, isDev);
   }
+  transformedCode = stubAssetImports(transformedCode);
 
   // Write to cache and return file URL
   const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);
@@ -507,6 +514,7 @@ async function transformSvelteSFC(
       generate: 'ssr',
       dev: isDev,
     });
+    result.js.code = stubAssetImports(result.js.code);
     // The compiled SSR code is a JS module
     const cacheDir = join(dirname(sourcePath), '.pledge-cache');
     await mkdir(cacheDir, { recursive: true });
@@ -561,7 +569,7 @@ export default { render };
     parts.push(`export const __styles = \`${allStyles}\`;`);
   }
 
-  const transformedCode = parts.join('\n');
+  const transformedCode = stubAssetImports(parts.join('\n'));
 
   // Write to cache and return file URL
   const hash = createHash('sha256').update(sourcePath).digest('hex').slice(0, 12);

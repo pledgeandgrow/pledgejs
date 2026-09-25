@@ -7,7 +7,7 @@ allowBuilds:
   pledgepack: true
   puppeteer: true
 minimumReleaseAgeExclude:
-  - pledgepack@0.4.0
+  - pledgepack@0.4.2
 overrides:
   brace-expansion: ">=5.0.9"
   # minimatch@3.1.5 requires brace-expansion@^1 — exempt it from the v5 pin above

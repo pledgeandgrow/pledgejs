@@ -15,7 +15,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity, pledgeAssetUrl } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
@@ -151,13 +151,13 @@ function wrapHtml(
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
   ${routeScript}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }
@@ -267,13 +267,11 @@ export class VueRendererAdapter implements RendererAdapter {
     return this.renderToReadableStream(ctx);
   }
 
-  generateClientScript(options: ClientScriptOptions): string {
-    const { isDev, pledgepackPort } = options;
-    const vueImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/vue.js`
-      : 'vue';
+  generateClientScript(_options: ClientScriptOptions): string {
+    // Bare specifier — resolved by the dev importmap (esm.sh for Vue).
+    const vueImport = 'vue';
 
-    return `// PledgeStack Vue client hydration (auto-generated)
+    return `// PledgeStack Vue client hydration + SPA navigation (auto-generated)
 import { createSSRApp, h } from '${vueImport}';
 
 const root = document.getElementById('__pledge_root__');
@@ -284,12 +282,13 @@ if (root) {
   // createSSRApp-created apps).
   try {
     const routeData = window.__PLEDGE_ROUTE__ || { params: {}, searchParams: {}, pattern: window.location.pathname };
-    const { routes, resolveRouteChain } = await import('/__pledge_router');
+    const { routes, resolveRouteChain, installSpaNavigation } = await import('/__pledge_router');
     // Resolve the page AND its layout chain by the server's matched pattern and
     // mount with the SAME params/searchParams the server rendered with.
-    const chain = resolveRouteChain(routes, routeData);
-    if (chain) {
-      const props = { params: routeData.params, searchParams: routeData.searchParams };
+    const buildRender = (rd) => {
+      const chain = resolveRouteChain(routes, rd);
+      if (!chain) return null;
+      const props = { params: rd.params, searchParams: rd.searchParams };
       // Nest layouts around the page (innermost first) exactly like SSR.
       let renderChild = () => h(chain.page, props);
       for (let i = chain.layouts.length - 1; i >= 0; i--) {
@@ -297,8 +296,32 @@ if (root) {
         const layout = chain.layouts[i];
         renderChild = () => h(layout, props, { default: child });
       }
-      const app = createSSRApp({ render: () => renderChild() });
+      return renderChild;
+    };
+    let app = null;
+    const mount = (rd) => {
+      const renderChild = buildRender(rd);
+      if (!renderChild) return false;
+      app = createSSRApp({ render: () => renderChild() });
       app.mount(root);
+      return true;
+    };
+    if (mount(routeData)) {
+      // SPA navigation: fetch the target page, swap the SSR content into the
+      // root, then unmount + remount so the new markup hydrates into a live
+      // component tree (plain innerHTML alone would leave dead DOM).
+      installSpaNavigation({
+        onRoute: ({ content, routeData: next }) => {
+          if (!next) return false;
+          const renderChild = buildRender(next);
+          if (!renderChild) return false;
+          if (app) app.unmount();
+          root.innerHTML = content;
+          app = createSSRApp({ render: () => renderChild() });
+          app.mount(root);
+          return true;
+        },
+      });
     }
   } catch (e) {
     console.error('[pledgestack] Vue hydration error:', e);

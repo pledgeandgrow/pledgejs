@@ -51,8 +51,8 @@ export interface PledgeConfig {
   cargo?: CargoConfig;
   /** TypeScript path aliases (#231) — maps alias prefix to directory */
   alias?: Record<string, string>;
-  /** Which bundler to use (default: 'pledgepack'). Install the corresponding adapter package to use alternatives. */
-  bundler?: 'pledgepack' | 'vite' | 'rollup' | 'turbopack' | 'rsbuild' | 'webpack';
+  /** Which bundler to use (default: 'pledgepack'). 'vite' is the pure-JS fallback for environments where the native PledgePack binary can't be installed. */
+  bundler?: 'pledgepack' | 'vite';
   /** Site URL for SEO (sitemap, robots.txt, canonical URLs) */
   siteUrl?: string;
   /** Security headers configuration — when true, auto-applies default security headers to all responses (default: true) */
@@ -497,7 +497,7 @@ export function validateConfig(config: PledgeConfig): string[] {
   }
 
   if (config.bundler) {
-    const validBundlers = ['pledgepack', 'vite', 'rollup', 'turbopack', 'rsbuild', 'webpack'];
+    const validBundlers = ['pledgepack', 'vite'];
     if (!validBundlers.includes(config.bundler)) {
       errors.push(`config.bundler must be one of: ${validBundlers.join(', ')} (got: "${config.bundler}")`);
     }

@@ -196,6 +196,141 @@ export const rust = new Proxy({}, {
 }
 
 /**
+ * Matches import specifiers for assets that Node.js cannot import natively
+ * (stylesheets, images, fonts, media, documents, wasm, …).
+ */
+const ASSET_SPECIFIER_RE =
+  /\.(css|s[ac]ss|less|styl|stylus|pcss|postcss|png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|woff2?|ttf|otf|eot|mp4|webm|mov|mp3|wav|ogg|flac|aac|pdf|txt|md|csv|xml|wasm)(\?[^'"]*)?$/i;
+
+export function isAssetSpecifier(specifier: string): boolean {
+  return ASSET_SPECIFIER_RE.test(specifier);
+}
+
+/**
+ * Value a stubbed asset import resolves to. CSS-module imports get a Proxy
+ * that maps every class name to itself; other assets get the specifier so
+ * `import logo from './logo.png'` yields a usable path string.
+ */
+function assetStubExpression(specifier: string): string {
+  if (/\.module\.(css|s[ac]ss|less|styl|stylus)(\?[^'"]*)?$/i.test(specifier)) {
+    return `new Proxy({}, { get: (_t, p) => (typeof p === 'string' ? p : undefined) })`;
+  }
+  return JSON.stringify(specifier);
+}
+
+/**
+ * Rewrites asset imports in transformed output so the module is importable
+ * by Node during SSR. Transformed files are written to `.pledge-cache/` —
+ * relative asset specifiers would resolve against the wrong directory, and
+ * Node cannot load `.css`/image modules at all. The real CSS is still
+ * delivered to the browser via the bundled `client.css` entry.
+ */
+export function stubAssetImports(code: string): string {
+  let out = code;
+
+  // `import './globals.css'` — side-effect import.
+  out = out.replace(
+    /\bimport\s+(['"])([^'"]+)\1\s*;?/g,
+    (m, _q: string, spec: string) =>
+      isAssetSpecifier(spec) ? `import 'data:text/javascript,';` : m,
+  );
+
+  // `import styles from './x.module.css'` — default binding.
+  out = out.replace(
+    /\bimport\s+([A-Za-z_$][\w$]*)\s*,?\s*from\s+(['"])([^'"]+)\2\s*;?/g,
+    (m, name: string, _q: string, spec: string) =>
+      isAssetSpecifier(spec) ? `const ${name} = ${assetStubExpression(spec)};` : m,
+  );
+
+  // `import * as ns from './x.svg'`
+  out = out.replace(
+    /\bimport\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s+(['"])([^'"]+)\2\s*;?/g,
+    (m, name: string, _q: string, spec: string) =>
+      isAssetSpecifier(spec)
+        ? `const ${name} = { default: ${assetStubExpression(spec)} };`
+        : m,
+  );
+
+  // `import { a, b as c } from './x.css'`
+  out = out.replace(
+    /\bimport\s*\{([^}]*)\}\s*from\s+(['"])([^'"]+)\2\s*;?/g,
+    (m, names: string, _q: string, spec: string) => {
+      if (!isAssetSpecifier(spec)) return m;
+      return names
+        .split(',')
+        .map((n) => `const ${n.trim().split(/\s+as\s+/).pop()!.trim()} = undefined;`)
+        .join(' ');
+    },
+  );
+
+  // `export { x } from './x.css'` / `export * from './x.css'`
+  out = out.replace(
+    /\bexport\s+[^;]*?from\s+(['"])([^'"]+)\1\s*;?/g,
+    (m, _q: string, spec: string) => (isAssetSpecifier(spec) ? '' : m),
+  );
+
+  // `await import('./x.css')` — dynamic import.
+  out = out.replace(
+    /\bimport\(\s*(['"])([^'"]+)\1\s*\)/g,
+    (m, _q: string, spec: string) =>
+      isAssetSpecifier(spec)
+        ? `Promise.resolve({ default: ${assetStubExpression(spec)} })`
+        : m,
+  );
+
+  return out;
+}
+
+/**
+ * Generates the `<script type="importmap">` tag injected into dev-mode HTML.
+ *
+ * Dev serves the app as unbundled ESM (pledgepack transforms modules on
+ * demand), so every bare specifier the browser sees must resolve through an
+ * import map — mirroring what pledgepack's own dev shell emits: React from
+ * esm.sh (its `/node_modules/` CJS interop has no named exports and no
+ * `process` shim), the PledgeStack client runtime from the bundled
+ * `pledgestack` package via `/node_modules/`.
+ *
+ * React is pinned to the version installed in the app so the hydration graph
+ * matches what SSR rendered with.
+ */
+export function devImportMapScript(versions?: {
+  react?: string;
+  reactDom?: string;
+  vue?: string;
+  solidJs?: string;
+  svelte?: string;
+}): string {
+  const react = versions?.react ? `react@${versions.react}` : 'react';
+  const reactDom = versions?.reactDom ? `react-dom@${versions.reactDom}` : 'react-dom';
+  const vue = versions?.vue ? `vue@${versions.vue}` : 'vue';
+  const solidJs = versions?.solidJs ? `solid-js@${versions.solidJs}` : 'solid-js';
+  const svelte = versions?.svelte ? `svelte@${versions.svelte}` : 'svelte';
+  const map = {
+    imports: {
+      react: `https://esm.sh/${react}`,
+      'react/jsx-runtime': `https://esm.sh/${react}/jsx-runtime`,
+      'react/jsx-dev-runtime': `https://esm.sh/${react}/jsx-dev-runtime`,
+      'react-dom': `https://esm.sh/${reactDom}`,
+      'react-dom/client': `https://esm.sh/${reactDom}/client`,
+      'react-server-dom-webpack/client': 'https://esm.sh/react-server-dom-webpack/client',
+      vue: `https://esm.sh/${vue}`,
+      'solid-js/web': `https://esm.sh/${solidJs}/web`,
+      svelte: `https://esm.sh/${svelte}`,
+      'pledgestack-client': '/node_modules/pledgestack/dist/client.js',
+      'pledgestack/client': '/node_modules/pledgestack/dist/client.js',
+    },
+  };
+  // Bundled deps (react-refresh, config defaults) evaluate `process.env` /
+  // `process.cwd()` at module top level — shim the pieces the browser lacks
+  // before any module in the graph executes.
+  const shim =
+    `<script>window.process=window.process||{env:{NODE_ENV:"development"},cwd:function(){return"/"},browser:true};</script>`;
+  // Escape `</` so the JSON can never prematurely close the script tag.
+  return `${shim}<script type="importmap">${JSON.stringify(map).replace(/</g, '\\u003c')}</script>`;
+}
+
+/**
  * Clears the transform cache directory.
  */
 export async function clearTransformCacheDir(dir: string): Promise<void> {

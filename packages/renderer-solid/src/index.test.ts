@@ -88,9 +88,10 @@ describe('SolidRendererAdapter', () => {
   it('generateClientScript hydrates with the server params and dev-server import', () => {
     const prod = adapter.generateClientScript({ isDev: false, rscEnabled: false });
     expect(prod).toContain("import { hydrate } from 'solid-js/web'");
-    expect(prod).toContain('routeData.params');
+    expect(prod).toContain('installSpaNavigation');
+    expect(prod).toContain('rd.params');
     const dev = adapter.generateClientScript({ isDev: true, pledgepackPort: 4777, rscEnabled: false });
-    expect(dev).toContain('http://localhost:4777/node_modules/.vite/solid-js/web.js');
+    expect(dev).toContain("from 'solid-js/web'");
   });
 
   it('client script hydrates layouts around the page', () => {

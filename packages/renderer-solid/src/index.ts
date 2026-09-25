@@ -16,7 +16,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, getLayoutChain as sharedGetLayoutChain, escapeHtml, applyScriptSecurity, pledgeAssetUrl } from 'pledgestack-shared';
 import { getRendererRegistry } from 'pledgestack-shared';
 
 // --- Module type helpers ---
@@ -140,13 +140,13 @@ function wrapHtml(
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">${content}</div>
   ${manifestScript}
   ${routeScript}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }
@@ -249,13 +249,11 @@ export class SolidRendererAdapter implements RendererAdapter {
     return this.renderToReadableStream(ctx);
   }
 
-  generateClientScript(options: ClientScriptOptions): string {
-    const { isDev, pledgepackPort } = options;
-    const solidWebImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/solid-js/web.js`
-      : 'solid-js/web';
+  generateClientScript(_options: ClientScriptOptions): string {
+    // Bare specifier — resolved by the dev importmap (esm.sh for Solid).
+    const solidWebImport = 'solid-js/web';
 
-    return `// PledgeStack Solid client hydration (auto-generated)
+    return `// PledgeStack Solid client hydration + SPA navigation (auto-generated)
 import { hydrate } from '${solidWebImport}';
 
 const root = document.getElementById('__pledge_root__');
@@ -263,19 +261,35 @@ if (root) {
   // Solid hydration — the SSR content is already in the DOM
   try {
     const routeData = window.__PLEDGE_ROUTE__ || { params: {}, searchParams: {}, pattern: window.location.pathname };
-    const { routes, resolveRouteChain } = await import('/__pledge_router');
+    const { routes, resolveRouteChain, installSpaNavigation } = await import('/__pledge_router');
     // Resolve page + layout chain by the matched pattern and hydrate with the
     // SAME params the server used so the client render matches the SSR output.
-    const chain = resolveRouteChain(routes, routeData);
-    if (chain) {
-      const props = { params: routeData.params, searchParams: routeData.searchParams };
-      hydrate(() => {
+    const mount = (rd) => {
+      const chain = resolveRouteChain(routes, rd);
+      if (!chain) return null;
+      const props = { params: rd.params, searchParams: rd.searchParams };
+      return hydrate(() => {
         let content = chain.page(props);
         for (let i = chain.layouts.length - 1; i >= 0; i--) {
           content = chain.layouts[i]({ ...props, children: content });
         }
         return content;
       }, root);
+    };
+    let dispose = mount(routeData);
+    if (dispose) {
+      // SPA navigation: swap the fetched SSR content into the root, dispose the
+      // old Solid root, and hydrate the new DOM — the fetched document carries
+      // Solid's data-hk markers, so hydration resolves the same as first load.
+      installSpaNavigation({
+        onRoute: ({ content, routeData: next }) => {
+          if (!next) return false;
+          if (dispose) dispose();
+          root.innerHTML = content;
+          dispose = mount(next);
+          return dispose != null;
+        },
+      });
     }
   } catch (e) {
     console.error('[pledgestack] Solid hydration error:', e);

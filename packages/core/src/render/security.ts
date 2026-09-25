@@ -12,5 +12,6 @@ export {
   applyScriptSecurity,
   escapeJsonForScript,
   findExternalAssetsWithoutIntegrity,
+  pledgeAssetUrl,
 } from 'pledgestack-shared';
 export type { RenderSecurity } from 'pledgestack-shared';

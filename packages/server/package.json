@@ -55,7 +55,7 @@
   },
   "dependencies": {
     "esbuild": "^0.24.0",
-    "pledgepack": "^0.4.0",
+    "pledgepack": "^0.4.2",
     "pledgestack-auth": "workspace:*",
     "pledgestack-core": "workspace:*",
     "pledgestack-rss": "workspace:*",

@@ -71,8 +71,8 @@ describe('VueRendererAdapter', () => {
   it('client script mounts with the server route data, not an empty pathname lookup', () => {
     const js = adapter.generateClientScript({ isDev: false, rscEnabled: false });
     expect(js).toContain('window.__PLEDGE_ROUTE__');
-    expect(js).toContain('resolveRouteChain(routes, routeData)');
-    expect(js).toContain('params: routeData.params');
+    expect(js).toContain('resolveRouteChain(routes, rd)');
+    expect(js).toContain('params: rd.params');
   });
 
   it('nests every layout in the chain around the page (outermost first)', async () => {
@@ -119,8 +119,9 @@ describe('VueRendererAdapter', () => {
     const prod = adapter.generateClientScript({ isDev: false, rscEnabled: false });
     expect(prod).toContain("import { createSSRApp, h } from 'vue'");
     expect(prod).toContain('app.mount(root)');
+    expect(prod).toContain('installSpaNavigation');
     const dev = adapter.generateClientScript({ isDev: true, pledgepackPort: 4555, rscEnabled: false });
-    expect(dev).toContain('http://localhost:4555/node_modules/.vite/vue.js');
+    expect(dev).toContain("from 'vue'");
   });
 
   it('client script resolves the layout chain and nests layouts around the page', () => {

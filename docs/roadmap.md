@@ -10,15 +10,16 @@ Legend: 🔴 security-critical · 🟠 reliability/correctness · 🟡 performan
 
 > **Status (2026-09-20, 0.2.0):** The 50 goals below were worked through in
 > source with unit tests, and the workspace is green (`pnpm typecheck`: 0 errors;
-> `pnpm test`: **1692 passing, 0 failing, 6 skipped across 206 files**). An earlier
+> `pnpm test`: **1638 passing, 0 failing, 6 skipped across 194 files**). An earlier
 > revision of this page claimed "all 50 IMPLEMENTED and VERIFIED"; that overstated
 > it — the goals were not each independently re-verified, and a 2026-09-20 spot
 > check found at least one only partially done:
 >
-> - **#46 asset fingerprinting — partial.** Webpack now emits `[contenthash]`
->   bundle names, but the renderers still emit the literal
->   `/__pledge__/client.js` / `client.css` URLs, so browsers/CDNs still cannot
->   cache them immutably.
+> - **#46 asset fingerprinting — resolved (2026-09-25).** `pledge build` now
+>   emits content-hashed `client.<hash>.js` / `client.<hash>.css` /
+>   `rsc-client.<hash>.js` plus `__pledge__/asset-manifest.json`, and all
+>   renderers resolve the stable `/__pledge__/client.*` URLs through
+>   `pledgeAssetUrl`, so browsers/CDNs can cache them immutably.
 >
 > Treat [AUDIT-STATUS.md](../AUDIT-STATUS.md) as the single source of truth for
 > what is fixed and what is open, and [limitations.md](./limitations.md) for the
@@ -220,7 +221,7 @@ Status as of 2026-09-20:
 - ✅ **CI runs the build** (`pnpm build:packages`) and an end-to-end smoke job.
 - ✅ **CI generates coverage** (`vitest run --coverage`) and enforces the thresholds in `vitest.config.ts`.
 - ✅ **CI runs the Rust crates' checks** (`cargo fmt`, `clippy`, `build`, `test` in the Rust Checks job).
-- ✅ **Release workflow has a test gate** (typecheck, lint, build, test, release check) and publishes all 34 public packages through Changesets (33 in the shared-version `fixed` group; `create-pledge-app` versions independently).
+- ✅ **Release workflow has a test gate** (typecheck, lint, build, test, release check) and publishes all 30 public packages through Changesets (29 in the shared-version `fixed` group; `create-pledge-app` versions independently).
 - ✅ **Root `.dockerignore`** exists.
 
 ---
@@ -229,9 +230,18 @@ Status as of 2026-09-20:
 
 - `pnpm typecheck`: 0 errors (2026-09-21)
 - `pnpm lint`: 0 errors, 76 warnings (2026-09-21)
-- `pnpm test`: 1692 passing, 0 failing, 6 skipped across 206 files (2026-09-21)
+- `pnpm test`: 1638 passing, 0 failing, 6 skipped across 194 files (2026-09-21); 1654 passing across 196 files after the multi-framework client-navigation work (2026-10-23)
 - `pnpm audit`: no known vulnerabilities (2026-09-20; vitest 4.1.11)
 
 Each of the 50 goals above was found by reading actual source files, not from
 generic checklists. File paths and line numbers are accurate as of commit
 `3a4dd5a` + the 2026-09-14 operational fixes and may have drifted since.
+
+**2026-09-25:** The Rollup, Turbopack, Rsbuild and Webpack bundler adapters
+were removed; PledgePack is the default and Vite remains as the pure-JS
+fallback. Goals #47 (rollup sourcemaps) and #48 (webpack minification) are
+moot for the removed adapters — vite now emits `sourcemap: true` in
+production. #46 (asset fingerprinting) is now resolved: the build emits
+content-hashed `client.<hash>.js` / `client.<hash>.css` /
+`rsc-client.<hash>.js` copies plus `__pledge__/asset-manifest.json`, and
+renderers emit the hashed URLs via `pledgeAssetUrl`.

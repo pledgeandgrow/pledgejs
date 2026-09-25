@@ -71,8 +71,9 @@ export async function devCommand(options: { port?: number; hostname?: string } =
     hostname,
   });
 
-  console.log(`  → ${bundlerName} dev server: http://${hostname}:${devServer.port}`);
-  console.log(`  → PledgeStack SSR server:   http://${hostname}:${port}\n`);
+  // The bundler port is internal (module transforms/HMR only) — opening it in
+  // a browser shows a bare client-only shell, so don't present it as a URL.
+  console.log(`  → ${bundlerName} ready (internal port ${devServer.port})`);
 
   // Start PledgeStack's Node.js SSR server
   startNodeServer({

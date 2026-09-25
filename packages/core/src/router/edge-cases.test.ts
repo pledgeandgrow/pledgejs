@@ -69,4 +69,35 @@ describe('Route Matching Edge Cases (#38)', () => {
     expect(match).not.toBeNull();
     expect(match?.route.mode).toBe('api');
   });
+
+  it('registers a layout colocated with a page (root layout applies)', () => {
+    const files = [makeFile('page.tsx', 'page'), makeFile('layout.tsx', 'layout')];
+    const routes = resolveRoutes(files, config);
+    const layoutRoute = routes.find((r) => r.isLayout);
+    expect(layoutRoute?.filePath).toBe('/test/app/layout.tsx');
+    expect(layoutRoute?.pattern).toBe('/');
+
+    const router = createRouter(routes, config);
+    const match = router.match('/');
+    expect(match?.route.isLayout).not.toBe(true);
+    const layouts = router.getLayouts(match!);
+    expect(layouts.map((l) => l.filePath)).toContain('/test/app/layout.tsx');
+  });
+
+  it('applies a nested layout chain for colocated layouts', () => {
+    const files = [
+      makeFile('layout.tsx', 'layout'),
+      makeFile('page.tsx', 'page'),
+      makeFile('blog/layout.tsx', 'layout'),
+      makeFile('blog/page.tsx', 'page'),
+    ];
+    const routes = resolveRoutes(files, config);
+    const router = createRouter(routes, config);
+    const match = router.match('/blog');
+    const layouts = router.getLayouts(match!);
+    expect(layouts.map((l) => l.filePath)).toEqual([
+      '/test/app/layout.tsx',
+      '/test/app/blog/layout.tsx',
+    ]);
+  });
 });

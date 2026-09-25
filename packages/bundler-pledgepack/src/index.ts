@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { join, extname, relative } from 'node:path';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type {
   BundlerAdapter,
@@ -17,6 +17,7 @@ import type { PledgeConfig } from 'pledgestack-shared';
 import { resolveBinary, runPledgepack } from './binary-resolver';
 export { resolveBinary, runPledgepack };
 import { PLEDGEPACK_DEFAULT_PORT } from './transforms';
+import type { Plugin as EsbuildPlugin, PluginBuild } from 'esbuild';
 
 /**
  * Cached route manifest (loaded once per build, not per request).
@@ -24,6 +25,30 @@ import { PLEDGEPACK_DEFAULT_PORT } from './transforms';
  * (the manifest's mtime changes).
  */
 let cachedManifest: { routes: Array<{ file?: string }>; manifestPath: string; mtime: number } | null = null;
+
+/**
+ * PledgePack's own startup banner (printed with println!, so RUST_LOG can't
+ * silence it). PledgeStack prints the one URL users should open instead.
+ */
+// eslint-disable-next-line no-control-regex -- matching ANSI color codes in the binary's banner
+const PLEDGEPACK_BANNER_LINE = /^\s*$|dev server starting\.\.\.|^\s*(?:\x1b\[\d+m)*→(?:\x1b\[\d+m)*\s+https?:\/\/|Ready in \d+ms/;
+
+/** Line-buffers a child stream into `out`, dropping PledgePack banner lines. */
+export function forwardFiltered(stream: NodeJS.ReadableStream | null, out: NodeJS.WritableStream): void {
+  if (!stream) return;
+  let pending = '';
+  stream.setEncoding('utf-8');
+  stream.on('data', (chunk: string) => {
+    pending += chunk;
+    const lines = pending.split('\n');
+    pending = lines.pop() ?? '';
+    const kept = lines.filter((line) => !PLEDGEPACK_BANNER_LINE.test(line));
+    if (kept.length) out.write(kept.join('\n') + '\n');
+  });
+  stream.on('end', () => {
+    if (pending && !PLEDGEPACK_BANNER_LINE.test(pending)) out.write(pending + '\n');
+  });
+}
 
 /**
  * PledgePack bundler adapter.
@@ -61,6 +86,11 @@ export const pledgepackAdapter: BundlerAdapter = {
       // .pledge/server/ for SSG/SSR, matching the layout every other adapter
       // produces and resolveProductionPath expects.
       await buildServerModules(config);
+      // The rendered HTML references /__pledge__/client.js for hydration —
+      // in production there is no dev server to synthesise that module, so
+      // bundle a self-contained equivalent (route map + client runtime +
+      // react) into the out dir where the static server can reach it.
+      await buildClientBundle(config);
       return {
         outDir: join(config.rootDir, config.outDir),
         success: true,
@@ -104,9 +134,23 @@ export const pledgepackAdapter: BundlerAdapter = {
 
     const aliasArgs = await pledgepackAliasArgs(config);
     const spawnArgs = [...aliasArgs, 'dev', '--port', String(port), '--host', hostname];
-    const spawnOpts = { stdio: 'inherit' as const, cwd: config.rootDir };
+    // PledgePack is an internal backend of `pledge dev`: its INFO tracing and
+    // its own "server running at :3001" banner duplicated PledgeStack's output
+    // and advertised the wrong URL. Keep warnings/errors, drop the rest —
+    // unless the user opted into RUST_LOG themselves.
+    const spawnOpts = {
+      stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
+      cwd: config.rootDir,
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'warn' },
+    };
+    const spawnQuiet = () => {
+      const child = spawn(binary, spawnArgs, spawnOpts);
+      forwardFiltered(child.stdout, process.stdout);
+      forwardFiltered(child.stderr, process.stderr);
+      return child;
+    };
 
-    let proc = spawn(binary, spawnArgs, spawnOpts);
+    let proc = spawnQuiet();
     let stopped = false;
     let restartCount = 0;
     const MAX_RESTARTS = 5;
@@ -184,7 +228,7 @@ export const pledgepackAdapter: BundlerAdapter = {
         );
         setTimeout(() => {
           if (stopped) return;
-          proc = spawn(binary, spawnArgs, spawnOpts);
+          proc = spawnQuiet();
           attachCrashHandler(proc);
         }, delayMs);
       });
@@ -287,7 +331,10 @@ async function collectRouteFiles(dir: string): Promise<string[]> {
         entry.name.endsWith('.tsx') ||
         entry.name.endsWith('.jsx') ||
         entry.name.endsWith('.psx') ||
-        entry.name.endsWith('.ps')
+        entry.name.endsWith('.ps') ||
+        entry.name.endsWith('.vue') ||
+        entry.name.endsWith('.svelte') ||
+        entry.name.endsWith('.mdx')
       ) {
         files.push(fullPath);
       }
@@ -319,6 +366,13 @@ async function buildServerModules(config: PledgeConfig): Promise<void> {
     'react-dom',
     'react/jsx-runtime',
     'react-dom/server',
+    // Non-React frameworks resolve their runtime from the app's node_modules
+    // at request time — keep them external like react/react-dom.
+    'vue',
+    'vue/server-renderer',
+    'solid-js',
+    'solid-js/web',
+    'svelte',
     'pledgestack-core',
     'pledgestack-shared',
     'pledgestack-server',
@@ -330,9 +384,9 @@ async function buildServerModules(config: PledgeConfig): Promise<void> {
     const outName = relPath.slice(0, -ext.length) + '.js';
 
     let input = routeFile;
-    // esbuild can't parse .psx/.ps — run them through the shared transform
-    // pipeline first and bundle the transformed JS instead.
-    if (ext === '.psx' || ext === '.ps') {
+    // esbuild can't parse .psx/.ps/.vue/.svelte/.mdx — run them through the
+    // shared transform pipeline first and bundle the transformed JS instead.
+    if (TRANSFORM_FIRST_EXTS.has(ext)) {
       const { fileUrl } = await pledgepackAdapter.transformFile(routeFile, {
         isDev: false,
         rootDir: config.rootDir,
@@ -362,6 +416,229 @@ async function buildServerModules(config: PledgeConfig): Promise<void> {
       outfile: join(serverOutDir, outName),
       logLevel: 'warning',
     });
+  }
+}
+
+/** Conventions whose default export hydrates client-side (route handlers,
+ * middleware, head, and image generators are server-only — bundling them
+ * would drag node builtins into the browser bundle). */
+const CLIENT_ROUTE_CONVENTIONS = new Set([
+  'page',
+  'layout',
+  'loading',
+  'error',
+  'global-error',
+  'template',
+  'not-found',
+]);
+
+/**
+ * Extra component extensions scanned for the client bundle per framework —
+ * Vue/Svelte SFCs are component files and must be part of the client route
+ * map (they go through transformFile → .pledge-cache JS before bundling).
+ * React/Solid pages are already covered by the tsx/ts/jsx/js filter.
+ */
+const FRAMEWORK_CLIENT_EXTS: Record<string, RegExp> = {
+  vue: /\.(tsx|ts|jsx|js|vue)$/,
+  svelte: /\.(tsx|ts|jsx|js|svelte)$/,
+};
+
+/** Extensions the local transform pipeline can compile to plain JS/JSX for
+ * esbuild (everything else esbuild loads directly). */
+const TRANSFORM_FIRST_EXTS = new Set(['.vue', '.svelte', '.psx', '.ps', '.mdx']);
+
+/** Mirrors pledgestack-client's routeMapKey / server's virtual-modules. */
+function clientRouteMapKey(convention: string, pattern: string): string {
+  return convention === 'page' || convention === 'route' ? pattern : `${convention}:${pattern}`;
+}
+
+interface ClientRouteFile {
+  relativePath: string;
+  convention: string;
+  routePattern: string;
+}
+
+/**
+ * Scans the app dir for component conventions — mirrors scanRouteFiles in
+ * pledgestack-server's virtual-modules.ts (route groups / parallel slots
+ * contribute no URL segment).
+ */
+function scanClientRouteFiles(appDir: string, framework?: string): ClientRouteFile[] {
+  const results: ClientRouteFile[] = [];
+  const fileRe = FRAMEWORK_CLIENT_EXTS[framework ?? 'react'] ?? /\.(tsx|ts|jsx|js)$/;
+
+  function walk(dir: string, prefix: string) {
+    let entries;
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = join(dir, entry);
+      let stat;
+      try {
+        stat = statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        if (entry.startsWith('.') || entry === 'node_modules') continue;
+        let segment = entry;
+        if (/^\([^)]+\)$/.test(segment)) segment = '';
+        if (segment.startsWith('@')) segment = '';
+        walk(fullPath, prefix + '/' + segment);
+      } else if (stat.isFile() && fileRe.test(entry)) {
+        const base = entry.replace(fileRe, '');
+        if (!CLIENT_ROUTE_CONVENTIONS.has(base)) continue;
+        const relPath = relative(appDir, fullPath).split(/[\\/]/).join('/');
+        let pattern = prefix || '/';
+        pattern = pattern.replace(/\/+/g, '/') || '/';
+        if (pattern.endsWith('/') && pattern !== '/') pattern = pattern.slice(0, -1);
+        results.push({ relativePath: relPath, convention: base, routePattern: pattern });
+      }
+    }
+  }
+
+  walk(appDir, '');
+  return results;
+}
+
+/**
+ * Bundles the hydration entry — route map + client runtime + react — into
+ * `outDir/__pledge__/client.js`. The SSR shells reference that URL for
+ * hydration; in dev the virtual module intercepts it first, in production
+ * the static server serves this bundle instead.
+ */
+async function buildClientBundle(config: PledgeConfig): Promise<void> {
+  const appDir = join(config.rootDir, config.appDir);
+  const framework = config.framework ?? 'react';
+  const files = scanClientRouteFiles(appDir, framework);
+  if (files.length === 0) return;
+
+  // Component files esbuild can't load natively (.vue/.svelte/.mdx/.psx/.ps)
+  // go through the shared transform pipeline first; their imports then point
+  // at the generated .pledge-cache JS so the client bundle is framework-real.
+  const routeImports: string[] = [];
+  const routeEntries: string[] = [];
+  for (const file of files) {
+    const abs = join(appDir, file.relativePath);
+    let spec = `./${file.relativePath}`;
+    if (TRANSFORM_FIRST_EXTS.has(extname(abs))) {
+      const { fileUrl } = await pledgepackAdapter.transformFile(abs, {
+        isDev: false,
+        rootDir: config.rootDir,
+      });
+      spec = `./${relative(appDir, fileURLToPath(fileUrl)).split(/[\\/]/).join('/')}`;
+    }
+    const varName = `mod_${routeEntries.length}`;
+    routeImports.push(`import ${varName} from ${JSON.stringify(spec)};`);
+    const key = clientRouteMapKey(file.convention, file.routePattern);
+    routeEntries.push(`  ${JSON.stringify(key)}: { type: ${JSON.stringify(file.convention)}, component: ${varName} }`);
+  }
+
+  // React keeps the dedicated entry; every other renderer emits its own
+  // bootstrap (the same one dev serves), with its `await import('/__pledge_router')`
+  // satisfied by an esbuild-plugin module carrying the route map.
+  let entrySource: string;
+  let routerPlugin: EsbuildPlugin | undefined;
+
+  const { initRenderer } = await import('pledgestack-core');
+  const renderer = await initRenderer(config);
+
+  if (renderer.framework === 'react') {
+    // Same bootstrap as the dev virtual client script: rebuild the server's
+    // element tree from window.__PLEDGE_ROUTE__ and hydrate #__pledge_root__.
+    entrySource = `import { hydrateRoot } from 'react-dom/client';
+import { createElement } from 'react';
+import { RouterProvider, resolveRouteElement, initPledgeHydration } from 'pledgestack-client';
+${routeImports.join('\n')}
+
+const routes = {
+${routeEntries.join(',\n')}
+};
+
+const root = document.getElementById('__pledge_root__');
+if (root) {
+  const routeData = window.__PLEDGE_ROUTE__ || { pattern: window.location.pathname, params: {}, searchParams: {} };
+  const tree = resolveRouteElement(routes, routeData);
+  const app = createElement(RouterProvider, { children: tree });
+  try {
+    hydrateRoot(root, app, {
+      onRecoverableError(error) {
+        console.error('[pledgestack] React hydration recoverable error:', error);
+      },
+    });
+  } catch (e) {
+    console.error('[pledgestack] Hydration failed, falling back to client render:', e);
+    const { createRoot } = await import('react-dom/client');
+    createRoot(root).render(app);
+  }
+  try { initPledgeHydration(); } catch (e) { console.error('[pledgestack] pledge hydration failed:', e); }
+}
+`;
+  } else {
+    entrySource = renderer.generateClientScript({ isDev: false, rscEnabled: false });
+    const routerModuleSource = `${routeImports.join('\n')}
+export const routes = {
+${routeEntries.join(',\n')}
+};
+export { resolveRouteChain, installSpaNavigation, navigate } from 'pledgestack-client';
+`;
+    routerPlugin = {
+      name: 'pledge-router-module',
+      setup(build: PluginBuild) {
+        build.onResolve({ filter: /^\/__pledge_router$/ }, () => ({ path: '/__pledge_router', namespace: 'pledge-router' }));
+        build.onLoad({ filter: /.*/, namespace: 'pledge-router' }, () => ({
+          contents: routerModuleSource,
+          loader: 'js',
+          resolveDir: appDir,
+        }));
+      },
+    };
+  }
+
+  const { build: esbuild } = await import('esbuild');
+  const outDir = join(config.rootDir, config.outDir, '__pledge__');
+  await mkdir(outDir, { recursive: true });
+  // dist/client.js retains a few Node-context references (env checks,
+  // process.cwd/process.emit guards) — inject a browser shim for `process`
+  // rather than weakening with defines (esbuild define can't map callables).
+  const shimPath = join(outDir, '.process-shim.mjs');
+  await writeFile(
+    shimPath,
+    'export const process = { env: { NODE_ENV: "production" }, cwd: () => "/", emit: () => undefined, browser: true };\n',
+    'utf-8',
+  );
+  try {
+    await esbuild({
+      stdin: { contents: entrySource, resolveDir: appDir, loader: 'js' },
+      bundle: true,
+      format: 'esm',
+      platform: 'browser',
+      jsx: 'automatic',
+      target: 'es2022',
+      // Non-React entries import the generated '/__pledge_router' virtual
+      // module — the plugin supplies it in-bundle (route map + client runtime
+      // re-exports), so the dev/prod client scripts are byte-identical.
+      plugins: routerPlugin ? [routerPlugin] : [],
+      // The client runtime is the framework's bundled dist — the same module
+      // the dev import map points at (/node_modules/pledgestack/dist/client.js).
+      alias: { 'pledgestack-client': 'pledgestack/client' },
+      inject: [shimPath],
+      // Styles ship via /__pledge__/client.css — stub imports so esbuild
+      // never tries to resolve the tailwind package's style-only export.
+      loader: {
+        '.css': 'empty',
+        '.scss': 'empty',
+        '.sass': 'empty',
+        '.less': 'empty',
+      },
+      outfile: join(outDir, 'client.js'),
+      logLevel: 'warning',
+    });
+  } finally {
+    await rm(shimPath, { force: true });
   }
 }
 

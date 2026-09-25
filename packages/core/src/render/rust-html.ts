@@ -17,7 +17,7 @@
  */
 
 import type { ResolvedRoute, PledgeConfig, Viewport } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, pledgeAssetUrl } from 'pledgestack-shared';
 import type { HeadMetadata } from '../router/types';
 import { renderHeadTags, renderViewportTags, escapeHtmlShared } from './head-tags';
 import { createRequire } from 'node:module';
@@ -167,8 +167,8 @@ function renderHtmlShellJS(options: HtmlShellOptions): HtmlRenderResult {
   const lang = options.lang ?? 'en';
   const metadata = options.metadata ?? {};
   const viewport = options.viewport;
-  const cssFiles = options.cssFiles ?? ['/__pledge__/client.css'];
-  const jsModules = options.jsModules ?? ['/__pledge__/client.js'];
+  const cssFiles = options.cssFiles ?? [pledgeAssetUrl('/__pledge__/client.css')];
+  const jsModules = options.jsModules ?? [pledgeAssetUrl('/__pledge__/client.js')];
   const manifest = options.manifest ?? { pledges: [] };
   const preloadHints = options.preloadHints ?? [];
 
@@ -183,7 +183,7 @@ function renderHtmlShellJS(options: HtmlShellOptions): HtmlRenderResult {
     : '';
 
   const rscClientTag = options.includeRSCClient
-    ? '\n  <script type="module" src="/__pledge__/rsc-client.js"></script>'
+    ? `\n  <script type="module" src="${pledgeAssetUrl('/__pledge__/rsc-client.js')}"></script>`
     : '';
 
   const html = `<!DOCTYPE html>

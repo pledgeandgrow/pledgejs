@@ -11,7 +11,7 @@ import { assertEnv } from 'pledgestack-shared';
  * server (`pledge serve`) first — it's an Axum/Hyper-based HTTP server with
  * high throughput, gzip/brotli compression, and static file serving.
  *
- * For other bundlers (vite, rollup, turbopack, rsbuild, webpack) or when the PledgePack binary
+ * For other bundlers (vite) or when the PledgePack binary
  * is not available, falls back to PledgeStack's Node.js server with the
  * configured bundler adapter for module resolution.
  */

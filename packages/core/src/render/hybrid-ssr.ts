@@ -24,7 +24,7 @@ import { renderToPipeableStream, renderToString } from 'react-dom/server';
 import { createElement, Suspense, Component, type ReactNode, type ComponentType } from 'react';
 import { Writable } from 'node:stream';
 import type { RouteMatch, PledgeConfig } from 'pledgestack-shared';
-import { type PledgeManifest } from 'pledgestack-shared';
+import { type PledgeManifest, pledgeAssetUrl } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
@@ -180,8 +180,8 @@ export async function renderHybridSSR(ctx: HybridSSRContext): Promise<HybridSSRR
     content: html,
     route: match.route,
     manifest,
-    cssFiles: ['/__pledge__/client.css'],
-    jsModules: ['/__pledge__/client.js'],
+    cssFiles: [pledgeAssetUrl('/__pledge__/client.css')],
+    jsModules: [pledgeAssetUrl('/__pledge__/client.js')],
   });
 
   const renderTimeMs = Date.now() - startTime;

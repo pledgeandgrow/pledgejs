@@ -23,7 +23,7 @@ import type {
   HeadMetadata,
   ClientScriptOptions,
 } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest, escapeHtml, applyScriptSecurity, escapeJsonForScript, scriptSecurityAttrs } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, escapeHtml, applyScriptSecurity, escapeJsonForScript, scriptSecurityAttrs, splitDocumentMarkup, pledgeAssetUrl } from 'pledgestack-shared';
 import type { RouteTree } from 'pledgestack-shared';
 import { getLayoutChain } from './layout-chain';
 import { renderHeadTags, renderViewportTags, mergeMetadata } from './head-tags';
@@ -280,20 +280,27 @@ function wrapHtml(
     .replace(/</g, '\\u003c');
   const routeScript = `<script>window.__PLEDGE_ROUTE__=${routeJson}</script>`;
 
+  // A root layout that returns a full <html> document owns the document
+  // head/body — hoist its <head> children into the real head and mount only
+  // its body children, instead of nesting a second document in the root div.
+  const doc = splitDocumentMarkup(content);
+  const headInner = doc ? `${headTags}\n  ${doc.head}` : headTags;
+  const bodyInner = doc ? doc.body : content;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
-  ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  ${headInner}
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
-  <div id="__pledge_root__">${content}</div>
+  <div id="__pledge_root__">${bodyInner}</div>
   ${manifestScript}
   ${routeScript}
   ${extraScripts}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }
@@ -368,7 +375,11 @@ export class ReactRendererAdapter implements RendererAdapter {
       try {
         const rustHtml = await renderRustSSR(ctx);
         if (rustHtml) {
-          const fullHtml = wrapHtml(rustHtml, match.route, metadata, headHtml, viewport);
+          const fullHtml = wrapHtml(rustHtml, match.route, metadata, headHtml, viewport, '', {
+            params: match.params,
+            searchParams: ctx.searchParams ?? {},
+            pattern: match.route.pattern,
+          });
           recordRender(match.route.pattern, simpleHash(fullHtml));
           return fullHtml;
         }
@@ -414,6 +425,10 @@ export class ReactRendererAdapter implements RendererAdapter {
       let shellReady = false;
 
       const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
+        // React stamps this nonce on its own emitted inline scripts (the
+        // $RT timing + suspense-boundary scripts) — required by the strict
+        // nonce CSP since applyScriptSecurity can't reach React's internals.
+        nonce: ctx.security?.cspNonce,
         onShellReady() {
           shellReady = true;
           const stream = new Writable({
@@ -424,7 +439,11 @@ export class ReactRendererAdapter implements RendererAdapter {
           });
           pipe(stream);
           stream.on('finish', () => {
-            resolve(wrapHtml(html, match.route, metadata, headTags, viewport));
+            resolve(wrapHtml(html, match.route, metadata, headTags, viewport, '', {
+              params: match.params,
+              searchParams: ctx.searchParams ?? {},
+              pattern: match.route.pattern,
+            }));
           });
         },
         onShellError(error) { reject(error); },
@@ -436,7 +455,11 @@ export class ReactRendererAdapter implements RendererAdapter {
         if (!shellReady) {
           try {
             const fallbackHtml = renderToString(createElement(() => element as ReactNode));
-            resolve(wrapHtml(fallbackHtml, match.route, metadata, headTags, viewport));
+            resolve(wrapHtml(fallbackHtml, match.route, metadata, headTags, viewport, '', {
+              params: match.params,
+              searchParams: ctx.searchParams ?? {},
+              pattern: match.route.pattern,
+            }));
           } catch (err) { reject(err); }
         }
       }, 5000);
@@ -461,14 +484,14 @@ export class ReactRendererAdapter implements RendererAdapter {
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">`;
 
   const shellAfter = applyScriptSecurity(`</div>
   <script id="${MANIFEST_SCRIPT_ID}" type="application/json">${escapeJsonForScript(JSON.stringify(manifest))}</script>
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`, ctx.security);
 
@@ -499,6 +522,8 @@ export class ReactRendererAdapter implements RendererAdapter {
       });
 
       const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
+        // See renderToStream — React nonces its own emitted inline scripts.
+        nonce: ctx.security?.cspNonce,
         onShellReady() {
           shellReady = true;
           pipe(writable);
@@ -511,9 +536,14 @@ export class ReactRendererAdapter implements RendererAdapter {
           const stream = new ReadableStream<Uint8Array>({
             start(controller) {
               streamController = controller;
-              controller.enqueue(encoder.encode(shellBefore));
               const content = Buffer.concat(chunks).toString('utf-8');
-              controller.enqueue(encoder.encode(content));
+              // Root layouts that render a full <html> document — hoist the
+              // head children into the shell head, mount only the body.
+              const doc = splitDocumentMarkup(content);
+              controller.enqueue(encoder.encode(
+                doc ? shellBefore.replace('</head>', `${doc.head}\n</head>`) : shellBefore,
+              ));
+              controller.enqueue(encoder.encode(doc ? doc.body : content));
               for (const chunk of pendingData) {
                 controller.enqueue(new Uint8Array(chunk));
               }
@@ -609,9 +639,13 @@ export class ReactRendererAdapter implements RendererAdapter {
         const rscScripts = `<script${scriptSecurityAttrs(ctx.security)}>(self.__pledge_rsc_chunks__=self.__pledge_rsc_chunks__||[]).push(${flightLiteral});</script>
   <script id="__pledge_manifest__" type="application/json">${escapeJsonForScript(serializedManifest)}</script>
   <script id="__pledge_client_refs__" type="application/json">${escapeJsonForScript(clientRefs)}</script>
-  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/rsc-client.js')} src="/__pledge__/rsc-client.js"></script>`;
+  <script type="module"${scriptSecurityAttrs(ctx.security, pledgeAssetUrl('/__pledge__/rsc-client.js'))} src="${pledgeAssetUrl('/__pledge__/rsc-client.js')}"></script>`;
 
-        return wrapHtml(htmlContent, match.route, metadata, headHtml, viewport, rscScripts);
+        return wrapHtml(htmlContent, match.route, metadata, headHtml, viewport, rscScripts, {
+          params: match.params,
+          searchParams: ctx.searchParams ?? {},
+          pattern: match.route.pattern,
+        });
       }
     } catch {
       // react-server-dom-webpack/server not available — fall back to streaming SSR
@@ -653,7 +687,11 @@ export class ReactRendererAdapter implements RendererAdapter {
     const element = buildElementTree(ctx);
     // Render the initial HTML for first paint. The flight stream (read below)
     // carries the data needed to reconcile a live RSC tree on the client.
-    const htmlContent = renderToString(createElement(() => element as ReactNode));
+    const rendered = renderToString(createElement(() => element as ReactNode));
+    // Root layouts that render a full <html> document own head/body — hoist
+    // the head children into the shell head, mount only the body children.
+    const doc = splitDocumentMarkup(rendered);
+    const htmlContent = doc ? doc.body : rendered;
     const flightStream = rscServer.renderToReadableStream(element);
     const flightReader = flightStream.getReader();
     const flightDecoder = new TextDecoder();
@@ -665,7 +703,8 @@ export class ReactRendererAdapter implements RendererAdapter {
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  ${doc ? doc.head : ''}
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__">${htmlContent}</div>
@@ -674,7 +713,7 @@ export class ReactRendererAdapter implements RendererAdapter {
   <script id="__pledge_client_refs__" type="application/json">${clientRefs}</script>
 `;
 
-    const shellAfter = `  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/rsc-client.js')} src="/__pledge__/rsc-client.js"></script>
+    const shellAfter = `  <script type="module"${scriptSecurityAttrs(ctx.security, pledgeAssetUrl('/__pledge__/rsc-client.js'))} src="${pledgeAssetUrl('/__pledge__/rsc-client.js')}"></script>
 </body>
 </html>`;
 
@@ -728,6 +767,8 @@ export class ReactRendererAdapter implements RendererAdapter {
       });
 
       const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
+        // See renderToStream — React nonces its own emitted inline scripts.
+        nonce: ctx.security?.cspNonce,
         onShellReady() { pipe(writable); },
         onAllReady() {
           const manifest: PledgeManifest = { pledges: [] };
@@ -740,12 +781,12 @@ export class ReactRendererAdapter implements RendererAdapter {
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__" data-ppr="1">${html}</div>
   ${manifestScript}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`);
         },
@@ -763,15 +804,11 @@ export class ReactRendererAdapter implements RendererAdapter {
   }
 
   generateClientScript(options: ClientScriptOptions): string {
-    const { isDev, pledgepackPort, rscEnabled } = options;
-    // In dev mode, import React from the dev server proxy (PledgePack serves node_modules)
-    // In production, the client bundle is pre-bundled with React
-    const reactImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/react.js`
-      : 'react';
-    const reactDomClientImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/react-dom/client.js`
-      : 'react-dom/client';
+    const { rscEnabled } = options;
+    // Bare specifiers — the dev importmap resolves them (esm.sh for React);
+    // in production the client bundle is pre-bundled with React.
+    const reactImport = 'react';
+    const reactDomClientImport = 'react-dom/client';
 
     return `// PledgeStack React client hydration (auto-generated)
 import { hydrateRoot } from '${reactDomClientImport}';
@@ -810,14 +847,11 @@ export { Link };
 `;
   }
 
-  generateRSCClientScript(options: ClientScriptOptions): string {
-    const { isDev, pledgepackPort } = options;
-    const reactImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/react.js`
-      : 'react';
-    const reactDomClientImport = isDev && pledgepackPort
-      ? `http://localhost:${pledgepackPort}/node_modules/.vite/react-dom/client.js`
-      : 'react-dom/client';
+  generateRSCClientScript(_options: ClientScriptOptions): string {
+    // Bare specifiers — resolved by the dev importmap (esm.sh for React);
+    // in production the client bundle is pre-bundled with React.
+    const reactImport = 'react';
+    const reactDomClientImport = 'react-dom/client';
 
     return `// PledgeStack RSC client (auto-generated)
 import { hydrateRoot } from '${reactDomClientImport}';

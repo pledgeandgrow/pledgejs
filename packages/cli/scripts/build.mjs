@@ -98,10 +98,6 @@ const commonOptions = {
     // Bundler adapters — inlined so they work without separate npm packages
     'pledgestack-bundler-pledgepack': join(__dirname, '..', '..', 'bundler-pledgepack', 'src', 'index.ts'),
     'pledgestack-bundler-vite': join(__dirname, '..', '..', 'bundler-vite', 'src', 'index.ts'),
-    'pledgestack-bundler-rollup': join(__dirname, '..', '..', 'bundler-rollup', 'src', 'index.ts'),
-    'pledgestack-bundler-turbopack': join(__dirname, '..', '..', 'bundler-turbopack', 'src', 'index.ts'),
-    'pledgestack-bundler-rsbuild': join(__dirname, '..', '..', 'bundler-rsbuild', 'src', 'index.ts'),
-    'pledgestack-bundler-webpack': join(__dirname, '..', '..', 'bundler-webpack', 'src', 'index.ts'),
   },
 };
 

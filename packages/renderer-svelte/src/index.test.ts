@@ -111,10 +111,11 @@ describe('SvelteRendererAdapter', () => {
 
   it('generateClientScript hydrates via the svelte package export', () => {
     const prod = adapter.generateClientScript({ isDev: false, rscEnabled: false });
-    expect(prod).toContain("import { hydrate } from 'svelte'");
+    expect(prod).toContain("import { hydrate, unmount } from 'svelte'");
+    expect(prod).toContain('installSpaNavigation');
     expect(prod).not.toContain("from 'svelte/client'");
     const dev = adapter.generateClientScript({ isDev: true, pledgepackPort: 4888, rscEnabled: false });
-    expect(dev).toContain('http://localhost:4888/node_modules/.vite/svelte.js');
+    expect(dev).toContain("from 'svelte'");
   });
 
   it('client script hydrates layouts around the page', () => {

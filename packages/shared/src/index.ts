@@ -7,5 +7,6 @@ export * from './bundler';
 export * from './transforms';
 export * from './renderer';
 export * from './render-security';
+export * from './asset-manifest';
 export * from './escape';
 export * from './crypto';

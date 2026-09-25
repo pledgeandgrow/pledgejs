@@ -2,10 +2,11 @@ import { renderToPipeableStream } from 'react-dom/server';
 import { createElement, type ReactNode } from 'react';
 import { Writable } from 'node:stream';
 import type { RouteMatch, PledgeConfig, AnyGenericModule, RenderSecurity } from 'pledgestack-shared';
+import { splitDocumentMarkup } from 'pledgestack-shared';
 import type { PageModule, LayoutModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
-import { scriptSecurityAttrs, escapeJsonForScript } from './security';
+import { scriptSecurityAttrs, escapeJsonForScript, pledgeAssetUrl } from './security';
 
 export interface RSCPayload {
   /** The serialized RSC tree as a string */
@@ -102,12 +103,14 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
   }
 
   const encoder = new TextEncoder();
-  const shellBefore = `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${match.route.metadata?.title ?? 'PledgeStack App'}</title>\n  <link rel="stylesheet" href="/__pledge__/client.css" />\n</head>\n<body>\n  <div id="__pledge_root__">`;
+  const shellBefore = `<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${match.route.metadata?.title ?? 'PledgeStack App'}</title>\n  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />\n</head>\n<body>\n  <div id="__pledge_root__">`;
 
   const clientRefs = escapeJsonForScript(JSON.stringify(extractClientReferences(ctx)));
   const serializedManifest = escapeJsonForScript(JSON.stringify(ctx.clientManifest ?? {}));
+  const clientJsUrl = pledgeAssetUrl('/__pledge__/client.js');
+  const rscClientJsUrl = pledgeAssetUrl('/__pledge__/rsc-client.js');
 
-  const shellAfter = `</div>\n  <script id="__pledge_rsc_data__" type="application/json">${clientRefs}</script>\n  <script id="__pledge_manifest__" type="application/json">${serializedManifest}</script>\n  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/client.js')} src="/__pledge__/client.js"></script>\n  <script type="module"${scriptSecurityAttrs(ctx.security, '/__pledge__/rsc-client.js')} src="/__pledge__/rsc-client.js"></script>\n</body>\n</html>`;
+  const shellAfter = `</div>\n  <script id="__pledge_rsc_data__" type="application/json">${clientRefs}</script>\n  <script id="__pledge_manifest__" type="application/json">${serializedManifest}</script>\n  <script type="module"${scriptSecurityAttrs(ctx.security, clientJsUrl)} src="${clientJsUrl}"></script>\n  <script type="module"${scriptSecurityAttrs(ctx.security, rscClientJsUrl)} src="${rscClientJsUrl}"></script>\n</body>\n</html>`;
 
   return new Promise<ReadableStream<Uint8Array>>((resolve, reject) => {
     let shellReady = false;
@@ -127,6 +130,9 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
     });
 
     const { pipe } = renderToPipeableStream(createElement(() => element), {
+      // React stamps this nonce on its own emitted inline scripts ($RT
+      // timing + suspense-boundary scripts) — required by the strict CSP.
+      nonce: ctx.security?.cspNonce,
       bootstrapModules: getBootstrapModules(ctx),
       onShellReady() {
         shellReady = true;
@@ -139,9 +145,14 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             streamController = controller;
-            controller.enqueue(encoder.encode(shellBefore));
             const content = Buffer.concat(chunks).toString('utf-8');
-            controller.enqueue(encoder.encode(content));
+            // Root layouts that render a full <html> document — hoist the head
+            // children into the shell head, mount only the body children.
+            const doc = splitDocumentMarkup(content);
+            controller.enqueue(encoder.encode(
+              doc ? shellBefore.replace('</head>', `${doc.head}\n</head>`) : shellBefore,
+            ));
+            controller.enqueue(encoder.encode(doc ? doc.body : content));
             controller.enqueue(encoder.encode(shellAfter));
             controller.close();
           },
@@ -204,9 +215,9 @@ export async function renderRSCToHTML(ctx: RSCContext): Promise<string> {
  * Gets the bootstrap module paths for client hydration.
  */
 function getBootstrapModules(ctx: RSCContext): string[] {
-  const mods: string[] = ['/__pledge__/client.js'];
+  const mods: string[] = [pledgeAssetUrl('/__pledge__/client.js')];
   if (ctx.config.rsc) {
-    mods.push('/__pledge__/rsc-client.js');
+    mods.push(pledgeAssetUrl('/__pledge__/rsc-client.js'));
   }
   return mods;
 }

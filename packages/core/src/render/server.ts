@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { createElement, Suspense, Component, type ReactNode, type ComponentType } from 'react';
 import type { RouteMatch, ResolvedRoute, PledgeConfig, Viewport, AnyGenericModule } from 'pledgestack-shared';
-import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
+import { MANIFEST_SCRIPT_ID, type PledgeManifest, splitDocumentMarkup, pledgeAssetUrl } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
@@ -458,18 +458,24 @@ function wrapHtml(content: string, route: ResolvedRoute, metadata: HeadMetadata,
   const manifest: PledgeManifest = { pledges: [] };
   const manifestScript = `<script id="${MANIFEST_SCRIPT_ID}" type="application/json">${JSON.stringify(manifest)}</script>`;
 
+  // A root layout that renders a full <html> document owns head/body — hoist
+  // its head children into the real head, mount only its body children.
+  const doc = splitDocumentMarkup(content);
+  const headInner = doc ? `${headTags}\n  ${doc.head}` : headTags;
+  const bodyInner = doc ? doc.body : content;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
-  ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  ${headInner}
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
-  <div id="__pledge_root__">${content}</div>
+  <div id="__pledge_root__">${bodyInner}</div>
   ${manifestScript}
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }

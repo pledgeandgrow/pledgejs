@@ -21,22 +21,6 @@ export async function resolveBundlerAdapter(
       const mod = await import('pledgestack-bundler-vite');
       return mod.default as BundlerAdapter;
     }
-    case 'rollup': {
-      const mod = await import('pledgestack-bundler-rollup');
-      return mod.default as BundlerAdapter;
-    }
-    case 'turbopack': {
-      const mod = await import('pledgestack-bundler-turbopack');
-      return mod.default as BundlerAdapter;
-    }
-    case 'rsbuild': {
-      const mod = await import('pledgestack-bundler-rsbuild');
-      return mod.default as BundlerAdapter;
-    }
-    case 'webpack': {
-      const mod = await import('pledgestack-bundler-webpack');
-      return mod.default as BundlerAdapter;
-    }
     default: {
       const mod = await import('pledgestack-bundler-pledgepack');
       return mod.default as BundlerAdapter;

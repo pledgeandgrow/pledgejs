@@ -19,7 +19,7 @@ import { MANIFEST_SCRIPT_ID, type PledgeManifest } from 'pledgestack-shared';
 import type { PageModule, LayoutModule, LoadingModule, ErrorModule, NotFoundModule, HeadModule, HeadMetadata, TemplateModule } from '../router/types';
 import { getLayoutChain } from '../router/router';
 import type { RouteTree } from '../router/types';
-import { applyScriptSecurity, scriptSecurityAttrs } from './security';
+import { applyScriptSecurity, scriptSecurityAttrs, pledgeAssetUrl } from './security';
 
 export interface PPRContext {
   config: PledgeConfig;
@@ -131,6 +131,9 @@ export async function prerenderStaticShell(ctx: PPRContext): Promise<string> {
     });
 
     const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
+      // React stamps this nonce on its own emitted inline scripts ($RT
+      // timing + suspense-boundary scripts) — required by the strict CSP.
+      nonce: ctx.security?.cspNonce,
       onShellReady() {
         pipe(writable);
       },
@@ -243,7 +246,7 @@ export async function renderDynamicHoles(ctx: PPRContext): Promise<ReadableStrea
   <div id="__pledge_root__">`;
 
   let shellAfter = `</div>
-  <script type="module" src="/__pledge__/client.js"></script>
+  <script type="module" src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 
@@ -284,6 +287,8 @@ export async function renderDynamicHoles(ctx: PPRContext): Promise<ReadableStrea
     });
 
     const { pipe } = renderToPipeableStream(createElement(() => element as ReactNode), {
+      // See above — React nonces its own emitted inline scripts.
+      nonce: ctx.security?.cspNonce,
       onShellReady() {
         shellReady = true;
         pipe(writable);
@@ -428,12 +433,12 @@ function wrapPPRHtml(
   <meta charset="UTF-8" />
   ${viewportTags || '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'}
   ${headTags}
-  <link rel="stylesheet" href="/__pledge__/client.css" />
+  <link rel="stylesheet" href="${pledgeAssetUrl('/__pledge__/client.css')}" />
 </head>
 <body>
   <div id="__pledge_root__" data-ppr="1">${content}</div>
   ${manifestScript}
-  <script type="module"${scriptSecurityAttrs(security, '/__pledge__/client.js')} src="/__pledge__/client.js"></script>
+  <script type="module"${scriptSecurityAttrs(security, pledgeAssetUrl('/__pledge__/client.js'))} src="${pledgeAssetUrl('/__pledge__/client.js')}"></script>
 </body>
 </html>`;
 }

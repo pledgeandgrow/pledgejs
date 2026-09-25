@@ -66,6 +66,10 @@ function sourceFiles(dir, out = []) {
 // emitted into a user's project and resolved there), not as real imports of the shipping package.
 const GENERATED_CODE_REFS = {
   'pledgestack-server': new Set(['pledgestack-client']),
+  // bundler-pledgepack emits a client-entry template that imports
+  // 'pledgestack-client' — resolved in the app via the esbuild alias to
+  // 'pledgestack/client', not a dependency of the adapter itself.
+  'pledgestack-bundler-pledgepack': new Set(['pledgestack-client']),
 };
 
 function importedWorkspaceNames(file) {

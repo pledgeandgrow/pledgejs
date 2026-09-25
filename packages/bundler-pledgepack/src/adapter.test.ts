@@ -12,9 +12,31 @@ vi.mock('./binary-resolver', () => ({
   runPledgepack: vi.fn(() => { throw new Error('pledgepack binary not found (mocked)'); }),
 }));
 
-import { pledgepackAdapter, pledgepackAliasArgs, buildPledgepackAliasMap } from './index';
+import { pledgepackAdapter, pledgepackAliasArgs, buildPledgepackAliasMap, forwardFiltered } from './index';
 import { runPledgepack } from './binary-resolver';
 import { readFile } from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
+
+describe('forwardFiltered (dev console output)', () => {
+  it('drops the pledgepack startup banner but forwards everything else', async () => {
+    const src = new PassThrough();
+    const out = new PassThrough();
+    let written = '';
+    out.on('data', (c) => { written += c.toString(); });
+    forwardFiltered(src, out);
+    // Split across chunk boundaries on purpose — lines must be re-assembled.
+    src.write('\n  \x1b[36mpledgepack\x1b[0m dev server starting...\n  \x1b[90m→\x1b[0m http://local');
+    src.write('host:3001\n\n  \x1b[32mReady in 9ms\x1b[0m\n');
+    src.write('WARN git cache unavailable\nerror: failed to transform app/page.tsx\n');
+    src.end('[hmr] updated /app/page.tsx');
+    await new Promise((r) => setImmediate(r));
+    expect(written).not.toMatch(/dev server starting|3001|Ready in/);
+    expect(written).toContain('WARN git cache unavailable');
+    expect(written).toContain('error: failed to transform app/page.tsx');
+    expect(written).toContain('[hmr] updated /app/page.tsx');
+    expect(written).not.toMatch(/\n\s*\n/);
+  });
+});
 
 describe('pledgepack adapter', () => {
   let dir: string;

@@ -47,10 +47,6 @@
       "pledgestack-adapters/*": ["../adapters/src/*"],
       "pledgestack-bundler-pledgepack": ["../bundler-pledgepack/src/index.ts"],
       "pledgestack-bundler-vite": ["../bundler-vite/src/index.ts"],
-      "pledgestack-bundler-rollup": ["../bundler-rollup/src/index.ts"],
-      "pledgestack-bundler-turbopack": ["../bundler-turbopack/src/index.ts"],
-      "pledgestack-bundler-rsbuild": ["../bundler-rsbuild/src/index.ts"],
-      "pledgestack-bundler-webpack": ["../bundler-webpack/src/index.ts"],
       "pledgestack-privacy": ["../privacy/src/index.ts"],
       "pledgestack-privacy/*": ["../privacy/src/*"],
       "pledgepack": ["../pledgepack/index.d.ts"]

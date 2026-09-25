@@ -90,7 +90,7 @@ export default defineConfig({
   ppr: false,                  // Partial Prerendering
   tailwind: true,
   output: 'standalone',        // 'standalone' | 'export'
-  bundler: 'pledgepack',       // 'pledgepack' | 'vite' | 'rollup' | 'turbopack' | 'rsbuild' | 'webpack'
+  bundler: 'pledgepack',       // 'pledgepack' | 'vite' (vite is the pure-JS fallback)
   securityHeaders: true,       // Auto-apply security headers + CSP
   siteUrl: 'https://example.com',
   // CSP directives (optional — defaults to restrictive policy)

@@ -86,9 +86,12 @@ export function resolveRoutes(files: ScannedFile[], config: PledgeConfig): Resol
       });
     }
 
-    // Handle standalone layout files
+    // Layout files apply to every page/route in their directory (and below),
+    // so they register regardless of whether a page.tsx/route.ts sits next to
+    // them. Gating on !pageFile used to drop the root layout whenever it was
+    // colocated with a page — the most common case.
     const layoutFile = dirFiles.find((f) => f.convention === FILE_CONVENTIONS.layout);
-    if (layoutFile && !pageFile && !routeFile) {
+    if (layoutFile) {
       const layoutDirSegments = layoutFile.segments.slice(0, -1);
       const pattern = pathToPattern(layoutDirSegments.join('/'));
 
