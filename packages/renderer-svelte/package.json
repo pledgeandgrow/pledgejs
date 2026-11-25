@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-renderer-svelte",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Svelte renderer adapter for PledgeStack — SSR, streaming, hydration",
   "keywords": [
     "pledgestack"

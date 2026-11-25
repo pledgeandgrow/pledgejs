@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-mdx",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MDX support for PledgeStack — pledgepack plugin that transforms .mdx files to React components",
   "keywords": [
     "pledgestack"
