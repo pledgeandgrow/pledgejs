@@ -90,6 +90,49 @@ describe('ReactRendererAdapter', () => {
     expect(html).toContain('<main class="shell"><span>inner</span></main>');
   });
 
+  it('nests layouts root-outermost so a nested layout keeps the root <html>/<head> (issue #6)', async () => {
+    const rootLayout = route('/', '/app/layout.tsx', { isLayout: true });
+    const docsLayout = route('/docs', '/app/docs/layout.tsx', { isLayout: true });
+    const pageRoute = route('/docs', '/app/docs/page.tsx');
+    const modules = new Map<string, AnyGenericModule>();
+    modules.set(pageRoute.filePath, { default: () => createElement('h1', null, 'Docs page') } as AnyGenericModule);
+    modules.set(rootLayout.filePath, {
+      default: ({ children }: { children: ReactNode }) =>
+        createElement(
+          'html',
+          null,
+          createElement('head', null, createElement('style', null, 'body{color:red}')),
+          createElement('body', null, children),
+        ),
+    } as AnyGenericModule);
+    modules.set(docsLayout.filePath, {
+      default: ({ children }: { children: ReactNode }) =>
+        createElement('div', { className: 'docs-shell' }, createElement('aside', null, 'sidebar'), children),
+    } as AnyGenericModule);
+
+    const tree: RouteTree = {
+      root: {
+        pattern: '/',
+        segment: '',
+        layouts: [rootLayout],
+        children: [{ pattern: '/docs', segment: 'docs', children: [], layouts: [docsLayout] }],
+      },
+    };
+    const html = await adapter.renderToString({
+      match: { pathname: '/docs', params: {}, route: pageRoute },
+      tree,
+      modules,
+    });
+
+    // Root layout's <style> is hoisted into the real <head>, not lost or nested.
+    const head = html.slice(html.indexOf('<head>'), html.indexOf('</head>'));
+    expect(head).toContain('<style>body{color:red}</style>');
+    // Nested layout wraps the page inside the root layout's body.
+    expect(html).toContain('<div class="docs-shell"><aside>sidebar</aside><h1>Docs page</h1></div>');
+    // Only one document shell.
+    expect(html.match(/<html/g)).toHaveLength(1);
+  });
+
   it('emits metadata as head tags and escapes hostile values', async () => {
     const ctx = ctxFor({
       pattern: '/react-meta',

@@ -224,7 +224,8 @@ function buildElementTree(ctx: RenderContext, forPrerender = false): ReactNode {
 
   // Layout chain
   const layouts = getLayoutChain(match, tree);
-  for (const layout of layouts) {
+  // getLayoutChain() is root-first: wrap innermost (leaf) layout first so the root layout ends up outermost.
+  for (const layout of [...layouts].reverse()) {
     const layoutModule = asLayout(modules.get(layout.filePath));
     if (layoutModule) {
       let layoutContent: ReactNode = createElement(layoutModule.default, { children: element });
@@ -584,7 +585,8 @@ export class ReactRendererAdapter implements RendererAdapter {
     let element: ReactNode;
     if (notFoundModule) {
       element = createElement(notFoundModule.default, {});
-      for (const layout of layouts) {
+      // getLayoutChain() is root-first: wrap innermost (leaf) layout first so the root layout ends up outermost.
+      for (const layout of [...layouts].reverse()) {
         const layoutModule = asLayout(modules.get(layout.filePath));
         if (layoutModule) {
           element = createElement(layoutModule.default, { children: element });

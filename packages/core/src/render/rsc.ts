@@ -95,7 +95,8 @@ export async function renderRSCToHTMLStream(ctx: RSCContext): Promise<ReadableSt
   });
 
   const layouts = getLayoutChain(match, tree);
-  for (const layout of layouts) {
+  // getLayoutChain() is root-first: wrap innermost (leaf) layout first so the root layout ends up outermost.
+  for (const layout of [...layouts].reverse()) {
     const layoutModule = modules.get(layout.filePath) as LayoutModule | undefined;
     if (layoutModule) {
       element = createElement(layoutModule.default, { children: element });

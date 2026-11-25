@@ -215,7 +215,8 @@ export async function renderSSR(ctx: SSRContext): Promise<string> {
   }
 
   // Wrap in layout chain
-  for (const layout of layouts) {
+  // getLayoutChain() is root-first: wrap innermost (leaf) layout first so the root layout ends up outermost.
+  for (const layout of [...layouts].reverse()) {
     const layoutModule = modules.get(layout.filePath) as LayoutModule | undefined;
     if (layoutModule) {
       // Wrap each layout level in its own error/loading boundary if they have them
@@ -374,7 +375,8 @@ export async function renderNotFound(ctx: SSRContext): Promise<string> {
     element = createElement(notFoundModule.default, {});
 
     // Wrap in layout chain
-    for (const layout of layouts) {
+    // getLayoutChain() is root-first: wrap innermost (leaf) layout first so the root layout ends up outermost.
+    for (const layout of [...layouts].reverse()) {
       const layoutModule = modules.get(layout.filePath) as LayoutModule | undefined;
       if (layoutModule) {
         element = createElement(layoutModule.default, { children: element });
