@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-renderer-vue",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Vue renderer adapter for PledgeStack — SSR, streaming, hydration",
   "keywords": [
     "pledgestack"

@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-rss",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "RSS/Atom/JSON feed generation for PledgeStack",
   "keywords": [
     "pledgestack"

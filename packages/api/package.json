@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-api",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "API utilities for PledgeStack — versioning, validation, OpenAPI, file uploads, cron, job queue, middleware",
   "keywords": [
     "pledgestack",

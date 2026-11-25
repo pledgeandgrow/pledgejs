@@ -1,5 +1,13 @@
 # pledgestack-sitemap
 
+## 0.2.1
+
+### Patch Changes
+
+- Updated dependencies [c23f513]
+  - pledgestack-core@0.2.1
+  - pledgestack-shared@0.2.1
+
 ## 0.2.0
 
 ### Major Changes

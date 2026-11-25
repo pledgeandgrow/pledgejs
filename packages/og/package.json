@@ -1,6 +1,6 @@
 {
   "name": "pledgestack-og",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenGraph image generation for PledgeStack — dynamic OG images via Satori + resvg",
   "keywords": [
     "pledgestack"
